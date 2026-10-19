@@ -33,7 +33,11 @@ class FetchError(RuntimeError):
 
 
 class MissingCredentialsError(FetchError):
-    pass
+    """Credentials for a gated source are not set."""
+
+
+class ManualDownloadError(FetchError):
+    """The source has no programmatic download; a person downloads it, then `--from-dir`."""
 
 
 @dataclass(frozen=True)
@@ -95,6 +99,10 @@ class Fetcher(ABC):
             return ResolvedVersion(pinned, "source")
         return ResolvedVersion(retrieval_version(), "retrieval-date")
 
+    def check_access(self) -> None:  # noqa: B027 - optional hook
+        """Fail fast, without network, if a person must act first: raise
+        `MissingCredentialsError` or `ManualDownloadError`."""
+
     def prepare(self) -> None:  # noqa: B027 - optional hook
         """Run anything that must happen before listing (e.g. staging a download)."""
 
@@ -119,7 +127,8 @@ def http_session(auth: tuple[str, str] | None = None) -> requests.Session:
         status_forcelist=(429, 500, 502, 503, 504),
         allowed_methods=("GET", "HEAD", "POST"),
     )
-    adapter = HTTPAdapter(max_retries=retry)
+    # One session serves all parallel downloads of a dataset: keep enough connections.
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=64)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session

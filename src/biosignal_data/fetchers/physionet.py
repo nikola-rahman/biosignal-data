@@ -75,6 +75,10 @@ class PhysioNetFetcher(Fetcher):
             auth = (os.environ["PHYSIONET_USERNAME"], os.environ["PHYSIONET_PASSWORD"])
         return http_session(auth)
 
+    def check_access(self) -> None:
+        if self.source.credentialed:
+            require_env("PHYSIONET_USERNAME", "PHYSIONET_PASSWORD")
+
     def resolve_version(self) -> ResolvedVersion:
         if self.options.version or self.source.version:
             return super().resolve_version()

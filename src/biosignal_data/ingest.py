@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Executor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -25,7 +25,8 @@ from biosignal_data import __version__
 from biosignal_data.catalog.models import Dataset
 from biosignal_data.fetchers import FetchOptions, RemoteFile, fetcher_for
 from biosignal_data.fetchers.base import Fetcher, ResolvedVersion
-from biosignal_data.selection import select
+from biosignal_data.read.raw import stored_versions
+from biosignal_data.selection import Selection, select
 from biosignal_data.storage.layout import VersionLocation
 from biosignal_data.storage.manifest import FileEntry, HashingReader, Manifest, utcnow
 from biosignal_data.storage.stores import Store
@@ -156,8 +157,12 @@ def ingest(
     include: Sequence[str] = (),
     limit: int | None = None,
     progress: IngestProgress | None = None,
+    executor: Executor | None = None,
 ) -> IngestReport:
     """Copy `dataset` into `store`.
+
+    Files are copied by `workers` threads, or by `executor` if given (a pool shared by
+    several datasets downloading at the same time).
 
     `include` (glob patterns; `*` also matches `/`) and `limit` (first N recordings in path
     order, with their metadata; see `selection`) select a subset, for tests. A subset is
@@ -165,6 +170,7 @@ def ingest(
     them continues from it.
     """
     fetcher = fetcher or fetcher_for(dataset, options)
+    fetcher.check_access()
     fetcher.prepare()
     try:
         return _ingest(
@@ -178,6 +184,7 @@ def ingest(
             include=include,
             limit=limit,
             progress=progress,
+            executor=executor,
         )
     finally:
         fetcher.cleanup()
@@ -250,6 +257,7 @@ def _copy_all(
     workers: int,
     progress: IngestProgress | None,
     tracker: _RecordingTracker | None,
+    executor: Executor | None,
 ) -> None:
     # Results are handled in this thread only, so `done` and `report` need no lock.
     on_read = progress.advance if progress else None
@@ -259,7 +267,8 @@ def _copy_all(
             progress.file_started(remote.path)
         return copy_file(store, location, remote, on_read)
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+    pool = executor or ThreadPoolExecutor(max_workers=max(1, workers))
+    try:
         futures = {pool.submit(copy, r): r for r in todo}
         for future in as_completed(futures):
             remote = futures[future]
@@ -277,7 +286,74 @@ def _copy_all(
             checkpoint()
             if tracker:
                 tracker.file_done(remote.path, ok=True)
+    finally:
+        if pool is not executor:
+            pool.shutdown(cancel_futures=True)
     checkpoint(force=True)
+
+
+def _continue_dated_version(
+    dataset: Dataset, store: Store, root: str, version: ResolvedVersion
+) -> ResolvedVersion:
+    """A source without versions gets today's date as its label. If an earlier run of it
+    stopped on another day, continue that version instead of starting a new one."""
+    if version.origin != "retrieval-date":
+        return version
+    unfinished = [
+        v for v, complete in stored_versions(store, dataset.id, root).items() if not complete
+    ]
+    if not unfinished or unfinished[-1] == version.value:
+        return version
+    log.warning(
+        "%s: continuing the incomplete download labelled %s (from an earlier day) "
+        "instead of starting a new version %s",
+        dataset.id,
+        unfinished[-1],
+        version.value,
+    )
+    return ResolvedVersion(unfinished[-1], "retrieval-date")
+
+
+def _warn_implicit(
+    dataset: Dataset,
+    version: ResolvedVersion,
+    selection: Selection,
+    report: IngestReport,
+    todo: list[RemoteFile],
+) -> None:
+    """Say every choice made without the user asking for it, and everything skipped."""
+    d = dataset.id
+    if version.origin == "retrieval-date":
+        log.warning("%s: the source has no versions; using today's date %s", d, version.value)
+    elif version.origin == "source" and not dataset.pinned_version:
+        log.warning("%s: no version pinned; using the latest, %s", d, version.value)
+    if report.skipped:
+        log.warning(
+            "%s: %d files are already stored from an earlier run; not downloading them again",
+            d,
+            report.skipped,
+        )
+    if report.subset:
+        log.warning(
+            "%s: subset only (%d recordings%s); version %s stays incomplete",
+            d,
+            len(selection.recordings),
+            f" + {selection.metadata_added} metadata files they need"
+            if selection.metadata_added
+            else "",
+            version.value,
+        )
+    if not selection.signal_files_found:
+        log.warning(
+            "%s: no file has a known signal format; each data file counts as one recording", d
+        )
+    unchecked = sum(1 for f in todo if f.checksum is None)
+    if unchecked:
+        log.warning(
+            "%s: %d files have no published checksum; they are hashed but cannot be verified",
+            d,
+            unchecked,
+        )
 
 
 def _ingest(
@@ -292,8 +368,9 @@ def _ingest(
     include: Sequence[str],
     limit: int | None,
     progress: IngestProgress | None,
+    executor: Executor | None,
 ) -> IngestReport:
-    version = fetcher.resolve_version()
+    version = _continue_dated_version(dataset, store, root, fetcher.resolve_version())
     location = VersionLocation(dataset.id, version.value, root)
     report = IngestReport(dataset.id, version.value, f"{store.uri}/{location.prefix}")
     if store.exists(location.success_key):
@@ -319,6 +396,7 @@ def _ingest(
         len(files),
         len(todo),
     )
+    _warn_implicit(dataset, version, selection, report, todo)
     if dry_run:
         return report
 
@@ -329,7 +407,7 @@ def _ingest(
         total = sum(s for s in sizes if s is not None) if None not in sizes else None
         progress.start(version.value, len(selection.recordings), tracker.already_done, total)
     checkpoint = _Checkpointer(store, location, manifest, done, checkpoint_every)
-    _copy_all(todo, store, location, done, report, checkpoint, workers, progress, tracker)
+    _copy_all(todo, store, location, done, report, checkpoint, workers, progress, tracker, executor)
     if report.failed:
         log.error("%d files failed; re-run to retry them", len(report.failed))
         return report

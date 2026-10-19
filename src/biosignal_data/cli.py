@@ -17,10 +17,11 @@ from typing import Annotated
 
 import typer
 
+from biosignal_data.batch import DONE, NEEDS_ACTION, Outcome, download_many
 from biosignal_data.catalog import AccessTier, Catalog, CatalogError, Dataset
-from biosignal_data.console import ProgressBar, download_progress, setup_logging
+from biosignal_data.console import ProgressBar, RunBar, console, download_progress, setup_logging
 from biosignal_data.fetchers import FetchError, FetchOptions, RemoteFile, fetcher_for
-from biosignal_data.ingest import AlreadyComplete, IngestReport, ingest, verify
+from biosignal_data.ingest import verify
 from biosignal_data.read.raw import stored_versions
 from biosignal_data.selection import select
 from biosignal_data.storage.layout import VersionLocation
@@ -49,8 +50,8 @@ DestOpt = Annotated[
     typer.Option(
         "--dest",
         "-d",
-        envvar="BIOSIGNAL_DEST",
-        help="Where downloads go: a local folder or s3://bucket[/prefix].",
+        help="Where downloads go: a local folder or s3://bucket[/prefix]. "
+        "Default: $BIOSIGNAL_DEST.",
     ),
 ]
 RootOpt = Annotated[
@@ -96,8 +97,15 @@ def _dataset(catalog: Catalog, dataset_id: str) -> Dataset:
 
 def _store(dest: str | None) -> Store:
     if not dest:
-        raise _fail("missing --dest (a local folder or s3://bucket); or set BIOSIGNAL_DEST")
+        dest = os.environ.get("BIOSIGNAL_DEST")
+        if not dest:
+            raise _fail("missing --dest (a local folder or s3://bucket); or set BIOSIGNAL_DEST")
+        _warn(f"no --dest given; using BIOSIGNAL_DEST={dest}")
     return open_store(dest)
+
+
+def _warn(message: str) -> None:
+    console.print(f"[yellow]warning:[/] {message}", highlight=False, soft_wrap=True)
 
 
 def _size(n: float | None) -> str:
@@ -210,31 +218,46 @@ def _print_downloads(store: Store, dataset_id: str, root: str, dest: str) -> Non
 
 @app.command()
 def download(
-    dataset_ids: Annotated[list[str], typer.Argument(help="One or more catalog ids.")],
+    dataset_ids: Annotated[
+        list[str] | None, typer.Argument(help="Catalog ids. Or select with the options below.")
+    ] = None,
     dest: DestOpt = None,
+    all_: Annotated[bool, typer.Option("--all", help="Every dataset in the catalog.")] = False,
+    signal: Annotated[
+        list[str], typer.Option("--signal", "-s", help="Datasets with this signal. Repeatable.")
+    ] = [],  # noqa: B006
+    repository: Annotated[
+        list[str],
+        typer.Option("--repository", "-r", help="Datasets from this repository. Repeatable."),
+    ] = [],  # noqa: B006
+    ids_file: Annotated[
+        Path | None,
+        typer.Option(help="A file with one catalog id per line (# starts a comment)."),
+    ] = None,
     limit: LimitOpt = None,
     include: IncludeOpt = [],  # noqa: B006
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Show what would be downloaded; download nothing.")
     ] = False,
+    workers: Annotated[
+        int, typer.Option(min=1, help="Parallel file downloads, shared by all datasets.")
+    ] = 16,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="More log output.")] = False,
     from_dir: Annotated[
         Path | None,
-        typer.Option(help="Take the files from this folder (datasets downloaded by hand)."),
+        typer.Option(help="One dataset: take the files from this folder (downloaded by hand)."),
     ] = None,
-    version: Annotated[str | None, typer.Option(help="Version label (default: latest).")] = None,
-    workers: Annotated[int, typer.Option(min=1, help="Files copied in parallel.")] = 8,
-    keep_going: Annotated[
-        bool, typer.Option(help="With several ids: continue after a failure.")
-    ] = False,
-    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="More log output.")] = False,
+    version: Annotated[
+        str | None, typer.Option(help="One dataset: version label (default: latest).")
+    ] = None,
+    source_prefix: Annotated[
+        str | None, typer.Option(help="One dataset: key prefix in the source bucket (BDSP).")
+    ] = None,
     staging_dir: Annotated[
         Path | None,
         typer.Option(help="Folder for rsync/nsrr/kaggle downloads; reused to resume."),
     ] = None,
     keep_staging: Annotated[bool, typer.Option(help="Keep the staging folder.")] = False,
-    source_prefix: Annotated[
-        str | None, typer.Option(help="Key prefix in the source bucket (BDSP).")
-    ] = None,
     aws_profile: Annotated[
         str | None, typer.Option(help="AWS profile for reading source buckets.")
     ] = None,
@@ -243,6 +266,10 @@ def download(
 ) -> None:
     """Download datasets, unchanged, to --dest.
 
+    Select datasets by id, with --signal / --repository, with --ids-file, or with --all.
+    Many datasets download at the same time. Datasets that need you to act first
+    (credentials, download by hand) are skipped with a warning and listed at the end.
+
     Files go to <dest>/raw/<id>/<version>/data/, with a manifest of checksums. If a download
     stops, run the same command again: it continues where it stopped.
 
@@ -250,7 +277,11 @@ def download(
     same command without them later completes it without downloading the subset again.
     """
     setup_logging(verbose)
-    cat = _catalog(catalog)
+    datasets = _select_datasets(
+        _catalog(catalog), dataset_ids or [], all_, signal, repository, ids_file
+    )
+    if len(datasets) > 1 and (from_dir or version or source_prefix):
+        raise _fail("--from-dir, --version and --source-prefix apply to one dataset only")
     options = FetchOptions(
         staging_dir=staging_dir,
         from_dir=from_dir,
@@ -260,63 +291,136 @@ def download(
         keep_staging=keep_staging,
     )
     if dry_run:
-        for dataset_id in dataset_ids:
-            _preview(_dataset(cat, dataset_id), options, include, limit)
+        for dataset in datasets:
+            _preview(dataset, options, include, limit)
         return
 
     store = _store(dest)
-    failures = 0
+    console.print(f"[bold]{len(datasets)} datasets[/] -> {store.uri}/{root}")
     with download_progress() as progress:
-        for dataset_id in dataset_ids:
-            dataset = _dataset(cat, dataset_id)
-            bar = ProgressBar(progress, dataset_id)
-            try:
-                report = ingest(
-                    dataset,
-                    store,
-                    options=options,
-                    root=root,
-                    workers=workers,
-                    include=include,
-                    limit=limit,
-                    progress=bar,
-                )
-            except AlreadyComplete as exc:
-                bar.finish("skipped")
-                typer.echo(str(exc))
-                continue
-            except (FetchError, RuntimeError, ValueError) as exc:
-                bar.finish("failed")
-                typer.secho(f"{dataset_id}: {exc}", fg="red", err=True)
-                failures += 1
-                if not keep_going:
-                    raise typer.Exit(1) from exc
-                continue
-            state = _state(report)
-            bar.finish(state)
-            _print_report(report, state)
-            if report.failed:
-                failures += 1
-    raise typer.Exit(1 if failures else 0)
+        run = RunBar(progress, len(datasets)) if len(datasets) > 1 else None
+
+        def progress_for(dataset: Dataset) -> ProgressBar:
+            return ProgressBar(progress, dataset.id, run=run, show_id=run is not None)
+
+        bars: dict[str, ProgressBar] = {}
+
+        def progress_for_tracked(dataset: Dataset) -> ProgressBar:
+            bars[dataset.id] = bar = progress_for(dataset)
+            return bar
+
+        def on_done(outcome: Outcome) -> None:
+            bar = bars.pop(outcome.dataset.id, None)
+            if bar:
+                bar.finish()
+            if run:
+                run.dataset_done(outcome.status in DONE)
+            _print_outcome(outcome)
+
+        outcomes = download_many(
+            datasets,
+            store,
+            options=options,
+            root=root,
+            workers=workers,
+            include=include,
+            limit=limit,
+            progress_for=progress_for_tracked,
+            on_done=on_done,
+        )
+    _print_summary(outcomes)
+    raise typer.Exit(0 if all(o.status in DONE for o in outcomes) else 1)
 
 
-def _state(report: IngestReport) -> str:
-    if report.complete:
-        return "complete"
-    if report.subset and not report.failed:
-        return "subset"
-    return "incomplete"
+def _select_datasets(
+    cat: Catalog,
+    ids: list[str],
+    all_: bool,
+    signal: list[str],
+    repository: list[str],
+    ids_file: Path | None,
+) -> list[Dataset]:
+    if ids_file is not None:
+        lines = ids_file.read_text(encoding="utf-8").splitlines()
+        ids = ids + [ln.split("#", 1)[0].strip() for ln in lines if ln.split("#", 1)[0].strip()]
+    if not (ids or all_ or signal or repository):
+        raise _fail("say which datasets: ids, --ids-file, --signal, --repository or --all")
+    chosen = {d.id: d for d in (_dataset(cat, d_id) for d_id in ids)}
+    if all_ or signal or repository:
+        for d in cat.filter(signals=signal, repositories=repository):
+            chosen.setdefault(d.id, d)
+    return list(chosen.values())
 
 
-def _print_report(report: IngestReport, state: str) -> None:
-    failed = f", {len(report.failed)} failed" if report.failed else ""
-    typer.echo(
-        f"{report.dataset_id} {report.version}: {state}. {report.recordings} recordings; "
-        f"{report.copied} files downloaded ({_size(report.bytes_copied)}), "
-        f"{report.skipped} already there{failed}. -> {report.location}"
+_OUTCOME_STYLE = {
+    "complete": ("✓", "green"),
+    "subset": ("✓", "green"),
+    "already": ("•", "yellow"),
+    "incomplete": ("✗", "red"),
+    "credentials": ("!", "yellow"),
+    "manual": ("!", "yellow"),
+    "unavailable": ("!", "yellow"),
+    "failed": ("✗", "red"),
+}
+
+
+def _print_outcome(outcome: Outcome) -> None:
+    mark, color = _OUTCOME_STYLE[outcome.status]
+    d, r = outcome.dataset, outcome.report
+    if r is not None:
+        text = (
+            f"{d.id} {r.version}: {outcome.status} · {r.recordings:,} recordings · "
+            f"{r.copied:,} files ({_size(r.bytes_copied)}) downloaded"
+        )
+        if r.skipped:
+            text += f" · {r.skipped:,} already there"
+        if r.failed:
+            text += f" · {len(r.failed):,} files failed (run again to retry)"
+    else:
+        label = {
+            "already": "skipped, already complete",
+            "credentials": "skipped, needs credentials",
+            "manual": "skipped, download by hand",
+            "unavailable": "skipped, not available",
+            "failed": "failed",
+        }[outcome.status]
+        text = f"{d.id}: {label}: {outcome.message}"
+    console.print(f"[{color}]{mark}[/] {text}", markup=True, highlight=False, soft_wrap=True)
+
+
+def _print_summary(outcomes: list[Outcome]) -> None:
+    by_status: dict[str, list[Outcome]] = {}
+    for o in outcomes:
+        by_status.setdefault(o.status, []).append(o)
+    done = sum(len(by_status.get(s, [])) for s in DONE)
+    action = sum(len(by_status.get(s, [])) for s in NEEDS_ACTION)
+    failed = len(by_status.get("failed", [])) + len(by_status.get("incomplete", []))
+    console.print(
+        f"\n[bold]Done:[/] {done} downloaded · [yellow]{action} need your action[/] · "
+        f"[red]{failed} failed[/]",
+        highlight=False,
     )
-    if report.failed:
-        typer.echo("Run the same command again to retry the failed files.")
+    groups = [
+        ("Skipped, already complete", "already"),
+        ("Need credentials (see `biosignal-data info <id>`)", "credentials"),
+        ("Download by hand, then --from-dir (see `biosignal-data info <id>`)", "manual"),
+        ("Not available", "unavailable"),
+        ("Failed", "failed"),
+        ("Incomplete, some files failed (run again to retry)", "incomplete"),
+    ]
+    for title, status in groups:
+        items = by_status.get(status, [])
+        if not items:
+            continue
+        color = "red" if status in ("failed", "incomplete") else "yellow"
+        console.print(f"[{color}]{title}:[/] {len(items)}", highlight=False)
+        for o in sorted(items, key=lambda o: o.dataset.id):
+            detail = (
+                o.message
+                if status != "incomplete"
+                else f"{len(o.report.failed) if o.report else 0} files failed"
+            )
+            console.print(f"  {o.dataset.id}  [dim]{detail}[/]", highlight=False, soft_wrap=True)
 
 
 def _preview(
@@ -324,11 +428,13 @@ def _preview(
 ) -> None:
     fetcher = fetcher_for(dataset, options)
     try:
+        fetcher.check_access()
         fetcher.prepare()
         resolved = fetcher.resolve_version()
         files = {f.path: f for f in fetcher.list_files()}
     except FetchError as exc:
-        raise _fail(f"{dataset.id}: {exc}") from exc
+        console.print(f"[yellow]![/] {dataset.id}: {exc}", highlight=False, soft_wrap=True)
+        return
     finally:
         fetcher.cleanup()
     typer.secho(f"{dataset.id} {resolved.value}", bold=True)
@@ -374,6 +480,8 @@ def check(
             raise _fail(f"{dataset_id} is not downloaded to {dest}")
         complete = [v for v, done in versions.items() if done]
         version = complete[-1] if complete else list(versions)[-1]
+        kind = "latest complete" if complete else "latest (incomplete)"
+        _warn(f"no --version given; checking the {kind} version {version}")
     problems = verify(store, dataset_id, version, root, deep=checksums)
     for path, problem in sorted(problems.items()):
         typer.secho(f"  {path}: {problem}", fg="red")

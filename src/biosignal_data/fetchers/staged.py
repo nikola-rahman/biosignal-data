@@ -19,6 +19,7 @@ from biosignal_data.fetchers.base import (
     Fetcher,
     FetchError,
     LocalDirFetcher,
+    ManualDownloadError,
     MissingCredentialsError,
     RemoteFile,
     require_env,
@@ -72,6 +73,10 @@ class RsyncFetcher(StagedFetcher):
     def source(self) -> RsyncSource:
         return self._source(RsyncSource)
 
+    def check_access(self) -> None:
+        if self.source.ssh_identity_env:
+            require_env(self.source.ssh_identity_env)
+
     def stage(self, folder: Path) -> None:
         ssh = "ssh"
         if self.source.ssh_identity_env:
@@ -89,6 +94,9 @@ class NsrrFetcher(StagedFetcher):
     @property
     def source(self) -> NsrrSource:
         return self._source(NsrrSource)
+
+    def check_access(self) -> None:
+        require_env("NSRR_TOKEN")
 
     def stage(self, folder: Path) -> None:
         (token,) = require_env("NSRR_TOKEN")
@@ -115,7 +123,7 @@ class KaggleFetcher(StagedFetcher):
     def source(self) -> KaggleSource:
         return self._source(KaggleSource)
 
-    def stage(self, folder: Path) -> None:
+    def check_access(self) -> None:
         kaggle_dir = Path.home() / ".kaggle"
         has_file = any((kaggle_dir / n).is_file() for n in ("access_token", "kaggle.json"))
         has_env = bool(os.environ.get("KAGGLE_API_TOKEN")) or bool(
@@ -126,6 +134,8 @@ class KaggleFetcher(StagedFetcher):
                 "Kaggle needs a login: `kaggle auth login`, or KAGGLE_API_TOKEN / "
                 "~/.kaggle/access_token (see docs/access.md)"
             )
+
+    def stage(self, folder: Path) -> None:
         if self.source.kind == "competition":
             cmd = ["kaggle", "competitions", "download", "-c", self.source.ref, "-p", "."]
         else:
@@ -140,8 +150,11 @@ class ManualFetcher(StagedFetcher):
     def source(self) -> ManualSource:
         return self._source(ManualSource)
 
-    def stage(self, folder: Path) -> None:
-        raise FetchError(
-            f"{self.dataset.id} must be downloaded by hand (see its docs page), then ingested "
-            "with `--from-dir <folder>`"
+    def check_access(self) -> None:
+        raise ManualDownloadError(
+            f"download by hand (see `biosignal-data info {self.dataset.id}`), then run "
+            f"`biosignal-data download {self.dataset.id} --from-dir <folder>`"
         )
+
+    def stage(self, folder: Path) -> None:
+        self.check_access()

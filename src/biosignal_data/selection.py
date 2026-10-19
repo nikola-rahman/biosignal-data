@@ -42,6 +42,9 @@ COMPRESSION_SUFFIXES = frozenset({".gz", ".bz2", ".xz", ".zst"})
 class Selection:
     paths: list[str]  # every file to copy, sorted
     recordings: list[list[str]]  # the recordings among `paths`, each as its files
+    # False: no file has a known signal format, so every data file counts as a recording.
+    signal_files_found: bool = True
+    metadata_added: int = 0  # metadata files added to the chosen recordings (with a limit)
 
 
 def _suffix_and_stem(name: str) -> tuple[str, str]:
@@ -102,8 +105,9 @@ def select(
     recordings in path order with their metadata (all if `limit` is None)."""
     chosen = sorted(p for p in paths if not include or any(fnmatchcase(p, g) for g in include))
     recordings = recordings_of(chosen)
+    found = any(_is_signal(p) for p in chosen)
     if limit is None:
-        return Selection(chosen, recordings)
+        return Selection(chosen, recordings, found)
 
     picked = recordings[:limit]
     selected = {p for members in picked for p in members}
@@ -114,4 +118,5 @@ def select(
             continue
         if any(_is_at_or_above(posixpath.dirname(path), f) for f in folders):
             selected.add(path)
-    return Selection(sorted(selected), picked)
+    added = len(selected) - sum(len(members) for members in picked)
+    return Selection(sorted(selected), picked, found, added)

@@ -41,12 +41,12 @@ def test_download_from_dir_and_check(tmp_path: Path) -> None:
     ]
     result = runner.invoke(app, args)
     assert result.exit_code == 0, result.output
-    assert "complete" in result.stdout
+    assert "complete" in result.output
     checked = runner.invoke(app, ["check", "mni/open-ieeg-atlas", "--dest", dest, "--checksums"])
-    assert checked.exit_code == 0 and "2026-10-18: ok" in checked.stdout
+    assert checked.exit_code == 0 and "2026-10-18: ok" in checked.output
     info = runner.invoke(app, ["info", "mni/open-ieeg-atlas", "--dest", dest]).stdout
     assert "2026-10-18" in info and "complete" in info
-    assert "already complete" in runner.invoke(app, args).stdout
+    assert "already complete" in runner.invoke(app, args).output
     assert runner.invoke(app, ["download", "mni/open-ieeg-atlas"]).exit_code == 1  # no --dest
 
 

@@ -179,3 +179,21 @@ def test_progress_counts_recordings(store: LocalStore) -> None:
     ingest(dataset, store, fetcher=FakeFetcher(dataset, files), progress=recorder)
     assert recorder.started is not None and recorder.started[:2] == (2, 1)  # 1 stored before
     assert recorder.recordings_done == 1
+
+
+def test_undated_source_continues_an_earlier_days_download(
+    store: LocalStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from biosignal_data.fetchers import base  # noqa: PLC0415
+
+    dataset = make_dataset()
+
+    class Undated(FakeFetcher):
+        def resolve_version(self) -> base.ResolvedVersion:
+            return base.Fetcher.resolve_version(self)
+
+    monkeypatch.setattr(base, "retrieval_version", lambda: "2026-10-01")
+    ingest(dataset, store, fetcher=Undated(dataset, FILES), limit=1)
+    monkeypatch.setattr(base, "retrieval_version", lambda: "2026-10-02")
+    report = ingest(dataset, store, fetcher=Undated(dataset, FILES))
+    assert report.version == "2026-10-01" and report.complete and report.skipped >= 1
