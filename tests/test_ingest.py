@@ -196,8 +196,9 @@ def test_stop_ends_copies_and_keeps_what_is_finished(store: LocalStore) -> None:
 
     dataset = make_dataset()
     stop = threading.Event()
-    stop.set()  # as after Ctrl+C: no file may be read any more
-    report = ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES), stop=stop)
+    with planned(dataset, store, fetcher=FakeFetcher(dataset, FILES), stop=stop) as plan:
+        stop.set()  # Ctrl+C after planning: no file may be read any more
+        report = apply(plan, store, stop=stop)
     assert not report.complete and set(report.failed) == set(FILES)
     assert all("stopped" in reason for reason in report.failed.values())
     assert store.unfinished("raw") == ()  # no temporary files are left behind
@@ -278,3 +279,26 @@ def test_a_file_served_other_than_listed_twice_is_kept_with_the_difference(
         entry.differs_from_source
     )
     assert store.get_bytes("raw/test/example/1.0.0/data/README") == b"hello"
+
+
+def test_a_stop_ends_a_long_listing(store: LocalStore) -> None:
+    import threading  # noqa: PLC0415
+    from collections.abc import Iterator  # noqa: PLC0415
+
+    from biosignal_data.fetchers import RemoteFile  # noqa: PLC0415
+    from biosignal_data.storage.manifest import StoppedError  # noqa: PLC0415
+
+    dataset = make_dataset()
+    stop = threading.Event()
+
+    class Endless(FakeFetcher):
+        def list_files(self) -> Iterator[RemoteFile]:
+            n = 0
+            while True:  # a source with very many files; Ctrl+C after the first few
+                n += 1
+                if n == 5:
+                    stop.set()
+                yield RemoteFile(path=f"f{n}", size=1, checksum=None, opener=lambda: None)  # type: ignore[arg-type,return-value]
+
+    with pytest.raises(StoppedError, match="stopped while listing"):
+        ingest(dataset, store, fetcher=Endless(dataset, {}), stop=stop)

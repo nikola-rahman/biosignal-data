@@ -45,6 +45,7 @@ from biosignal_data.storage.manifest import (
     HashingReader,
     Manifest,
     MissingFile,
+    StoppedError,
     utcnow,
 )
 from biosignal_data.storage.stores import Store
@@ -141,16 +142,18 @@ def planned(
     fetcher: Fetcher | None = None,
     root: str = "raw",
     replace: bool = False,
+    stop: threading.Event | None = None,
 ) -> Iterator[Plan]:
     """Check access, prepare the source, and plan the copy. On exit, the source cleans up
     what it prepared; staged files are removed only if `apply` completed the version.
-    `replace`: a complete version is made again instead of raising `AlreadyComplete`."""
+    `replace`: a complete version is made again instead of raising `AlreadyComplete`.
+    `stop`: when set, listing stops with `StoppedError` (Ctrl+C during a long listing)."""
     fetcher = fetcher or fetcher_for(dataset, options)
     fetcher.check_access()
     fetcher.prepare()
     plan: Plan | None = None
     try:
-        plan = _plan(dataset, store, fetcher, root, replace)
+        plan = _plan(dataset, store, fetcher, root, replace, stop)
         yield plan
     finally:
         fetcher.cleanup(plan.complete if plan else False)
@@ -173,7 +176,7 @@ def ingest(
     """Plan and copy `dataset` into `store`. Files are copied by `workers` threads, or by
     `executor` if given (a pool shared by several datasets copying at the same time)."""
     with planned(
-        dataset, store, options=options, fetcher=fetcher, root=root, replace=replace
+        dataset, store, options=options, fetcher=fetcher, root=root, replace=replace, stop=stop
     ) as plan:
         return apply(
             plan,
@@ -186,7 +189,14 @@ def ingest(
         )
 
 
-def _plan(dataset: Dataset, store: Store, fetcher: Fetcher, root: str, replace: bool) -> Plan:
+def _plan(
+    dataset: Dataset,
+    store: Store,
+    fetcher: Fetcher,
+    root: str,
+    replace: bool,
+    stop: threading.Event | None,
+) -> Plan:
     version = fetcher.resolve_version()
     version = _continue_dated_version(dataset, store, root, version)
     location = VersionLocation(dataset.id, version.value, root)
@@ -199,7 +209,11 @@ def _plan(dataset: Dataset, store: Store, fetcher: Fetcher, root: str, replace: 
         manifest = _new_manifest(dataset, version)
     else:
         manifest = _start_manifest(dataset, store, location, version)
-    files = list(fetcher.list_files())
+    files = []
+    for remote in fetcher.list_files():
+        if stop is not None and stop.is_set():
+            raise StoppedError(f"{dataset.id}: stopped while listing files")
+        files.append(remote)
     if not files:
         raise FetchError(f"{dataset.id} {version.value}: the source lists no files")
     if len({f.path for f in files}) != len(files):
