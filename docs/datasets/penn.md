@@ -25,7 +25,7 @@
 2. Download all files into one folder, keeping the provider's folder structure.
 
 ```bash
-biosignal-data download penn/ram-public-data --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import penn/ram-public-data <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```
 
 Notes:

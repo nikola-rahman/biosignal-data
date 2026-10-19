@@ -6,15 +6,23 @@ signals:
 source:
   type: s3
   bucket: arn:aws:s3:us-east-1:184438910517:accesspoint/bdsp-credentialed-access-point
+  region: us-east-1
+  anonymous: false
+  key_id_env: BIOSIGNAL_BDSP_ACCESS_KEY_ID
+  secret_env: BIOSIGNAL_BDSP_SECRET_ACCESS_KEY
   version: '4.1'
 access:
+  credentials:
+  - BIOSIGNAL_BDSP_ACCESS_KEY_ID
+  - BIOSIGNAL_BDSP_SECRET_ACCESS_KEY
   tier: credentialed
   license: BDSP Restricted Health Data License 1.0.0
   steps:
   - Create an account at https://bdsp.io, upload a CITI human-subjects research certificate and sign the
     BDSP data use agreement for this dataset.
-  - After approval, BDSP issues AWS credentials for its credentialed S3 access point; store them as an
-    AWS profile and pass --aws-profile.
+  - After approval, BDSP issues S3 keys for its access point and tells you this dataset's key prefix.
+    Set BIOSIGNAL_BDSP_ACCESS_KEY_ID and BIOSIGNAL_BDSP_SECRET_ACCESS_KEY, and write the prefix into
+    this catalog entry as source.prefix.
 homepage: https://bdsp.io/content/harvard-eeg-db/
 stats:
   subjects: 109178

@@ -23,12 +23,12 @@
 
 1. Fill in the form at https://isip.piconepress.com/projects/nedc/forms/tuh_eeg.pdf (use a PDF app, not a browser) and email it to help@nedcdata.org with subject 'Download The TUH EEG Corpus'.
 2. After approval (usually 24-48 h), send your SSH public key as instructed in the reply.
-3. Set TUH_SSH_KEY to the path of the matching private key.
+3. Set BIOSIGNAL_TUH_SSH_KEY to the path of the matching private key.
 
-**Credentials**: `TUH_SSH_KEY`
+**Credentials**: `BIOSIGNAL_TUH_SSH_KEY`
 
 ```bash
-biosignal-data download isip/tuh_eeg --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download isip/tuh_eeg --dest s3://<bucket>
 ```
 
 ## TUH Abnormal EEG Corpus (TUAB)
@@ -50,12 +50,12 @@ biosignal-data download isip/tuh_eeg --dest s3://<bucket> --staging-dir <local s
 
 1. Fill in the form at https://isip.piconepress.com/projects/nedc/forms/tuh_eeg.pdf (use a PDF app, not a browser) and email it to help@nedcdata.org with subject 'Download The TUH EEG Corpus'.
 2. After approval (usually 24-48 h), send your SSH public key as instructed in the reply.
-3. Set TUH_SSH_KEY to the path of the matching private key.
+3. Set BIOSIGNAL_TUH_SSH_KEY to the path of the matching private key.
 
-**Credentials**: `TUH_SSH_KEY`
+**Credentials**: `BIOSIGNAL_TUH_SSH_KEY`
 
 ```bash
-biosignal-data download isip/tuh_eeg_abnormal --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download isip/tuh_eeg_abnormal --dest s3://<bucket>
 ```
 
 Related: `isip/tuh_eeg`
@@ -83,12 +83,12 @@ Notes:
 
 1. Fill in the form at https://isip.piconepress.com/projects/nedc/forms/tuh_eeg.pdf (use a PDF app, not a browser) and email it to help@nedcdata.org with subject 'Download The TUH EEG Corpus'.
 2. After approval (usually 24-48 h), send your SSH public key as instructed in the reply.
-3. Set TUH_SSH_KEY to the path of the matching private key.
+3. Set BIOSIGNAL_TUH_SSH_KEY to the path of the matching private key.
 
-**Credentials**: `TUH_SSH_KEY`
+**Credentials**: `BIOSIGNAL_TUH_SSH_KEY`
 
 ```bash
-biosignal-data download isip/tuh_eeg_artifact --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download isip/tuh_eeg_artifact --dest s3://<bucket>
 ```
 
 Related: `isip/tuh_eeg`
@@ -116,12 +116,12 @@ Notes:
 
 1. Fill in the form at https://isip.piconepress.com/projects/nedc/forms/tuh_eeg.pdf (use a PDF app, not a browser) and email it to help@nedcdata.org with subject 'Download The TUH EEG Corpus'.
 2. After approval (usually 24-48 h), send your SSH public key as instructed in the reply.
-3. Set TUH_SSH_KEY to the path of the matching private key.
+3. Set BIOSIGNAL_TUH_SSH_KEY to the path of the matching private key.
 
-**Credentials**: `TUH_SSH_KEY`
+**Credentials**: `BIOSIGNAL_TUH_SSH_KEY`
 
 ```bash
-biosignal-data download isip/tuh_eeg_epilepsy --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download isip/tuh_eeg_epilepsy --dest s3://<bucket>
 ```
 
 Related: `isip/tuh_eeg`
@@ -149,12 +149,12 @@ Notes:
 
 1. Fill in the form at https://isip.piconepress.com/projects/nedc/forms/tuh_eeg.pdf (use a PDF app, not a browser) and email it to help@nedcdata.org with subject 'Download The TUH EEG Corpus'.
 2. After approval (usually 24-48 h), send your SSH public key as instructed in the reply.
-3. Set TUH_SSH_KEY to the path of the matching private key.
+3. Set BIOSIGNAL_TUH_SSH_KEY to the path of the matching private key.
 
-**Credentials**: `TUH_SSH_KEY`
+**Credentials**: `BIOSIGNAL_TUH_SSH_KEY`
 
 ```bash
-biosignal-data download isip/tuh_eeg_events --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download isip/tuh_eeg_events --dest s3://<bucket>
 ```
 
 Related: `isip/tuh_eeg`
@@ -182,12 +182,12 @@ Notes:
 
 1. Fill in the form at https://isip.piconepress.com/projects/nedc/forms/tuh_eeg.pdf (use a PDF app, not a browser) and email it to help@nedcdata.org with subject 'Download The TUH EEG Corpus'.
 2. After approval (usually 24-48 h), send your SSH public key as instructed in the reply.
-3. Set TUH_SSH_KEY to the path of the matching private key.
+3. Set BIOSIGNAL_TUH_SSH_KEY to the path of the matching private key.
 
-**Credentials**: `TUH_SSH_KEY`
+**Credentials**: `BIOSIGNAL_TUH_SSH_KEY`
 
 ```bash
-biosignal-data download isip/tuh_eeg_seizure --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download isip/tuh_eeg_seizure --dest s3://<bucket>
 ```
 
 Related: `isip/tuh_eeg`
@@ -215,12 +215,12 @@ Notes:
 
 1. Fill in the form at https://isip.piconepress.com/projects/nedc/forms/tuh_eeg.pdf (use a PDF app, not a browser) and email it to help@nedcdata.org with subject 'Download The TUH EEG Corpus'.
 2. After approval (usually 24-48 h), send your SSH public key as instructed in the reply.
-3. Set TUH_SSH_KEY to the path of the matching private key.
+3. Set BIOSIGNAL_TUH_SSH_KEY to the path of the matching private key.
 
-**Credentials**: `TUH_SSH_KEY`
+**Credentials**: `BIOSIGNAL_TUH_SSH_KEY`
 
 ```bash
-biosignal-data download isip/tuh_eeg_slowing --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download isip/tuh_eeg_slowing --dest s3://<bucket>
 ```
 
 Related: `isip/tuh_eeg`

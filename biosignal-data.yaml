@@ -1,9 +1,26 @@
 # Settings that do not change between runs. Nothing has a default: every value is used as
-# written here. Keys are not stored here: set BIOSIGNAL_ACCESS_KEY_ID and
-# BIOSIGNAL_SECRET_ACCESS_KEY in the environment.
+# written here, and a run that needs a missing value stops with an error.
+# Secrets are not stored here: see docs/access.md for the BIOSIGNAL_* variables.
 
-# The S3 storage used for s3:// destinations (values from the provider's S3 guide).
+# The S3 storage for s3:// destinations (values from the provider's S3 guide).
+# Keys: BIOSIGNAL_ACCESS_KEY_ID and BIOSIGNAL_SECRET_ACCESS_KEY.
 s3:
   endpoint: https://s3.hippius.com
   region: decentralized
   addressing: path
+
+download:
+  workers: 16                  # parallel file downloads, shared by all datasets of a run
+  parallel_datasets: 6         # datasets listed and copied at the same time
+  unpinned_version: latest     # catalog entry without a pinned version: latest | fail
+  # open PhysioNet data: aws-mirror | physionet.org | aws-mirror-else-physionet.org
+  physionet_source: aws-mirror-else-physionet.org
+
+# Disk for sources whose tools write files before upload (TUH, NSRR, Kaggle).
+staging:
+  dir: ~/biosignal-staging
+  keep: false
+
+# Where RawDataset.local_path keeps fetched raw files.
+read:
+  cache_dir: ~/.cache/biosignal-data

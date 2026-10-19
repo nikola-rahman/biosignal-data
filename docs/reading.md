@@ -6,10 +6,15 @@ open those files; it does not convert them.
 ## Find and fetch files
 
 ```python
+from pathlib import Path
 from biosignal_data.read import RawDataset
+from biosignal_data.storage.stores import S3Settings
 
-ds = RawDataset.open("s3://my-bucket", "openneuro/ds005505")  # latest complete version
-ds = RawDataset.open("s3://my-bucket", "openneuro/ds005505", version="1.0.1")
+cache = Path("~/.cache/biosignal-data")  # read.cache_dir in biosignal-data.yaml
+s3 = S3Settings.from_env("https://s3.hippius.com", "decentralized", "path")  # the config's s3
+
+ds = RawDataset.open("s3://my-bucket", "openneuro/ds005505", "latest", cache_dir=cache, s3=s3)
+ds = RawDataset.open("s3://my-bucket", "openneuro/ds005505", "1.0.1", cache_dir=cache, s3=s3)
 
 ds.manifest.license  # provenance travels with the data
 eeg = ds.glob("sub-*/eeg/*_eeg.set")  # manifest entries: path, size, sha256, ...
@@ -17,11 +22,13 @@ path = ds.local_path(eeg[0].path)  # downloaded once to the cache, SHA-256 check
 uri = ds.uri(eeg[0].path)  # s3://... for tools that read S3 directly
 ```
 
-The cache lives in `~/.cache/biosignal-data` (override with `BIOSIGNAL_DATA_CACHE`).
+`version` is a label or `"latest"` (the newest complete version); `cache_dir` is where
+`local_path` keeps fetched files. Both are required.
 
-Patterns match across folders (`*` includes `/`). Formats split across files need all parts
-cached: `100.hea` and `100.dat` for a WFDB record, the `.vhdr`, `.vmrk` and `.eeg` for
-BrainVision, or `ds.local_paths("sub-01/*")` for a whole BIDS subject.
+Patterns are standard globs: `*` stays inside one folder, `**` crosses folders. Formats split
+across files need all parts cached: `100.hea` and `100.dat` for a WFDB record, the `.vhdr`,
+`.vmrk` and `.eeg` for BrainVision, or `ds.local_paths("sub-01/**")` for a whole BIDS
+subject.
 
 ## Open files
 
@@ -45,8 +52,8 @@ from biosignal_data.read import read_bids, read_mne
 raw = read_mne(path)  # header only until you ask for data
 data, times = raw[:, :1000]
 
-ds.local_paths("*.json")
-ds.local_paths("*.tsv")  # BIDS sidecars at every level
-ds.local_paths("sub-01/*")  # one subject's recordings
+ds.local_paths("**/*.json")
+ds.local_paths("**/*.tsv")  # BIDS sidecars at every level
+ds.local_paths("sub-01/**")  # one subject's recordings
 raw = read_bids(ds.local_root, subject="01", task="rest", datatype="eeg")
 ```

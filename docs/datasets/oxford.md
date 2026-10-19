@@ -24,5 +24,5 @@
 2. Download all files into one folder, keeping the provider's folder structure.
 
 ```bash
-biosignal-data download oxford/stn-lfp --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import oxford/stn-lfp <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```

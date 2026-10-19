@@ -23,7 +23,7 @@
 1. Download all files into one folder, keeping the provider's folder structure.
 
 ```bash
-biosignal-data download uci/ppg-dalia --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import uci/ppg-dalia <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```
 
 ## WESAD: wearable stress and affect detection
@@ -46,5 +46,5 @@ biosignal-data download uci/ppg-dalia --dest s3://<bucket> --from-dir <folder yo
 1. Download all files into one folder, keeping the provider's folder structure.
 
 ```bash
-biosignal-data download uci/wesad --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import uci/wesad <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```

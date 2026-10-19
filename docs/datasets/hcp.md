@@ -23,5 +23,5 @@
 2. Download all files into one folder, keeping the provider's folder structure.
 
 ```bash
-biosignal-data download hcp/meg --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import hcp/meg <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```

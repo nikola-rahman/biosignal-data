@@ -32,7 +32,7 @@ def test_ingest_copies_bytes_and_writes_manifest(store: LocalStore) -> None:
     assert by_path["README"].md5 == hashlib.md5(b"hello", usedforsecurity=False).hexdigest()
     assert manifest.total_bytes == sum(len(b) for b in FILES.values())
     assert manifest.license == "CC0"
-    assert manifest.source == {"type": "manual", "url": None, "version": None}
+    assert manifest.source == {"type": "manual", "url": None, "version": "1.0.0"}
     assert json.loads(store.get_bytes(f"{prefix}/_manifest.json") or b"")["file_count"] == 3
 
 
@@ -90,7 +90,7 @@ def test_verify_and_read_back(store: LocalStore, tmp_path: Path) -> None:
     assert verify(store, "test/example", "1.0.0", deep=True) == {}
 
     assert complete_versions(store, "test/example") == ["1.0.0"]
-    ds = RawDataset.open(store, "test/example", cache_dir=tmp_path / "cache")
+    ds = RawDataset.open(store, "test/example", "latest", cache_dir=tmp_path / "cache")
     assert [f.path for f in ds.glob("sub-*/eeg/*.edf")] == ["sub-01/eeg/data.edf"]
     assert ds.local_path("README").read_bytes() == b"hello"
 
@@ -104,13 +104,14 @@ def test_latest_complete_version_is_chosen(store: LocalStore, tmp_path: Path) ->
         ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES, version=v))
     store.put_bytes("raw/test/example/2.0.0/_manifest.partial.json", b"{}")  # incomplete
     assert complete_versions(store, "test/example") == ["1.0.2", "1.0.10"]
-    assert RawDataset.open(store, "test/example", cache_dir=tmp_path).location.version == "1.0.10"
+    latest = RawDataset.open(store, "test/example", "latest", cache_dir=tmp_path)
+    assert latest.location.version == "1.0.10"
 
 
 def test_subset_is_checkpointed_and_completed_later(store: LocalStore) -> None:
     dataset = make_dataset()
     prefix = "raw/test/example/1.0.0"
-    report = ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES), include=["sub-*"])
+    report = ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES), include=["sub-*/**"])
     assert report.subset and not report.complete and report.copied == 1
     assert store.exists(f"{prefix}/data/sub-01/eeg/data.edf")
     assert not store.exists(f"{prefix}/_SUCCESS")
@@ -125,7 +126,7 @@ def test_subset_is_checkpointed_and_completed_later(store: LocalStore) -> None:
 
 def test_subset_that_selects_everything_completes(store: LocalStore) -> None:
     dataset = make_dataset()
-    report = ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES), include=["*"])
+    report = ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES), include=["**"])
     assert report.complete and not report.subset
 
 
@@ -186,14 +187,38 @@ def test_undated_source_continues_an_earlier_days_download(
 ) -> None:
     from biosignal_data.fetchers import base  # noqa: PLC0415
 
-    dataset = make_dataset()
+    dataset = make_dataset(source={"type": "manual"})  # no version
+    latest = base.FetchOptions(unpinned_version="latest")
 
     class Undated(FakeFetcher):
         def resolve_version(self) -> base.ResolvedVersion:
             return base.Fetcher.resolve_version(self)
 
+    with pytest.raises(base.FetchError, match="unpinned_version"):
+        ingest(dataset, store, fetcher=Undated(dataset, FILES))  # the config must allow it
     monkeypatch.setattr(base, "retrieval_version", lambda: "2026-10-01")
-    ingest(dataset, store, fetcher=Undated(dataset, FILES), limit=1)
+    ingest(dataset, store, fetcher=Undated(dataset, FILES, options=latest), limit=1)
     monkeypatch.setattr(base, "retrieval_version", lambda: "2026-10-02")
-    report = ingest(dataset, store, fetcher=Undated(dataset, FILES))
+    report = ingest(dataset, store, fetcher=Undated(dataset, FILES, options=latest))
     assert report.version == "2026-10-01" and report.complete and report.skipped >= 1
+
+
+def test_empty_listing_is_an_error_not_a_complete_version(store: LocalStore) -> None:
+    from biosignal_data.fetchers import FetchError  # noqa: PLC0415
+
+    dataset = make_dataset()
+    with pytest.raises(FetchError, match="lists no files"):
+        ingest(dataset, store, fetcher=FakeFetcher(dataset, {}))
+    assert not store.exists("raw/test/example/1.0.0/_SUCCESS")
+
+
+def test_stop_ends_copies_and_keeps_what_is_finished(store: LocalStore) -> None:
+    import threading  # noqa: PLC0415
+
+    dataset = make_dataset()
+    stop = threading.Event()
+    stop.set()  # as after Ctrl+C: no file may be read any more
+    report = ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES), stop=stop)
+    assert not report.complete and set(report.failed) == set(FILES)
+    assert all("stopped" in reason for reason in report.failed.values())
+    assert store.unfinished("raw") == ()  # no temporary files are left behind

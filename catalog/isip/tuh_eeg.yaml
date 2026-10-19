@@ -6,16 +6,16 @@ source:
   type: rsync
   remote: nedc-tuh-eeg@www.isip.piconepress.com:data/tuh_eeg/tuh_eeg/v2.0.2
   version: v2.0.2
-  ssh_identity_env: TUH_SSH_KEY
+  ssh_identity_env: BIOSIGNAL_TUH_SSH_KEY
 access:
   tier: application
   steps:
   - Fill in the form at https://isip.piconepress.com/projects/nedc/forms/tuh_eeg.pdf (use a PDF app, not
     a browser) and email it to help@nedcdata.org with subject 'Download The TUH EEG Corpus'.
   - After approval (usually 24-48 h), send your SSH public key as instructed in the reply.
-  - Set TUH_SSH_KEY to the path of the matching private key.
+  - Set BIOSIGNAL_TUH_SSH_KEY to the path of the matching private key.
   credentials:
-  - TUH_SSH_KEY
+  - BIOSIGNAL_TUH_SSH_KEY
 homepage: https://isip.piconepress.com/projects/nedc/html/tuh_eeg
 stats:
   subjects: 14987

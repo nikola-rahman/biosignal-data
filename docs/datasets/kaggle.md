@@ -22,12 +22,12 @@
 **Before downloading**
 
 1. Log in to Kaggle and accept the competition rules on its page.
-2. Authenticate the Kaggle CLI: `kaggle auth login` or set KAGGLE_API_TOKEN.
+2. Authenticate the Kaggle CLI: `kaggle auth login` or set BIOSIGNAL_KAGGLE_API_TOKEN.
 
-**Credentials**: `KAGGLE_API_TOKEN`
+**Credentials**: `BIOSIGNAL_KAGGLE_API_TOKEN`
 
 ```bash
-biosignal-data download kaggle/grasp-and-lift-eeg-detection --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download kaggle/grasp-and-lift-eeg-detection --dest s3://<bucket>
 ```
 
 ## HMS Harmful Brain Activity Classification
@@ -48,12 +48,12 @@ biosignal-data download kaggle/grasp-and-lift-eeg-detection --dest s3://<bucket>
 **Before downloading**
 
 1. Log in to Kaggle and accept the competition rules on its page.
-2. Authenticate the Kaggle CLI: `kaggle auth login` or set KAGGLE_API_TOKEN.
+2. Authenticate the Kaggle CLI: `kaggle auth login` or set BIOSIGNAL_KAGGLE_API_TOKEN.
 
-**Credentials**: `KAGGLE_API_TOKEN`
+**Credentials**: `BIOSIGNAL_KAGGLE_API_TOKEN`
 
 ```bash
-biosignal-data download kaggle/hms-harmful-brain-activity-classification --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download kaggle/hms-harmful-brain-activity-classification --dest s3://<bucket>
 ```
 
 Related: `bdsp/harvard-eeg-db`
@@ -80,12 +80,12 @@ Notes:
 **Before downloading**
 
 1. Log in to Kaggle and accept the competition rules on its page.
-2. Authenticate the Kaggle CLI: `kaggle auth login` or set KAGGLE_API_TOKEN.
+2. Authenticate the Kaggle CLI: `kaggle auth login` or set BIOSIGNAL_KAGGLE_API_TOKEN.
 
-**Credentials**: `KAGGLE_API_TOKEN`
+**Credentials**: `BIOSIGNAL_KAGGLE_API_TOKEN`
 
 ```bash
-biosignal-data download kaggle/inria-bci-challenge --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download kaggle/inria-bci-challenge --dest s3://<bucket>
 ```
 
 ## Melbourne University AES/MathWorks/NIH Seizure Prediction
@@ -106,12 +106,12 @@ biosignal-data download kaggle/inria-bci-challenge --dest s3://<bucket> --stagin
 **Before downloading**
 
 1. Log in to Kaggle and accept the competition rules on its page.
-2. Authenticate the Kaggle CLI: `kaggle auth login` or set KAGGLE_API_TOKEN.
+2. Authenticate the Kaggle CLI: `kaggle auth login` or set BIOSIGNAL_KAGGLE_API_TOKEN.
 
-**Credentials**: `KAGGLE_API_TOKEN`
+**Credentials**: `BIOSIGNAL_KAGGLE_API_TOKEN`
 
 ```bash
-biosignal-data download kaggle/melbourne-university-seizure-prediction --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download kaggle/melbourne-university-seizure-prediction --dest s3://<bucket>
 ```
 
 ## UPenn and Mayo Clinic's Seizure Detection Challenge
@@ -131,12 +131,12 @@ biosignal-data download kaggle/melbourne-university-seizure-prediction --dest s3
 **Before downloading**
 
 1. Log in to Kaggle and accept the competition rules on its page.
-2. Authenticate the Kaggle CLI: `kaggle auth login` or set KAGGLE_API_TOKEN.
+2. Authenticate the Kaggle CLI: `kaggle auth login` or set BIOSIGNAL_KAGGLE_API_TOKEN.
 
-**Credentials**: `KAGGLE_API_TOKEN`
+**Credentials**: `BIOSIGNAL_KAGGLE_API_TOKEN`
 
 ```bash
-biosignal-data download kaggle/seizure-detection --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download kaggle/seizure-detection --dest s3://<bucket>
 ```
 
 ## American Epilepsy Society Seizure Prediction Challenge
@@ -157,12 +157,12 @@ biosignal-data download kaggle/seizure-detection --dest s3://<bucket> --staging-
 **Before downloading**
 
 1. Log in to Kaggle and accept the competition rules on its page.
-2. Authenticate the Kaggle CLI: `kaggle auth login` or set KAGGLE_API_TOKEN.
+2. Authenticate the Kaggle CLI: `kaggle auth login` or set BIOSIGNAL_KAGGLE_API_TOKEN.
 
-**Credentials**: `KAGGLE_API_TOKEN`
+**Credentials**: `BIOSIGNAL_KAGGLE_API_TOKEN`
 
 ```bash
-biosignal-data download kaggle/seizure-prediction --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download kaggle/seizure-prediction --dest s3://<bucket>
 ```
 
 Notes:

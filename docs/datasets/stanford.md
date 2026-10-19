@@ -24,7 +24,7 @@
 1. Not publicly released; listed for completeness.
 
 ```bash
-biosignal-data download stanford/hifi-ieeg-platform --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import stanford/hifi-ieeg-platform <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```
 
 ## Library of human ECoG data (Miller)
@@ -47,7 +47,7 @@ biosignal-data download stanford/hifi-ieeg-platform --dest s3://<bucket> --from-
 1. Download all files into one folder, keeping the provider's folder structure.
 
 ```bash
-biosignal-data download stanford/miller-ecog-library --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import stanford/miller-ecog-library <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```
 
 ## Stanford Sleep Clinic PSG (SleepFM pretraining)
@@ -69,5 +69,5 @@ biosignal-data download stanford/miller-ecog-library --dest s3://<bucket> --from
 1. Not publicly released; listed for completeness.
 
 ```bash
-biosignal-data download stanford/sleep-clinic --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import stanford/sleep-clinic <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```

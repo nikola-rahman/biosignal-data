@@ -49,13 +49,17 @@ biosignal-data download figshare/4560497 --dest s3://<bucket>
 | | |
 | --- | --- |
 | Signals | ieeg |
-| Access | Open: anonymous download |
+| Access | Application: a request that someone reviews |
 | License | CC (non-commercial) |
 | Source | figshare |
 | Subjects | 12 |
 | Hours | ~100 |
 | Homepage | <https://melbourne.figshare.com/articles/Seizure_Data/6939809> |
 | Download tested | not yet |
+
+**Before downloading**
+
+1. figshare holds the files under embargo; request access on the dataset page.
 
 ```bash
 biosignal-data download figshare/6939809 --dest s3://<bucket>
@@ -65,4 +69,4 @@ Related: `epilepsyecosystem/neurovista`
 
 Notes:
 
-- figshare reports a file embargo on this article; some files may need a request.
+- figshare reports the files of this article under embargo (checked 2026-10-19); the API lists no files.

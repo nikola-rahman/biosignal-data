@@ -10,6 +10,7 @@ import shutil
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, ClassVar, Literal, Protocol
 from urllib.parse import urlparse
@@ -25,6 +26,17 @@ if TYPE_CHECKING:
 MiB = 1024 * 1024
 
 
+@dataclass(frozen=True)
+class Unfinished:
+    """An upload that a stopped run left behind: it uses storage, but is not a listed file.
+    On S3, an unfinished multipart upload; in a local folder, a temporary `.part` file."""
+
+    key: str
+    size: int
+    started: datetime | None
+    upload_id: str | None = None  # S3 only
+
+
 class Store(Protocol):
     """Minimal key-value interface over an object store."""
 
@@ -38,6 +50,8 @@ class Store(Protocol):
     def open(self, key: str) -> BinaryIO: ...
     def delete(self, key: str) -> None: ...
     def list(self, prefix: str) -> Iterator[str]: ...
+    def unfinished(self, prefix: str) -> tuple[Unfinished, ...]: ...
+    def discard(self, item: Unfinished) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -66,7 +80,8 @@ class S3Settings:
             raise ValueError(f"set {cls.KEY_ID_VAR} and {cls.SECRET_VAR} for the S3 storage")
         return cls(endpoint, region, addressing, key_id, secret)
 
-    def client(self) -> S3Client:
+    def client(self, connections: int) -> S3Client:
+        """`connections`: the most requests this client runs at the same time."""
         # An explicit endpoint, region and keys: nothing is read from AWS config files or
         # AWS_* environment variables.
         return boto3.session.Session().client(
@@ -79,6 +94,7 @@ class S3Settings:
                 signature_version="s3v4",
                 s3={"addressing_style": self.addressing},
                 retries={"max_attempts": 10, "mode": "adaptive"},
+                max_pool_connections=connections,
             ),
         )
 
@@ -90,15 +106,17 @@ class S3Store:
         prefix: str = "",
         *,
         settings: S3Settings | None = None,
+        parallel_uploads: int = 1,
         client: S3Client | None = None,
         multipart_chunksize: int = 64 * MiB,
         max_concurrency: int = 8,
     ) -> None:
-        """Give `settings` (or, in tests, a ready `client`)."""
+        """Give `settings` (or, in tests, a ready `client`). `parallel_uploads`: files uploaded
+        at the same time; each uploads up to `max_concurrency` parts at once."""
         if client is None:
             if settings is None:
                 raise ValueError("S3Store needs settings (endpoint, region, addressing, keys)")
-            client = settings.client()
+            client = settings.client(connections=parallel_uploads * max_concurrency)
         self.bucket = bucket
         self.prefix = prefix.strip("/")
         self.settings = settings
@@ -159,6 +177,27 @@ class S3Store:
             for item in page.get("Contents", []):
                 yield item["Key"][strip:]
 
+    def unfinished(self, prefix: str) -> tuple[Unfinished, ...]:
+        strip = len(self.prefix) + 1 if self.prefix else 0
+        found = []
+        paginator = self.client.get_paginator("list_multipart_uploads")
+        for page in paginator.paginate(Bucket=self.bucket, Prefix=self._key(prefix)):
+            for upload in page.get("Uploads", []):
+                key, upload_id = upload["Key"], upload["UploadId"]
+                parts = self.client.get_paginator("list_parts").paginate(
+                    Bucket=self.bucket, Key=key, UploadId=upload_id
+                )
+                size = sum(p["Size"] for page_ in parts for p in page_.get("Parts", []))
+                found.append(Unfinished(key[strip:], size, upload.get("Initiated"), upload_id))
+        return tuple(found)
+
+    def discard(self, item: Unfinished) -> None:
+        if item.upload_id is None:
+            raise ValueError(f"{item.key}: not an S3 multipart upload")
+        self.client.abort_multipart_upload(
+            Bucket=self.bucket, Key=self._key(item.key), UploadId=item.upload_id
+        )
+
 
 class LocalStore:
     """A folder on disk with the same layout. Useful for tests and for staging small sets."""
@@ -217,16 +256,34 @@ class LocalStore:
             if path.is_file() and not path.name.endswith(".part"):
                 yield path.relative_to(self.root).as_posix()
 
+    def unfinished(self, prefix: str) -> tuple[Unfinished, ...]:
+        base = self._path(prefix) if prefix else self.root
+        if not base.is_dir():
+            return ()
+        return tuple(
+            Unfinished(
+                path.relative_to(self.root).as_posix(),
+                path.stat().st_size,
+                datetime.fromtimestamp(path.stat().st_mtime, UTC),
+            )
+            for path in sorted(base.rglob(".*.part"))
+            if path.is_file()
+        )
 
-def open_store(uri: str, s3: S3Settings | None = None) -> Store:
-    """`s3://bucket/prefix` with its `S3Settings`, or a local path / `file://` URI."""
+    def discard(self, item: Unfinished) -> None:
+        self._path(item.key).unlink(missing_ok=True)
+
+
+def open_store(uri: str, s3: S3Settings | None = None, parallel_uploads: int = 1) -> Store:
+    """`s3://bucket/prefix` with its `S3Settings`, or a local path / `file://` URI.
+    `parallel_uploads`: files written at the same time (sizes the S3 connection pool)."""
     parsed = urlparse(uri)
     if parsed.scheme == "s3":
         if s3 is None:
             raise ValueError(
                 "an s3:// destination needs S3Settings (endpoint, region, addressing, keys)"
             )
-        return S3Store(parsed.netloc, parsed.path, settings=s3)
+        return S3Store(parsed.netloc, parsed.path, settings=s3, parallel_uploads=parallel_uploads)
     if s3 is not None:
         raise ValueError("S3Settings apply to s3:// destinations only")
     if parsed.scheme in ("", "file"):

@@ -77,7 +77,7 @@ plugins = ["pydantic.mypy"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["nemar.*", "dandi.*", "huggingface_hub.*", "kaggle.*", "mne.*", "mne_bids.*", "wfdb.*", "pynwb.*", "h5py.*", "scipy.*", "pandas.*", "moto.*"]
+module = ["nemar.*", "dandi.*", "huggingface_hub.*", "kaggle.*", "kagglesdk.*", "mne.*", "mne_bids.*", "wfdb.*", "pynwb.*", "h5py.*", "scipy.*", "pandas.*", "moto.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

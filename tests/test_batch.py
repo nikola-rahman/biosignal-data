@@ -40,7 +40,11 @@ def test_many_datasets_share_one_pool_and_report_each(
     ]
     finished: list[str] = []
     outcomes = download_many(
-        datasets, store, workers=4, on_done=lambda o: finished.append(o.dataset.id)
+        datasets,
+        store,
+        workers=4,
+        parallel_datasets=3,
+        on_done=lambda o: finished.append(o.dataset.id),
     )
     status = {o.dataset.id: o.status for o in outcomes}
     assert status == {
@@ -55,5 +59,8 @@ def test_many_datasets_share_one_pool_and_report_each(
     assert sorted(finished) == sorted(status)
     assert store.get_bytes("raw/test/ok2/1/data/rec2.edf") == b"xxx"
 
-    again = {o.dataset.id: o.status for o in download_many(datasets[:3], store)}
+    again = {
+        o.dataset.id: o.status
+        for o in download_many(datasets[:3], store, workers=4, parallel_datasets=2)
+    }
     assert set(again.values()) == {"already"}

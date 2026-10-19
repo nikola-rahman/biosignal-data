@@ -100,7 +100,7 @@ def test_s3_settings_are_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BIOSIGNAL_ACCESS_KEY_ID", "hip_key")
     monkeypatch.setenv("BIOSIGNAL_SECRET_ACCESS_KEY", "secret")
     settings = S3Settings.from_env("https://s3.hippius.com", "decentralized", "path")
-    client = settings.client()
+    client = settings.client(connections=4)
     assert client.meta.endpoint_url == "https://s3.hippius.com"
     assert client.meta.region_name == "decentralized"
     assert client.meta.config.s3 == {"addressing_style": "path"}  # type: ignore[attr-defined]
@@ -109,6 +109,38 @@ def test_s3_settings_are_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "secret" not in repr(settings)
 
     # Sources on AWS ignore endpoint settings meant for the destination.
-    assert s3_client(anonymous=True, region="us-east-1").meta.endpoint_url == (
+    assert s3_client(region="us-east-1", connections=1).meta.endpoint_url == (
         "https://s3.amazonaws.com"
     )
+
+
+def test_unfinished_uploads_are_found_and_discarded(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path)
+    (tmp_path / "raw" / "a").mkdir(parents=True)
+    (tmp_path / "raw" / "a" / ".x.edf.123.part").write_bytes(b"12345")
+    (tmp_path / "raw" / "a" / "y.edf").write_bytes(b"done")
+    left = store.unfinished("raw")
+    assert [(u.key, u.size) for u in left] == [("raw/a/.x.edf.123.part", 5)]
+    store.discard(left[0])
+    assert store.unfinished("raw") == () and store.exists("raw/a/y.edf")
+
+
+def test_s3_unfinished_multipart_uploads() -> None:
+    from biosignal_data.storage.stores import S3Store  # noqa: PLC0415
+
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket-x")
+        upload = client.create_multipart_upload(Bucket="bucket-x", Key="pre/raw/x/big.edf")
+        client.upload_part(
+            Bucket="bucket-x",
+            Key="pre/raw/x/big.edf",
+            UploadId=upload["UploadId"],
+            PartNumber=1,
+            Body=b"z" * 1000,
+        )
+        store = S3Store("bucket-x", "pre", client=client)
+        left = store.unfinished("raw")
+        assert [(u.key, u.size) for u in left] == [("raw/x/big.edf", 1000)]
+        store.discard(left[0])
+        assert store.unfinished("raw") == ()

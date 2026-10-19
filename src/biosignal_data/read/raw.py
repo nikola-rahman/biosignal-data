@@ -9,19 +9,14 @@ path = ds.local_path("100.hea")                              # downloaded once, 
 from __future__ import annotations
 
 import hashlib
-import os
 import shutil
 from dataclasses import dataclass
-from fnmatch import fnmatch
 from pathlib import Path
 
+from biosignal_data.selection import glob_match
 from biosignal_data.storage.layout import SUCCESS, VersionLocation, dataset_prefix
 from biosignal_data.storage.manifest import FileEntry, Manifest
 from biosignal_data.storage.stores import S3Settings, Store, open_store
-
-
-def default_cache_dir() -> Path:
-    return Path(os.environ.get("BIOSIGNAL_DATA_CACHE", "~/.cache/biosignal-data")).expanduser()
 
 
 def complete_versions(store: Store, dataset_id: str, root: str = "raw") -> list[str]:
@@ -62,16 +57,21 @@ class RawDataset:
         cls,
         store: Store | str,
         dataset_id: str,
-        version: str | None = None,
+        version: str,
         *,
-        root: str = "raw",
-        cache_dir: Path | None = None,
+        cache_dir: Path,
         s3: S3Settings | None = None,
+        root: str = "raw",
     ) -> RawDataset:
-        """`store`: a Store, a local folder, or an s3:// URI together with `s3` (its
-        endpoint, region, addressing and keys, e.g. `S3Settings.from_env(...)`)."""
+        """Open a complete version.
+
+        `store`: a Store, a local folder, or an s3:// URI together with `s3` (its endpoint,
+        region, addressing and keys, e.g. `S3Settings.from_env(...)`).
+        `version`: a version label, or "latest" for the newest complete version.
+        `cache_dir`: where `local_path` keeps fetched files (the config file's read.cache_dir).
+        """
         store = open_store(store, s3) if isinstance(store, str) else store
-        if version is None:
+        if version == "latest":
             versions = complete_versions(store, dataset_id, root)
             if not versions:
                 raise FileNotFoundError(f"no complete version of {dataset_id} in {store.uri}")
@@ -80,14 +80,15 @@ class RawDataset:
         data = store.get_bytes(location.manifest_key)
         if data is None or not store.exists(location.success_key):
             raise FileNotFoundError(f"{store.uri}/{location.prefix} is not a complete version")
-        return cls(store, location, Manifest.from_json(data), cache_dir or default_cache_dir())
+        return cls(store, location, Manifest.from_json(data), cache_dir.expanduser())
 
     @property
     def files(self) -> list[FileEntry]:
         return self.manifest.files
 
     def glob(self, pattern: str) -> list[FileEntry]:
-        return [f for f in self.files if fnmatch(f.path, pattern)]
+        """Files whose path matches `pattern` (`*` inside a folder, `**` across folders)."""
+        return [f for f in self.files if glob_match(f.path, pattern)]
 
     @property
     def local_root(self) -> Path:

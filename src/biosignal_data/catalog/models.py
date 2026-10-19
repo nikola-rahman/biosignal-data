@@ -121,11 +121,25 @@ class S3Source(_Model):
     type: Literal["s3"]
     bucket: str = Field(description="Bucket name or S3 access point ARN.")
     prefix: str | None = Field(
-        None, description="Key prefix. None = not known yet; pass --source-prefix at ingest."
+        None,
+        description="Key prefix. None = not known yet (e.g. given by BDSP after approval); "
+        "set it here before downloading.",
     )
-    region: str = "us-east-1"
-    anonymous: bool = False
+    region: str
+    anonymous: bool
+    key_id_env: str | None = Field(
+        None, description="Not anonymous: variable holding the access key id."
+    )
+    secret_env: str | None = Field(
+        None, description="Not anonymous: variable holding the secret access key."
+    )
     version: str | None = None
+
+    @model_validator(mode="after")
+    def _keys_unless_anonymous(self) -> S3Source:
+        if not self.anonymous and not (self.key_id_env and self.secret_env):
+            raise ValueError("a source that is not anonymous needs key_id_env and secret_env")
+        return self
 
 
 class HttpFile(_Model):
@@ -149,14 +163,14 @@ class RsyncSource(_Model):
     type: Literal["rsync"]
     remote: str = Field(description="rsync remote, e.g. user@host:path")
     version: str | None = None
-    ssh_identity_env: str | None = Field(
-        None, description="Environment variable holding the path to the SSH private key."
+    ssh_identity_env: str = Field(
+        description="Environment variable holding the path to the SSH private key."
     )
 
 
 class ManualSource(_Model):
     """No programmatic download. A person follows `access.steps` into a local folder,
-    then `ingest --from-dir <folder>` publishes it to the raw layer."""
+    then `biosignal-data import <id> <folder>` publishes it to the raw layer."""
 
     type: Literal["manual"]
     url: HttpUrl | None = None

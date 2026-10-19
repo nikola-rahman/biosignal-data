@@ -22,10 +22,13 @@
 **Before downloading**
 
 1. Create an account at https://bdsp.io, upload a CITI human-subjects research certificate and sign the BDSP data use agreement for this dataset.
-2. After approval, BDSP issues AWS credentials for its credentialed S3 access point; store them as an AWS profile and pass --aws-profile.
+2. After approval, BDSP issues S3 keys for its access point and tells you this dataset's key prefix. Set BIOSIGNAL_BDSP_ACCESS_KEY_ID and BIOSIGNAL_BDSP_SECRET_ACCESS_KEY, and write the prefix into this catalog entry as source.prefix.
+
+**Credentials**: `BIOSIGNAL_BDSP_ACCESS_KEY_ID`, `BIOSIGNAL_BDSP_SECRET_ACCESS_KEY`
 
 ```bash
-biosignal-data download bdsp/harvard-eeg-db --dest s3://<bucket> --source-prefix <prefix from the provider>
+# first write the key prefix into catalog/bdsp/harvard-eeg-db.yaml (source.prefix)
+biosignal-data download bdsp/harvard-eeg-db --dest s3://<bucket>
 ```
 
 Notes:
@@ -51,10 +54,13 @@ Notes:
 **Before downloading**
 
 1. Create an account at https://bdsp.io, upload a CITI human-subjects research certificate and sign the BDSP data use agreement for this dataset.
-2. After approval, BDSP issues AWS credentials for its credentialed S3 access point; store them as an AWS profile and pass --aws-profile.
+2. After approval, BDSP issues S3 keys for its access point and tells you this dataset's key prefix. Set BIOSIGNAL_BDSP_ACCESS_KEY_ID and BIOSIGNAL_BDSP_SECRET_ACCESS_KEY, and write the prefix into this catalog entry as source.prefix.
+
+**Credentials**: `BIOSIGNAL_BDSP_ACCESS_KEY_ID`, `BIOSIGNAL_BDSP_SECRET_ACCESS_KEY`
 
 ```bash
-biosignal-data download bdsp/heedb --dest s3://<bucket> --source-prefix <prefix from the provider>
+# first write the key prefix into catalog/bdsp/heedb.yaml (source.prefix)
+biosignal-data download bdsp/heedb --dest s3://<bucket>
 ```
 
 Notes:
@@ -79,7 +85,9 @@ Notes:
 **Before downloading**
 
 1. Create an account at https://bdsp.io, upload a CITI human-subjects research certificate and sign the BDSP data use agreement for this dataset.
-2. After approval, BDSP issues AWS credentials for its credentialed S3 access point; store them as an AWS profile and pass --aws-profile.
+2. After approval, BDSP issues S3 keys for its access point and tells you this dataset's key prefix. Set BIOSIGNAL_BDSP_ACCESS_KEY_ID and BIOSIGNAL_BDSP_SECRET_ACCESS_KEY, and write the prefix into this catalog entry as source.prefix.
+
+**Credentials**: `BIOSIGNAL_BDSP_ACCESS_KEY_ID`, `BIOSIGNAL_BDSP_SECRET_ACCESS_KEY`
 
 ```bash
 biosignal-data download bdsp/hsp --dest s3://<bucket>
@@ -110,7 +118,7 @@ Notes:
 2. Download following BDSP's instructions, then ingest with --from-dir.
 
 ```bash
-biosignal-data download bdsp/i-care --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import bdsp/i-care <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```
 
 Related: `physionet/i-care`
@@ -137,10 +145,13 @@ Notes:
 **Before downloading**
 
 1. Create an account at https://bdsp.io, upload a CITI human-subjects research certificate and sign the BDSP data use agreement for this dataset.
-2. After approval, BDSP issues AWS credentials for its credentialed S3 access point; store them as an AWS profile and pass --aws-profile.
+2. After approval, BDSP issues S3 keys for its access point and tells you this dataset's key prefix. Set BIOSIGNAL_BDSP_ACCESS_KEY_ID and BIOSIGNAL_BDSP_SECRET_ACCESS_KEY, and write the prefix into this catalog entry as source.prefix.
+
+**Credentials**: `BIOSIGNAL_BDSP_ACCESS_KEY_ID`, `BIOSIGNAL_BDSP_SECRET_ACCESS_KEY`
 
 ```bash
-biosignal-data download bdsp/nf89816gtxbon11kbr9a --dest s3://<bucket> --source-prefix <prefix from the provider>
+# first write the key prefix into catalog/bdsp/nf89816gtxbon11kbr9a.yaml (source.prefix)
+biosignal-data download bdsp/nf89816gtxbon11kbr9a --dest s3://<bucket>
 ```
 
 ## Stanford Sleep Bench
@@ -164,7 +175,7 @@ biosignal-data download bdsp/nf89816gtxbon11kbr9a --dest s3://<bucket> --source-
 2. Download following BDSP's instructions, then ingest with --from-dir.
 
 ```bash
-biosignal-data download bdsp/stanford-sleep-bench --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import bdsp/stanford-sleep-bench <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```
 
 Related: `bdsp/hsp`

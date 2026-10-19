@@ -47,8 +47,8 @@ download_verified: false           # set true after a successful complete downlo
 ```
 
 The fields of each `source.type` are defined in `src/biosignal_data/catalog/models.py`.
-Use `type: manual` with a `url` when there is no programmatic download; ingest then runs with
-`--from-dir`.
+Use `type: manual` with a `url` when there is no programmatic download; the data then comes
+in with `biosignal-data import <id> <folder> --version <label>`.
 
 ## Check and regenerate
 

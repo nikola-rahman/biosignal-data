@@ -1,7 +1,8 @@
 """Download many datasets at once.
 
-Several datasets are listed and copied at the same time, and all of them share one pool of
-file-download threads, so the total number of parallel downloads stays at `workers`.
+`parallel_datasets` datasets are listed and copied at the same time, and all of them share
+one pool of file-download threads, so the total number of parallel downloads stays at
+`workers`. Ctrl+C stops every copy at its next chunk; what is finished stays recorded.
 
 Every dataset ends with an `Outcome`. Datasets that need a person to act first (credentials
 not set, download by hand, not available) are found before any network call and reported
@@ -10,6 +11,7 @@ apart from real failures.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -17,6 +19,7 @@ from typing import Literal
 
 from biosignal_data.catalog import AccessTier, Dataset
 from biosignal_data.fetchers import (
+    AccessRestrictedError,
     FetchError,
     FetchOptions,
     ManualDownloadError,
@@ -31,16 +34,13 @@ Status = Literal[
     "already",  # the version was already complete
     "incomplete",  # some files failed; running again retries them
     "credentials",  # needs credentials that are not set
+    "restricted",  # the source holds the files back (embargo, request needed)
     "manual",  # must be downloaded by hand, then --from-dir
     "unavailable",  # the catalog says there is no way to get it
     "failed",  # an error before copying (listing, network, ...)
 ]
 DONE: frozenset[Status] = frozenset({"complete", "subset", "already"})
-NEEDS_ACTION: frozenset[Status] = frozenset({"credentials", "manual", "unavailable"})
-
-# Datasets listed and copied at the same time. Listing is mostly waiting on the network, so
-# a few in parallel keep the shared download pool busy.
-PARALLEL_DATASETS = 6
+NEEDS_ACTION: frozenset[Status] = frozenset({"credentials", "restricted", "manual", "unavailable"})
 
 
 @dataclass
@@ -57,7 +57,8 @@ def download_many(
     *,
     options: FetchOptions | None = None,
     root: str = "raw",
-    workers: int = 16,
+    workers: int,
+    parallel_datasets: int,
     include: Sequence[str] = (),
     limit: int | None = None,
     progress_for: Callable[[Dataset], IngestProgress | None] | None = None,
@@ -69,8 +70,9 @@ def download_many(
         return outcomes
     files = ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="file")
     runner = ThreadPoolExecutor(
-        max_workers=min(PARALLEL_DATASETS, len(datasets)), thread_name_prefix="dataset"
+        max_workers=min(parallel_datasets, len(datasets)), thread_name_prefix="dataset"
     )
+    stop = threading.Event()
 
     def one(dataset: Dataset) -> Outcome:
         if dataset.access.tier is AccessTier.UNAVAILABLE:
@@ -86,11 +88,14 @@ def download_many(
                 limit=limit,
                 progress=progress,
                 executor=files,
+                stop=stop,
             )
         except AlreadyComplete as exc:
             return Outcome(dataset, "already", message=str(exc))
         except MissingCredentialsError as exc:
             return Outcome(dataset, "credentials", message=str(exc))
+        except AccessRestrictedError as exc:
+            return Outcome(dataset, "restricted", message=str(exc))
         except ManualDownloadError as exc:
             return Outcome(dataset, "manual", message=str(exc))
         except (FetchError, OSError, RuntimeError, ValueError) as exc:
@@ -110,9 +115,12 @@ def download_many(
             outcomes.append(outcome)
             if on_done:
                 on_done(outcome)
+    except BaseException:
+        # Ctrl+C or an error: copies in progress stop at their next chunk, queued work is
+        # dropped, and each dataset keeps the partial manifest of what it finished.
+        stop.set()
+        raise
     finally:
-        # On Ctrl+C: drop downloads that have not started (files first, so that the dataset
-        # threads stop waiting), let files in progress finish, keep partial manifests.
         files.shutdown(wait=False, cancel_futures=True)
         runner.shutdown(cancel_futures=True)
         files.shutdown()

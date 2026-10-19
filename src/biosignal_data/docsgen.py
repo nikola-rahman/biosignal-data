@@ -27,14 +27,15 @@ def _hours(d: Dataset) -> str:
 
 
 def _download_command(d: Dataset) -> str:
-    base = f"biosignal-data download {d.id} --dest s3://<bucket>"
     if d.source.type == "manual":
-        return base + " --from-dir <folder you downloaded into>"
-    if d.source.type in ("nsrr", "rsync", "kaggle"):
-        return base + " --staging-dir <local scratch folder>"
+        return (
+            f"biosignal-data import {d.id} <folder you downloaded into> "
+            "--version <label> --dest s3://<bucket>"
+        )
+    command = f"biosignal-data download {d.id} --dest s3://<bucket>"
     if d.source.type == "s3" and getattr(d.source, "prefix", None) is None:
-        return base + " --source-prefix <prefix from the provider>"
-    return base
+        return f"# first write the key prefix into catalog/{d.id}.yaml (source.prefix)\n{command}"
+    return command
 
 
 def _section(d: Dataset) -> str:

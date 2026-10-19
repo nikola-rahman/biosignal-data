@@ -84,5 +84,5 @@ Related: `nemar/nm000105`, `nemar/nm000106`
 1. Not publicly released; listed for completeness.
 
 ```bash
-biosignal-data download meta/reality-labs-semg --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import meta/reality-labs-semg <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```

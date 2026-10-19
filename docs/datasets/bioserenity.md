@@ -23,5 +23,5 @@
 1. Not publicly released; listed for completeness.
 
 ```bash
-biosignal-data download bioserenity/psg --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import bioserenity/psg <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```

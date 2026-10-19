@@ -25,32 +25,60 @@ def test_info_and_validate() -> None:
     assert runner.invoke(app, ["dev", "validate"]).exit_code == 0
 
 
-def test_download_from_dir_and_check(tmp_path: Path) -> None:
+CONFIG = """
+download:
+  workers: 2
+  parallel_datasets: 2
+  unpinned_version: latest
+  physionet_source: physionet.org
+"""
+
+
+def test_import_status_check(tmp_path: Path) -> None:
+    config = tmp_path / "biosignal-data.yaml"
+    config.write_text(CONFIG)
     src = tmp_path / "download"
     src.mkdir()
     (src / "x.txt").write_text("x")
     dest = str(tmp_path / "lake")
-    args = [
-        "download",
-        "mni/open-ieeg-atlas",
-        "--dest",
-        dest,
-        "--from-dir",
-        str(src),
-        "--version",
-        "2026-10-18",
-    ]
+    args = ["import", "mni/open-ieeg-atlas", str(src), "--dest", dest, "--config", str(config)]
+    assert runner.invoke(app, args).exit_code == 2  # --version is required
+    args += ["--version", "2026-10-18"]
     result = runner.invoke(app, args)
     assert result.exit_code == 0, result.output
     assert "complete" in result.output
-    check = ["check", "mni/open-ieeg-atlas", "--dest", dest, "--checksums"]
-    assert runner.invoke(app, check).exit_code == 1  # neither --version nor --latest
-    checked = runner.invoke(app, [*check, "--latest"])
-    assert checked.exit_code == 0 and "2026-10-18: ok" in checked.output
-    info = runner.invoke(app, ["info", "mni/open-ieeg-atlas", "--dest", dest]).stdout
-    assert "2026-10-18" in info and "complete" in info
+
+    check = ["check", "mni/open-ieeg-atlas", "--dest", dest, "--config", str(config)]
+    assert runner.invoke(app, [*check, "--checksums"]).exit_code == 1  # no --version/--latest
+    checked = runner.invoke(app, [*check, "--latest", "--checksums"])
+    assert checked.exit_code == 0 and "2026-10-18: sizes and SHA-256 ok" in checked.output
+
+    status = runner.invoke(
+        app, ["status", "mni/open-ieeg-atlas", "--dest", dest, "--config", str(config)]
+    )
+    assert "2026-10-18" in status.output and "complete" in status.output
     assert "already complete" in runner.invoke(app, args).output
-    assert runner.invoke(app, ["download", "mni/open-ieeg-atlas"]).exit_code == 1  # no --dest
+
+
+def test_selection_is_one_way_and_dest_is_required(tmp_path: Path) -> None:
+    config = tmp_path / "biosignal-data.yaml"
+    config.write_text(CONFIG)
+    base = ["download", "--config", str(config), "--dest", str(tmp_path / "lake")]
+    assert "select datasets one way" in runner.invoke(app, base).output
+    mixed = runner.invoke(app, [*base, "physionet/mitdb", "--signal", "ecg"])
+    assert "select datasets one way" in mixed.output
+    no_dest = runner.invoke(app, ["download", "physionet/mitdb", "--config", str(config)])
+    assert "missing --dest" in no_dest.output
+    assert runner.invoke(app, ["status", "physionet/mitdb"]).exit_code == 2  # --dest required
+
+
+def test_config_values_have_no_defaults(tmp_path: Path) -> None:
+    config = tmp_path / "biosignal-data.yaml"
+    config.write_text("download:\n  workers: 2\n")
+    result = runner.invoke(
+        app, ["download", "physionet/mitdb", "--dry-run", "--config", str(config)]
+    )
+    assert result.exit_code == 2 and "unpinned_version" in result.output
 
 
 def test_generated_docs_are_up_to_date() -> None:
@@ -96,13 +124,23 @@ def test_s3_destination_reads_the_config_file(
     monkeypatch.setenv("BIOSIGNAL_ACCESS_KEY_ID", "hip_key")
     monkeypatch.setenv("BIOSIGNAL_SECRET_ACCESS_KEY", "secret")
     config = tmp_path / "biosignal-data.yaml"
-    args = ["check", "x/y", "--dest", "s3://bucket", "--latest", "--config", str(config)]
+    args = [
+        "check",
+        "physionet/mitdb",
+        "--dest",
+        "s3://bucket",
+        "--latest",
+        "--config",
+        str(config),
+    ]
     assert "no config file" in runner.invoke(app, args).output
     config.write_text("s3:\n  endpoint: https://s3.example\n  region: r1\n")
     assert "addressing" in runner.invoke(app, args).output  # missing value: an error
 
 
-@pytest.mark.parametrize("command", ["list", "info", "download", "check", "dev"])
+@pytest.mark.parametrize(
+    "command", ["list", "info", "download", "import", "status", "check", "cleanup", "dev"]
+)
 def test_help_renders(command: str) -> None:
     result = runner.invoke(app, [command, "--help"])
     assert result.exit_code == 0, result.output

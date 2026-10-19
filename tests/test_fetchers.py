@@ -10,7 +10,13 @@ import pytest
 import responses
 from moto import mock_aws
 
-from biosignal_data.fetchers import FetchError, FetchOptions, fetcher_for, physionet
+from biosignal_data.fetchers import (
+    AccessRestrictedError,
+    FetchError,
+    FetchOptions,
+    fetcher_for,
+    physionet,
+)
 from biosignal_data.fetchers.base import LocalDirFetcher, RemoteFile
 from biosignal_data.fetchers.physionet import PhysioNetFetcher, parse_sha256sums
 from biosignal_data.ingest import ingest
@@ -42,7 +48,6 @@ def test_physionet_lists_from_sha256sums_and_verifies(
 ) -> None:
     import hashlib  # noqa: PLC0415
 
-    monkeypatch.setattr(PhysioNetFetcher, "_mirror_files", lambda self, version: None)
     body = b"header"
     digest = hashlib.sha256(body).hexdigest()
     base = "https://physionet.org/files/mitdb/1.0.0"
@@ -51,7 +56,9 @@ def test_physionet_lists_from_sha256sums_and_verifies(
     dataset = make_dataset(
         id="physionet/mitdb", source={"type": "physionet", "slug": "mitdb", "version": "1.0.0"}
     )
-    report = ingest(dataset, store)
+    with pytest.raises(FetchError, match="physionet_source"):
+        ingest(dataset, store)  # the config must say where to read from
+    report = ingest(dataset, store, options=FetchOptions(physionet_source="physionet.org"))
     assert report.complete
     assert store.get_bytes("raw/physionet/mitdb/1.0.0/data/100.hea") == body
     assert store.exists("raw/physionet/mitdb/1.0.0/data/SHA256SUMS.txt")
@@ -77,14 +84,15 @@ def test_physionet_downloads_from_aws_mirror(
         dataset = make_dataset(
             id="physionet/mitdb", source={"type": "physionet", "slug": "mitdb", "version": "1.0.0"}
         )
-        listed = list(fetcher_for(dataset).list_files())
+        mirror = FetchOptions(physionet_source="aws-mirror")
+        listed = list(fetcher_for(dataset, mirror).list_files())
         assert {f.path: f.size for f in listed} == {
             "100.hea": 6,
             "100.dat": 100,
             "SHA256SUMS.txt": len(sums),
         }
         assert all(f.url and f.url.startswith("s3://physionet-open/mitdb/1.0.0/") for f in listed)
-        report = ingest(dataset, store)
+        report = ingest(dataset, store, options=mirror)
     assert report.complete
     assert store.get_bytes("raw/physionet/mitdb/1.0.0/data/100.dat") == files["100.dat"]
 
@@ -136,7 +144,9 @@ def test_zenodo_lists_files_with_md5() -> None:
 @responses.activate
 def test_figshare_collection_prefixes_article_ids() -> None:
     api = "https://api.figshare.com/v2"
-    responses.get(f"{api}/collections/9/articles?page_size=1000", json=[{"id": 1}, {"id": 2}])
+    collection = f"{api}/collections/9/articles"
+    responses.get(f"{collection}?page=1&page_size=1000", json=[{"id": 1}, {"id": 2}])
+    responses.get(f"{collection}?page=2&page_size=1000", json=[])  # every page is read
     for article in (1, 2):
         responses.get(
             f"{api}/articles/{article}/files?page=1&page_size=1000",
@@ -154,34 +164,58 @@ def test_figshare_collection_prefixes_article_ids() -> None:
     assert [f.path for f in fetcher_for(dataset).list_files()] == ["1/x.csv", "2/x.csv"]
 
 
+@responses.activate
+def test_figshare_embargo_is_restricted_access(store: LocalStore) -> None:
+    api = "https://api.figshare.com/v2"
+    responses.get(f"{api}/articles/5", json={"version": 3, "is_embargoed": True})
+    responses.get(f"{api}/articles/5/files?page=1&page_size=1000", json=[])
+    dataset = make_dataset(id="figshare/5", source={"type": "figshare", "article": 5})
+    with pytest.raises(AccessRestrictedError, match="embargo"):
+        ingest(dataset, store, options=FetchOptions(unpinned_version="latest"))
+
+
 def test_figshare_requires_exactly_one_target() -> None:
     with pytest.raises(ValueError, match="exactly one"):
         make_dataset(source={"type": "figshare"})
 
 
 def test_s3_source_without_prefix_asks_for_it() -> None:
-    dataset = make_dataset(source={"type": "s3", "bucket": "b"})
-    with pytest.raises(FetchError, match="--source-prefix"):
+    dataset = make_dataset(
+        source={"type": "s3", "bucket": "b", "region": "us-east-1", "anonymous": True}
+    )
+    with pytest.raises(FetchError, match=r"source\.prefix"):
         list(fetcher_for(dataset).list_files())
 
 
-def test_s3_source_lists_relative_paths(store: LocalStore) -> None:
+def test_s3_source_lists_relative_paths(store: LocalStore, monkeypatch: pytest.MonkeyPatch) -> None:
     with mock_aws():
         client = boto3.client("s3", region_name="us-east-1")
         client.create_bucket(Bucket="src")
         client.put_object(Bucket="src", Key="PSG/a/1.edf", Body=b"one")
         client.put_object(Bucket="src", Key="PSG/", Body=b"")
         dataset = make_dataset(
-            source={"type": "s3", "bucket": "src", "prefix": "PSG", "version": "3.0"}
+            source={
+                "type": "s3",
+                "bucket": "src",
+                "prefix": "PSG",
+                "version": "3.0",
+                "region": "us-east-1",
+                "anonymous": False,
+                "key_id_env": "TEST_KEY_ID",
+                "secret_env": "TEST_SECRET",
+            }
         )
+        # The mock needs signed requests; the keys come from the catalog-named variables.
+        monkeypatch.setenv("TEST_KEY_ID", "k")
+        monkeypatch.setenv("TEST_SECRET", "s")
         report = ingest(dataset, store)
         assert report.complete
         assert store.get_bytes("raw/test/example/3.0/data/a/1.edf") == b"one"
 
 
-def test_manual_source_requires_from_dir() -> None:
+def test_manual_source_points_to_import() -> None:
     dataset = make_dataset()
-    with pytest.raises(FetchError, match="--from-dir"):
+    with pytest.raises(FetchError, match="biosignal-data import"):
         fetcher_for(dataset).prepare()
 
 
@@ -221,10 +255,18 @@ def test_openneuro_old_snapshot_is_refused(monkeypatch: pytest.MonkeyPatch) -> N
         fetcher_for(dataset).resolve_version()
 
 
-def test_rsync_and_kaggle_explain_missing_tools(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_rsync_needs_staging_and_the_tool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("PATH", str(tmp_path))  # nothing on PATH
-    dataset = make_dataset(source={"type": "rsync", "remote": "u@h:p", "version": "v1"})
+    monkeypatch.setenv("TEST_SSH_KEY", str(tmp_path / "key"))
+    dataset = make_dataset(
+        source={
+            "type": "rsync",
+            "remote": "u@h:p",
+            "version": "v1",
+            "ssh_identity_env": "TEST_SSH_KEY",
+        }
+    )
+    with pytest.raises(FetchError, match=r"staging\.dir"):
+        fetcher_for(dataset).prepare()  # no staging folder configured
     with pytest.raises(FetchError, match="rsync"):
-        fetcher_for(dataset, FetchOptions(staging_dir=tmp_path)).prepare()
+        fetcher_for(dataset, FetchOptions(staging_dir=tmp_path, keep_staging=True)).prepare()

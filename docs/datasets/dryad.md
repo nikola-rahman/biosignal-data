@@ -22,7 +22,7 @@
 1. Download all files into one folder, keeping the provider's folder structure.
 
 ```bash
-biosignal-data download dryad/card-t15-speech --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import dryad/card-t15-speech <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```
 
 ## Handwriting BCI (Willett et al.)
@@ -44,5 +44,5 @@ biosignal-data download dryad/card-t15-speech --dest s3://<bucket> --from-dir <f
 1. Download all files into one folder, keeping the provider's folder structure.
 
 ```bash
-biosignal-data download dryad/willett-handwriting --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import dryad/willett-handwriting <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```

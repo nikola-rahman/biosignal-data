@@ -20,9 +20,10 @@ counts as one recording.
 from __future__ import annotations
 
 import posixpath
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from fnmatch import fnmatchcase
+from functools import lru_cache
 
 # Files that hold signals and identify a recording. Companion files (.dat, .eeg, .vmrk,
 # .fdt, ...) are found through these by name.
@@ -45,6 +46,38 @@ class Selection:
     # False: no file has a known signal format, so every data file counts as a recording.
     signal_files_found: bool = True
     metadata_added: int = 0  # metadata files added to the chosen recordings (with a limit)
+
+
+@lru_cache(maxsize=256)
+def _glob_regex(pattern: str) -> re.Pattern[str]:
+    out, i = [], 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        elif pattern[i] == "[" and (end := pattern.find("]", i + 2)) != -1:
+            body = pattern[i + 1 : end].replace("\\", "\\\\")
+            out.append("[^" + body[1:] + "]" if body.startswith("!") else "[" + body + "]")
+            i = end + 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def glob_match(path: str, pattern: str) -> bool:
+    """Standard path glob: `*` and `?` stay inside one folder, `**` crosses folders
+    (`**/x` also matches `x` at the top), `[abc]` and `[!abc]` are character sets."""
+    return _glob_regex(pattern).match(path) is not None
 
 
 def _suffix_and_stem(name: str) -> tuple[str, str]:
@@ -103,7 +136,7 @@ def select(
 ) -> Selection:
     """Paths to copy: those matching `include` (all if empty), then the first `limit`
     recordings in path order with their metadata (all if `limit` is None)."""
-    chosen = sorted(p for p in paths if not include or any(fnmatchcase(p, g) for g in include))
+    chosen = sorted(p for p in paths if not include or any(glob_match(p, g) for g in include))
     recordings = recordings_of(chosen)
     found = any(_is_signal(p) for p in chosen)
     if limit is None:

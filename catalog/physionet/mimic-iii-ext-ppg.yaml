@@ -17,10 +17,10 @@ access:
   - Create a PhysioNet account and complete credentialing (CITI 'Data or Specimens Only Research' training)
     at https://physionet.org/settings/credentialing/.
   - Sign the data use agreement on the dataset's PhysioNet page.
-  - Set PHYSIONET_USERNAME and PHYSIONET_PASSWORD.
+  - Set BIOSIGNAL_PHYSIONET_USERNAME and BIOSIGNAL_PHYSIONET_PASSWORD.
   credentials:
-  - PHYSIONET_USERNAME
-  - PHYSIONET_PASSWORD
+  - BIOSIGNAL_PHYSIONET_USERNAME
+  - BIOSIGNAL_PHYSIONET_PASSWORD
 homepage: https://physionet.org/content/mimic-iii-ext-ppg/
 stats:
   subjects: 6189

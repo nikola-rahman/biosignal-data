@@ -1,33 +1,64 @@
 """Project settings from `biosignal-data.yaml` at the repository root.
 
-Only settings that do not change between runs belong here, e.g. how to reach the S3
-storage. Nothing has a default: a missing value is an error. Secrets are not stored here;
-the S3 keys come from BIOSIGNAL_ACCESS_KEY_ID and BIOSIGNAL_SECRET_ACCESS_KEY.
+Settings that do not change between runs live here, not in command options. Nothing has
+a default: a value that a run needs and the file does not give is an error. Secrets are
+not stored here; they come from BIOSIGNAL_* environment variables (see docs/access.md).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypeVar
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 CONFIG_NAME = "biosignal-data.yaml"
+T = TypeVar("T")
 
 
-class S3Config(BaseModel):
+class _Section(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class S3Config(_Section):
+    """The S3-compatible storage used for s3:// destinations."""
 
     endpoint: str = Field(pattern=r"^https?://")  # used as written, e.g. https://s3.hippius.com
     region: str  # the region name the storage signs with, e.g. "decentralized"
     addressing: Literal["path", "virtual"]  # https://host/bucket/key or https://bucket.host/key
 
 
-class Config(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+class DownloadConfig(_Section):
+    workers: int = Field(ge=1)  # parallel file downloads, shared by all datasets of a run
+    parallel_datasets: int = Field(ge=1)  # datasets listed and copied at the same time
+    # A catalog entry without a pinned version: "latest" takes the newest the source
+    # publishes (or today's date if the source has no versions); "fail" stops.
+    unpinned_version: Literal["latest", "fail"]
+    # Where open PhysioNet datasets are read from. Same files either way.
+    #   aws-mirror: PhysioNet's copy on AWS (s3://physionet-open): faster, gives file sizes;
+    #               a dataset or file that is not on it fails.
+    #   physionet.org: the website.
+    #   aws-mirror-else-physionet.org: the mirror, and the website for what it lacks.
+    physionet_source: Literal["aws-mirror", "physionet.org", "aws-mirror-else-physionet.org"]
 
-    s3: S3Config | None = None  # needed only for s3:// destinations
+
+class StagingConfig(_Section):
+    """Disk for the sources whose tools must write files before upload (TUH, NSRR, Kaggle)."""
+
+    dir: Path
+    keep: bool  # keep the staged files after the upload
+
+
+class ReadConfig(_Section):
+    cache_dir: Path  # where raw files are kept after `RawDataset.local_path` fetches them
+
+
+class Config(_Section):
+    s3: S3Config | None = None
+    download: DownloadConfig | None = None
+    staging: StagingConfig | None = None
+    read: ReadConfig | None = None
 
 
 class ConfigError(ValueError):
@@ -48,3 +79,10 @@ def load_config(path: Path | None = None) -> tuple[Config, Path]:
         return Config.model_validate(data), path
     except (yaml.YAMLError, ValidationError) as exc:
         raise ConfigError(f"{path}: {exc}") from exc
+
+
+def need(section: T | None, name: str, path: Path) -> T:
+    """A section that this run needs; an error naming the file if it is missing."""
+    if section is None:
+        raise ConfigError(f"{path} has no `{name}` section, which this run needs")
+    return section

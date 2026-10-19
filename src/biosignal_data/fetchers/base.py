@@ -36,6 +36,10 @@ class MissingCredentialsError(FetchError):
     """Credentials for a gated source are not set."""
 
 
+class AccessRestrictedError(FetchError):
+    """The source holds the files back (embargo, request needed) from this account."""
+
+
 class ManualDownloadError(FetchError):
     """The source has no programmatic download; a person downloads it, then `--from-dir`."""
 
@@ -65,14 +69,17 @@ class RemoteFile:
 
 @dataclass
 class FetchOptions:
-    """Run-time options that are not part of the catalog."""
+    """Run-time settings that are not part of the catalog: from the config file (staging,
+    physionet_source, unpinned_version) or from `import` (from_dir, version). A fetcher
+    that needs a setting that is None stops with an error; nothing has a default."""
 
-    staging_dir: Path | None = None
-    from_dir: Path | None = None
-    source_prefix: str | None = None
-    version: str | None = None  # override / provide the version label
-    aws_profile: str | None = None
-    keep_staging: bool = False
+    staging_dir: Path | None = None  # disk for sources whose tools write files first
+    keep_staging: bool | None = None
+    physionet_source: str | None = None  # see config.DownloadConfig
+    unpinned_version: str | None = None  # see config.DownloadConfig
+    connections: int = 1  # parallel requests to one source: download.workers in the CLI
+    from_dir: Path | None = None  # `import`: files downloaded by hand
+    version: str | None = None  # `import`: the version label the user gives
 
 
 S = TypeVar("S")
@@ -106,8 +113,8 @@ class Fetcher(ABC):
     def prepare(self) -> None:  # noqa: B027 - optional hook
         """Run anything that must happen before listing (e.g. staging a download)."""
 
-    def cleanup(self) -> None:  # noqa: B027 - optional hook
-        """Remove temporary files created by `prepare`."""
+    def cleanup(self, complete: bool) -> None:  # noqa: B027 - optional hook
+        """Remove what `prepare` created; `complete`: the version is now complete."""
 
     @abstractmethod
     def list_files(self) -> Iterator[RemoteFile]: ...

@@ -16,7 +16,6 @@ Credentialed projects use HTTPS with basic auth with the user's PhysioNet accoun
 from __future__ import annotations
 
 import logging
-import os
 import re
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
@@ -45,6 +44,7 @@ BASE = "https://physionet.org"
 SUMS = "SHA256SUMS.txt"
 MIRROR_BUCKET = "physionet-open"
 MIRROR_REGION = "us-east-1"
+CREDENTIAL_VARS = ("BIOSIGNAL_PHYSIONET_USERNAME", "BIOSIGNAL_PHYSIONET_PASSWORD")
 _LATEST_RE = re.compile(r"/content/(?P<slug>[^/]+)/(?P<version>[^/]+)/?$")
 
 
@@ -69,15 +69,23 @@ class PhysioNetFetcher(Fetcher):
     def _session(self) -> requests.Session:
         auth: tuple[str, str] | None = None
         if self.source.credentialed:
-            user, password = require_env("PHYSIONET_USERNAME", "PHYSIONET_PASSWORD")
+            user, password = require_env(*CREDENTIAL_VARS)
             auth = (user, password)
-        elif os.environ.get("PHYSIONET_USERNAME") and os.environ.get("PHYSIONET_PASSWORD"):
-            auth = (os.environ["PHYSIONET_USERNAME"], os.environ["PHYSIONET_PASSWORD"])
         return http_session(auth)
+
+    def _route(self) -> str:
+        """Where to read from: credentialed data is only on physionet.org; open data as
+        `download.physionet_source` in the config file says."""
+        if self.source.credentialed:
+            return "physionet.org"
+        if self.options.physionet_source is None:
+            raise FetchError("set download.physionet_source in the config file")
+        return self.options.physionet_source
 
     def check_access(self) -> None:
         if self.source.credentialed:
-            require_env("PHYSIONET_USERNAME", "PHYSIONET_PASSWORD")
+            require_env(*CREDENTIAL_VARS)
+        self._route()
 
     def resolve_version(self) -> ResolvedVersion:
         if self.options.version or self.source.version:
@@ -95,26 +103,35 @@ class PhysioNetFetcher(Fetcher):
 
     def list_files(self) -> Iterator[RemoteFile]:
         version = self.resolve_version().value
-        if not self.source.credentialed:
-            mirrored = self._mirror_files(version)
-            if mirrored is not None:
-                yield from mirrored
-                return
-        yield from self._https_files(version)
+        route = self._route()
+        if route == "physionet.org":
+            yield from self._https_files(version)
+            return
+        mirrored = self._mirror_files(version, website_for_missing=route != "aws-mirror")
+        if mirrored is not None:
+            yield from mirrored
+        elif route == "aws-mirror":
+            raise FetchError(
+                f"{self.dataset.id} {version} is not on PhysioNet's AWS mirror, and "
+                "download.physionet_source is aws-mirror"
+            )
+        else:
+            log.warning(
+                "%s: not on PhysioNet's AWS mirror; reading physionet.org "
+                "(download.physionet_source: aws-mirror-else-physionet.org)",
+                self.dataset.id,
+            )
+            yield from self._https_files(version)
 
-    def _mirror_files(self, version: str) -> list[RemoteFile] | None:
+    def _mirror_files(self, version: str, website_for_missing: bool) -> list[RemoteFile] | None:
         """The files from the AWS mirror, or None if this version is not on it."""
         prefix = f"{self.source.slug}/{version}/"
         try:
-            client = s3_client(anonymous=True, region=MIRROR_REGION)
+            client = s3_client(region=MIRROR_REGION, connections=self.options.connections)
             sums = client.get_object(Bucket=MIRROR_BUCKET, Key=prefix + SUMS)["Body"].read()
             sizes = _list_sizes(client, prefix)
         except (BotoCoreError, ClientError) as exc:
-            log.warning(
-                "%s: not on PhysioNet's AWS mirror (%s); downloading from physionet.org (slower)",
-                self.dataset.id,
-                exc,
-            )
+            log.debug("%s: mirror lookup failed: %s", self.dataset.id, exc)
             return None
         session = self._session()
         base = f"{BASE}/files/{self.source.slug}/{version}"
@@ -142,9 +159,15 @@ class PhysioNetFetcher(Fetcher):
                         opener=http_opener(session, url),
                     )
                 )
+        if missing and not website_for_missing:
+            raise FetchError(
+                f"{self.dataset.id}: {missing} files are not on PhysioNet's AWS mirror, and "
+                "download.physionet_source is aws-mirror"
+            )
         if missing:
             log.warning(
-                "%s: %d files are not on the AWS mirror; downloading them from physionet.org",
+                "%s: %d files are not on the AWS mirror; reading them from physionet.org "
+                "(download.physionet_source: aws-mirror-else-physionet.org)",
                 self.dataset.id,
                 missing,
             )
@@ -156,9 +179,8 @@ class PhysioNetFetcher(Fetcher):
                 opener=s3_opener(client, MIRROR_BUCKET, prefix + SUMS),
             )
         )
-        log.warning(
-            "%s: downloading from PhysioNet's AWS mirror s3://%s/%s instead of physionet.org "
-            "(same files, checked against SHA256SUMS.txt)",
+        log.info(
+            "%s: reading PhysioNet's AWS mirror s3://%s/%s (download.physionet_source)",
             self.dataset.id,
             MIRROR_BUCKET,
             prefix,

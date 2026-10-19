@@ -65,7 +65,7 @@ class OpenNeuroFetcher(Fetcher):
 
     def list_files(self) -> Iterator[RemoteFile]:
         version = self.resolve_version().value
-        client = s3_client(anonymous=True, region="us-east-1")
+        client = s3_client(region="us-east-1", connections=self.options.connections)
         files = list(iter_s3_files(client, OPENNEURO_BUCKET, f"{self.source.accession}/"))
         # The bucket only tracks "latest": refuse to label files with a tag that moved on
         # while we were listing.

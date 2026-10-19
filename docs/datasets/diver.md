@@ -24,5 +24,5 @@
 1. Not publicly released; listed for completeness.
 
 ```bash
-biosignal-data download diver/private-ieeg --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import diver/private-ieeg <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```

@@ -51,7 +51,7 @@ def test_runs_are_separate_recordings() -> None:
 
 
 def test_include_then_limit() -> None:
-    paths = select(BIDS, include=["sub-02/*", "*.json", "*.tsv"], limit=1).paths
+    paths = select(BIDS, include=["sub-02/**", "**/*.json", "**/*.tsv"], limit=1).paths
     assert "sub-02/eeg/sub-02_task-rest_eeg.edf" in paths
     assert "sub-02/eeg/sub-02_task-rest_eeg.json" in paths
     assert not any(p.startswith("sub-01/") for p in paths)

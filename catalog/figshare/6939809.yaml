@@ -6,7 +6,9 @@ source:
   type: figshare
   article: 6939809
 access:
-  tier: open
+  tier: application
+  steps:
+  - figshare holds the files under embargo; request access on the dataset page.
   license: CC (non-commercial)
 homepage: https://melbourne.figshare.com/articles/Seizure_Data/6939809
 stats:
@@ -16,4 +18,4 @@ stats:
 related:
 - epilepsyecosystem/neurovista
 notes:
-- figshare reports a file embargo on this article; some files may need a request.
+- figshare reports the files of this article under embargo (checked 2026-10-19); the API lists no files.

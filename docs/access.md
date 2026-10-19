@@ -1,46 +1,50 @@
 # Access and credentials per repository
 
-Credentials are read from environment variables or the tool's own config files. Never put them
-in the catalog or commit them.
+Every secret comes from a `BIOSIGNAL_*` environment variable, and from nothing else: the
+code does not read `~/.aws`, `~/.kaggle`, `~/.ssh/config`, saved Hugging Face tokens or other
+tools' variables. Never put secrets in the catalog, the config file, or a commit.
 
-| Repository | What you need | Where the code reads it |
+| Repository | What you need | Variables |
 | --- | --- | --- |
 | PhysioNet (open) | nothing | |
-| PhysioNet (credentialed) | a credentialed PhysioNet account (CITI training) and the dataset's DUA signed on its page | `PHYSIONET_USERNAME`, `PHYSIONET_PASSWORD` |
+| PhysioNet (credentialed) | a credentialed PhysioNet account (CITI training) and the dataset's DUA signed on its page | `BIOSIGNAL_PHYSIONET_USERNAME`, `BIOSIGNAL_PHYSIONET_PASSWORD` |
 | OpenNeuro | nothing | |
 | NEMAR | nothing | |
-| DANDI | nothing for public dandisets; an API key for embargoed ones | `DANDI_API_KEY` |
-| Zenodo | nothing for public records; a token for restricted ones | `ZENODO_TOKEN` |
+| DANDI | nothing for public dandisets; an API key for embargoed ones | `BIOSIGNAL_DANDI_API_KEY` |
+| Zenodo | nothing for public records; a token for restricted ones | `BIOSIGNAL_ZENODO_TOKEN` |
 | figshare | nothing | |
-| Hugging Face | nothing for public repos; a token for gated ones | `huggingface-cli login` or `HF_TOKEN` |
-| Kaggle | a Kaggle account, and the competition's rules accepted on its page | `kaggle auth login`, `KAGGLE_API_TOKEN` or `~/.kaggle/access_token` |
-| NSRR (sleepdata.org) | an approved data request for each dataset; the Ruby gem `gem install nsrr` | `NSRR_TOKEN` (from https://sleepdata.org/token) |
-| BDSP (bdsp.io) | a credentialed BDSP account (CITI certificate) and the dataset's DUA; BDSP then provides AWS credentials for its access points | an AWS profile, passed with `--aws-profile` |
-| TUH EEG (isip) | the signed TUH form emailed to help@nedcdata.org, then your SSH public key registered | `TUH_SSH_KEY` (path to the private key); `rsync` and `ssh` installed |
-| Manual sources | whatever the provider's page says | none: download into a folder, then `download --from-dir` |
+| Hugging Face | nothing for public repos; a token for gated ones | `BIOSIGNAL_HF_TOKEN` |
+| Kaggle | a Kaggle account, and the competition's rules accepted on its page | `BIOSIGNAL_KAGGLE_API_TOKEN` (Settings → API on kaggle.com) |
+| NSRR (sleepdata.org) | an approved data request for each dataset | `BIOSIGNAL_NSRR_TOKEN` (from https://sleepdata.org/token) |
+| BDSP (bdsp.io) | a credentialed BDSP account (CITI certificate) and the dataset's DUA; BDSP then issues S3 keys and the dataset's key prefix | `BIOSIGNAL_BDSP_ACCESS_KEY_ID`, `BIOSIGNAL_BDSP_SECRET_ACCESS_KEY`; the prefix goes into the catalog entry as `source.prefix` |
+| TUH EEG (isip) | the signed TUH form emailed to help@nedcdata.org, then your SSH public key registered | `BIOSIGNAL_TUH_SSH_KEY` (path to the private key) |
+| Manual sources | whatever the provider's page says | none: download into a folder, then `biosignal-data import` |
 
-## External tools
+Your own S3 storage (the destination): `BIOSIGNAL_ACCESS_KEY_ID` and
+`BIOSIGNAL_SECRET_ACCESS_KEY`; its endpoint, region and addressing are in
+`biosignal-data.yaml`.
 
-Python clients are installed with the package. Three sources use tools outside Python:
+## How each source is read
 
-- `rsync` and `ssh` for TUH EEG (preinstalled on Linux and macOS).
-- `nsrr` Ruby gem for NSRR: `gem install nsrr --no-document` (needs Ruby 2.7+).
-- `kaggle` CLI is installed with the package.
+Every source streams from the source to the destination, without local disk, except TUH:
 
-## Staging
-
-rsync, the NSRR gem and the Kaggle CLI can only write to local disk. Their downloads land in
-`--staging-dir` (default: a temporary folder, deleted afterwards) and are then copied to the
-store. Use a persistent `--staging-dir` for large datasets: the tools resume from what is
-already there, and `--keep-staging` keeps the files after a successful copy. Make sure the
-disk can hold the whole dataset (TUEG is several TB).
+- PhysioNet, OpenNeuro, NEMAR, DANDI, Zenodo, figshare, Hugging Face and BDSP through their
+  official clients or APIs.
+- NSRR through the web API that the official `nsrr` gem uses (same requests, no gem).
+- Kaggle through Kaggle's official Python SDK (`kagglesdk`, installed with the package).
+- TUH EEG through `rsync` over SSH, which can only write into a folder: the files land in
+  `staging.dir` from `biosignal-data.yaml` and are then copied. The folder is reused, so an
+  interrupted rsync resumes; after a complete copy it is deleted unless `staging.keep` is
+  true. The disk must hold the dataset (TUEG is several TB). `rsync` and `ssh` must be
+  installed; ssh uses only the key in `BIOSIGNAL_TUH_SSH_KEY`, no `~/.ssh/config`.
 
 ## Not yet confirmed
 
-These details come from documentation and have not been exercised against the live service:
+These details come from documentation or the official tools' source code and have not been
+exercised against the live service:
 
-- The NSRR gem's `--token=` flag for non-interactive downloads.
-- The key prefixes inside BDSP's credentialed access point for each dataset; BDSP shares them
-  after approval (pass `--source-prefix`).
+- NSRR: the listing and download requests (taken from the `nsrr` gem's source code).
+- Kaggle: downloads through `kagglesdk` with a token.
+- BDSP: the key prefix of each dataset inside the credentialed access point.
 - PhysioNet's redirect from `/content/<slug>/` to the latest version (used only when an entry
   pins no version).

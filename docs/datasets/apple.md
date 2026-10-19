@@ -23,5 +23,5 @@
 1. Not publicly released; listed for completeness.
 
 ```bash
-biosignal-data download apple/heart-and-movement --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import apple/heart-and-movement <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```

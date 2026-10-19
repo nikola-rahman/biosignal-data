@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, BinaryIO
@@ -65,19 +66,31 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+class StoppedError(RuntimeError):
+    """The run was stopped (Ctrl+C) while this file was being copied."""
+
+
 class HashingReader:
     """Wraps a binary stream; hashes and counts bytes as they are read.
 
     `on_read` receives the size of each chunk (used for progress display)."""
 
-    def __init__(self, stream: BinaryIO, on_read: Callable[[int], None] | None = None) -> None:
+    def __init__(
+        self,
+        stream: BinaryIO,
+        on_read: Callable[[int], None] | None = None,
+        stop: threading.Event | None = None,
+    ) -> None:
         self._stream = stream
         self._on_read = on_read
+        self._stop = stop
         self._sha256 = hashlib.sha256()
         self._md5 = hashlib.md5(usedforsecurity=False)
         self.bytes_read = 0
 
     def read(self, size: int = -1) -> bytes:
+        if self._stop is not None and self._stop.is_set():
+            raise StoppedError("the run was stopped")
         chunk = self._stream.read(size)
         if chunk:
             self._sha256.update(chunk)

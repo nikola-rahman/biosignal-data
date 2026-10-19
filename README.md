@@ -21,40 +21,50 @@ source, which later layers can build on.
 uv sync                                    # Python 3.11+, installs everything
 uv run biosignal-data list --signal ecg
 uv run biosignal-data info physionet/mitdb
-uv run biosignal-data download physionet/mitdb --dest ./lake --limit 5   # 5 recordings, for tests
-uv run biosignal-data download physionet/mitdb --limit 5 --dry-run      # what that would download
-uv run biosignal-data check physionet/mitdb --dest ./lake --latest
-
-# S3 storage: settings in biosignal-data.yaml, keys in BIOSIGNAL_ACCESS_KEY_ID / _SECRET_ACCESS_KEY
-uv run biosignal-data download --all --dest s3://bucket
+uv run biosignal-data download physionet/mitdb --limit 5 --dry-run      # what it would copy
+uv run biosignal-data download physionet/mitdb --limit 5 --dest ./lake  # 5 recordings, a test
+uv run biosignal-data download --all --dest s3://my-bucket              # everything
+uv run biosignal-data status --all --dest s3://my-bucket                # what is stored
+uv run biosignal-data check --all --latest --dest s3://my-bucket        # sizes vs manifests
+uv run biosignal-data import <id> <folder> --version <label> --dest s3://my-bucket
 ```
 
-- **Which datasets:** ids, `--ids-file`, `--signal`, `--repository` or `--all`. Many
-  datasets download at the same time, sharing `--workers` parallel file downloads.
-- **Where to:** `--dest` (required) takes a local folder or `s3://bucket[/prefix]`. For an S3
-  destination, the storage's endpoint, region and addressing style come from
-  [`biosignal-data.yaml`](biosignal-data.yaml) (no defaults), and the keys only from
-  `BIOSIGNAL_ACCESS_KEY_ID` and `BIOSIGNAL_SECRET_ACCESS_KEY`.
-- **Test subsets:** `--limit N` copies the first N recordings (each with its companion files
-  and the metadata it needs); `--include <glob>` only matching paths. The version stays
-  incomplete; a later run without them continues from it.
+| Command | What it does |
+| --- | --- |
+| `list` | find datasets in the catalog |
+| `info <id>` | one catalog entry: what it is, how to get access |
+| `download` | copy datasets from their sources, unchanged, to `--dest` |
+| `import` | copy a dataset you downloaded by hand, from a folder |
+| `status` | what is stored in `--dest` |
+| `check` | stored files against their manifests (`--checksums` re-reads every file) |
+
+- **Which datasets** (`download`, `status`, `check`): ids, `--ids-file`, `--signal` /
+  `--repository`, or `--all`, exactly one of these.
+- **Settings** that do not change between runs are in [`biosignal-data.yaml`](biosignal-data.yaml):
+  the S3 storage (endpoint, region, addressing), parallel downloads, what to do with
+  unpinned versions, where PhysioNet data is read from, the staging folder for TUH, and the
+  read cache. Nothing has a default.
+- **Secrets** come only from `BIOSIGNAL_*` variables: `BIOSIGNAL_ACCESS_KEY_ID` and
+  `BIOSIGNAL_SECRET_ACCESS_KEY` for your storage, and one or two per gated source
+  ([`docs/access.md`](docs/access.md)).
+- **Test subsets:** `--limit N` copies the first N recordings of each dataset (a dataset
+  published as one archive has one recording); `--include <glob>` only matching paths. The
+  version stays incomplete; a later run without them continues from it.
 - **Datasets that need you first** (credentials, download by hand) are skipped with a
-  warning and listed at the end. Each dataset's page in
-  [`docs/datasets/`](docs/datasets/README.md) lists the steps, and
-  [`docs/access.md`](docs/access.md) explains each repository's credentials.
-- **Warnings** show every choice the tool makes for you and everything it skips.
-
-## Where the data flows
-
-The data passes through the machine that runs the command; every run prints this path at
-the start. To keep it off your computer, run the command on another machine.
+  warning and listed at the end, with a warning for each source type whose code did not run.
+- **Warnings** show every choice the tool makes and everything it skips. Every run prints
+  where the data flows: from the sources through the machine that runs the command to
+  `--dest`.
 
 Reading back:
 
 ```python
+from pathlib import Path
 from biosignal_data.read import RawDataset, read_wfdb
 
-ds = RawDataset.open("s3://my-bucket", "physionet/mitdb")  # latest complete version
+ds = RawDataset.open(
+    "./lake", "physionet/mitdb", "latest", cache_dir=Path("~/.cache/biosignal-data")
+)
 ds.local_paths("100.*")  # 100.hea, 100.dat, 100.atr, ...
 record = read_wfdb(ds.local_path("100.hea"))
 ```
@@ -65,17 +75,17 @@ See [`docs/reading.md`](docs/reading.md).
 
 | Source | How | Access |
 | --- | --- | --- |
-| PhysioNet | HTTPS, files and SHA-256 from each version's `SHA256SUMS.txt` | open or PhysioNet credentialed |
+| PhysioNet | files and SHA-256 from each version's `SHA256SUMS.txt`; read from PhysioNet's AWS copy or physionet.org (config) | open or PhysioNet credentialed |
 | OpenNeuro | OpenNeuro's public S3 bucket (latest snapshot) | open |
 | NEMAR | official `nemar-py` client, version-pinned with checksums | open |
 | DANDI | official `dandi` client | open |
 | Zenodo, figshare | public REST APIs, MD5 checksums | open |
 | Hugging Face | official `huggingface_hub` client, pinned to a commit | open or token |
 | BDSP (Harvard) | credentialed S3 access points | approval + DUA |
-| NSRR (sleepdata.org) | official `nsrr` Ruby gem | approval |
-| TUH EEG | `rsync` over SSH | approval |
-| Kaggle | official `kaggle` CLI | account |
-| Everything else | download by hand, then `download --from-dir` | varies |
+| NSRR (sleepdata.org) | the web API of the official `nsrr` gem, MD5 checksums | approval |
+| Kaggle | official Python SDK (`kagglesdk`) | account |
+| TUH EEG | `rsync` over SSH into a staging folder, then copied | approval |
+| Everything else | download by hand, then `biosignal-data import` | varies |
 
 ## Layout of the raw layer
 
@@ -91,6 +101,7 @@ Details and the manifest schema: [`docs/raw-layer.md`](docs/raw-layer.md).
 ## Repository map
 
 ```
+biosignal-data.yaml     settings that do not change between runs (no defaults)
 catalog/                one YAML per dataset (the source of truth)
 docs/                   design notes; docs/datasets/ is generated from the catalog
 scripts/                import_eegdash.py regenerates OpenNeuro/NEMAR entries
@@ -99,7 +110,11 @@ src/biosignal_data/
     fetchers/           one module per kind of source
     storage/            raw-layer layout, manifest, S3 and local stores
     read/               raw-layer browsing and format openers
-    ingest.py           copy, verify, checkpoint, resume
+    ingest.py           copy one dataset: verify, checkpoint, resume
+    batch.py            many datasets at once, one shared download pool
+    selection.py        test subsets (--limit, --include) and globs
+    config.py           biosignal-data.yaml
+    console.py          progress display and logging
     cli.py              the `biosignal-data` command
 tests/
 ```

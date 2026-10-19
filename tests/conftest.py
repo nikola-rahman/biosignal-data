@@ -10,7 +10,7 @@ from typing import BinaryIO
 import pytest
 
 from biosignal_data.catalog.models import Dataset
-from biosignal_data.fetchers.base import Fetcher, RemoteFile, ResolvedVersion
+from biosignal_data.fetchers.base import Fetcher, FetchOptions, RemoteFile, ResolvedVersion
 from biosignal_data.storage.stores import LocalStore
 
 
@@ -19,7 +19,7 @@ def make_dataset(**overrides: object) -> Dataset:
         "id": "test/example",
         "name": "Example",
         "signals": ["EEG"],
-        "source": {"type": "manual"},
+        "source": {"type": "manual", "version": "1.0.0"},
         "access": {"tier": "open", "license": "CC0"},
     }
     data.update(overrides)
@@ -38,8 +38,9 @@ class FakeFetcher(Fetcher):
         checksums: dict[str, str] | None = None,
         sizes: dict[str, int] | None = None,
         fail: set[str] | None = None,
+        options: FetchOptions | None = None,
     ) -> None:
-        super().__init__(dataset)
+        super().__init__(dataset, options)
         self.files = files
         self.version = version
         self.checksums = checksums or {}

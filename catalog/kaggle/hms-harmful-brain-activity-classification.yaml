@@ -11,9 +11,9 @@ access:
   tier: registration
   steps:
   - Log in to Kaggle and accept the competition rules on its page.
-  - 'Authenticate the Kaggle CLI: `kaggle auth login` or set KAGGLE_API_TOKEN.'
+  - 'Authenticate the Kaggle CLI: `kaggle auth login` or set BIOSIGNAL_KAGGLE_API_TOKEN.'
   credentials:
-  - KAGGLE_API_TOKEN
+  - BIOSIGNAL_KAGGLE_API_TOKEN
 homepage: https://www.kaggle.com/competitions/hms-harmful-brain-activity-classification
 stats:
   subjects: 1950

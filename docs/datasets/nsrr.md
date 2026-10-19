@@ -20,13 +20,13 @@
 **Before downloading**
 
 1. Create an account at https://sleepdata.org and submit a data access request for this dataset; wait for approval.
-2. Copy your token from https://sleepdata.org/token and set NSRR_TOKEN.
+2. Copy your token from https://sleepdata.org/token and set BIOSIGNAL_NSRR_TOKEN.
 3. Install the official NSRR tool: `gem install nsrr --no-document` (needs Ruby).
 
-**Credentials**: `NSRR_TOKEN`
+**Credentials**: `BIOSIGNAL_NSRR_TOKEN`
 
 ```bash
-biosignal-data download nsrr/abc --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download nsrr/abc --dest s3://<bucket>
 ```
 
 ## Apnea Positive Pressure Long-term Efficacy Study
@@ -47,13 +47,13 @@ biosignal-data download nsrr/abc --dest s3://<bucket> --staging-dir <local scrat
 **Before downloading**
 
 1. Create an account at https://sleepdata.org and submit a data access request for this dataset; wait for approval.
-2. Copy your token from https://sleepdata.org/token and set NSRR_TOKEN.
+2. Copy your token from https://sleepdata.org/token and set BIOSIGNAL_NSRR_TOKEN.
 3. Install the official NSRR tool: `gem install nsrr --no-document` (needs Ruby).
 
-**Credentials**: `NSRR_TOKEN`
+**Credentials**: `BIOSIGNAL_NSRR_TOKEN`
 
 ```bash
-biosignal-data download nsrr/apples --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download nsrr/apples --dest s3://<bucket>
 ```
 
 ## Best Apnea Interventions for Research
@@ -72,13 +72,13 @@ biosignal-data download nsrr/apples --dest s3://<bucket> --staging-dir <local sc
 **Before downloading**
 
 1. Create an account at https://sleepdata.org and submit a data access request for this dataset; wait for approval.
-2. Copy your token from https://sleepdata.org/token and set NSRR_TOKEN.
+2. Copy your token from https://sleepdata.org/token and set BIOSIGNAL_NSRR_TOKEN.
 3. Install the official NSRR tool: `gem install nsrr --no-document` (needs Ruby).
 
-**Credentials**: `NSRR_TOKEN`
+**Credentials**: `BIOSIGNAL_NSRR_TOKEN`
 
 ```bash
-biosignal-data download nsrr/bestair --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download nsrr/bestair --dest s3://<bucket>
 ```
 
 ## Cleveland Children's Sleep and Health Study
@@ -97,13 +97,13 @@ biosignal-data download nsrr/bestair --dest s3://<bucket> --staging-dir <local s
 **Before downloading**
 
 1. Create an account at https://sleepdata.org and submit a data access request for this dataset; wait for approval.
-2. Copy your token from https://sleepdata.org/token and set NSRR_TOKEN.
+2. Copy your token from https://sleepdata.org/token and set BIOSIGNAL_NSRR_TOKEN.
 3. Install the official NSRR tool: `gem install nsrr --no-document` (needs Ruby).
 
-**Credentials**: `NSRR_TOKEN`
+**Credentials**: `BIOSIGNAL_NSRR_TOKEN`
 
 ```bash
-biosignal-data download nsrr/ccshs --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download nsrr/ccshs --dest s3://<bucket>
 ```
 
 ## Cleveland Family Study
@@ -124,13 +124,13 @@ biosignal-data download nsrr/ccshs --dest s3://<bucket> --staging-dir <local scr
 **Before downloading**
 
 1. Create an account at https://sleepdata.org and submit a data access request for this dataset; wait for approval.
-2. Copy your token from https://sleepdata.org/token and set NSRR_TOKEN.
+2. Copy your token from https://sleepdata.org/token and set BIOSIGNAL_NSRR_TOKEN.
 3. Install the official NSRR tool: `gem install nsrr --no-document` (needs Ruby).
 
-**Credentials**: `NSRR_TOKEN`
+**Credentials**: `BIOSIGNAL_NSRR_TOKEN`
 
 ```bash
-biosignal-data download nsrr/cfs --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download nsrr/cfs --dest s3://<bucket>
 ```
 
 ## Childhood Adenotonsillectomy Trial
@@ -151,13 +151,13 @@ biosignal-data download nsrr/cfs --dest s3://<bucket> --staging-dir <local scrat
 **Before downloading**
 
 1. Create an account at https://sleepdata.org and submit a data access request for this dataset; wait for approval.
-2. Copy your token from https://sleepdata.org/token and set NSRR_TOKEN.
+2. Copy your token from https://sleepdata.org/token and set BIOSIGNAL_NSRR_TOKEN.
 3. Install the official NSRR tool: `gem install nsrr --no-document` (needs Ruby).
 
-**Credentials**: `NSRR_TOKEN`
+**Credentials**: `BIOSIGNAL_NSRR_TOKEN`
 
 ```bash
-biosignal-data download nsrr/chat --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download nsrr/chat --dest s3://<bucket>
 ```
 
 ## Hispanic Community Health Study / Study of Latinos: Sleep
@@ -178,13 +178,13 @@ biosignal-data download nsrr/chat --dest s3://<bucket> --staging-dir <local scra
 **Before downloading**
 
 1. Create an account at https://sleepdata.org and submit a data access request for this dataset; wait for approval.
-2. Copy your token from https://sleepdata.org/token and set NSRR_TOKEN.
+2. Copy your token from https://sleepdata.org/token and set BIOSIGNAL_NSRR_TOKEN.
 3. Install the official NSRR tool: `gem install nsrr --no-document` (needs Ruby).
 
-**Credentials**: `NSRR_TOKEN`
+**Credentials**: `BIOSIGNAL_NSRR_TOKEN`
 
 ```bash
-biosignal-data download nsrr/hchs --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download nsrr/hchs --dest s3://<bucket>
 ```
 
 Notes:
@@ -208,13 +208,13 @@ Notes:
 **Before downloading**
 
 1. Create an account at https://sleepdata.org and submit a data access request for this dataset; wait for approval.
-2. Copy your token from https://sleepdata.org/token and set NSRR_TOKEN.
+2. Copy your token from https://sleepdata.org/token and set BIOSIGNAL_NSRR_TOKEN.
 3. Install the official NSRR tool: `gem install nsrr --no-document` (needs Ruby).
 
-**Credentials**: `NSRR_TOKEN`
+**Credentials**: `BIOSIGNAL_NSRR_TOKEN`
 
 ```bash
-biosignal-data download nsrr/homepap --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download nsrr/homepap --dest s3://<bucket>
 ```
 
 ## Multi-Ethnic Study of Atherosclerosis: Sleep
@@ -235,13 +235,13 @@ biosignal-data download nsrr/homepap --dest s3://<bucket> --staging-dir <local s
 **Before downloading**
 
 1. Create an account at https://sleepdata.org and submit a data access request for this dataset; wait for approval.
-2. Copy your token from https://sleepdata.org/token and set NSRR_TOKEN.
+2. Copy your token from https://sleepdata.org/token and set BIOSIGNAL_NSRR_TOKEN.
 3. Install the official NSRR tool: `gem install nsrr --no-document` (needs Ruby).
 
-**Credentials**: `NSRR_TOKEN`
+**Credentials**: `BIOSIGNAL_NSRR_TOKEN`
 
 ```bash
-biosignal-data download nsrr/mesa --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download nsrr/mesa --dest s3://<bucket>
 ```
 
 ## MrOS Sleep Study
@@ -262,13 +262,13 @@ biosignal-data download nsrr/mesa --dest s3://<bucket> --staging-dir <local scra
 **Before downloading**
 
 1. Create an account at https://sleepdata.org and submit a data access request for this dataset; wait for approval.
-2. Copy your token from https://sleepdata.org/token and set NSRR_TOKEN.
+2. Copy your token from https://sleepdata.org/token and set BIOSIGNAL_NSRR_TOKEN.
 3. Install the official NSRR tool: `gem install nsrr --no-document` (needs Ruby).
 
-**Credentials**: `NSRR_TOKEN`
+**Credentials**: `BIOSIGNAL_NSRR_TOKEN`
 
 ```bash
-biosignal-data download nsrr/mros --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download nsrr/mros --dest s3://<bucket>
 ```
 
 ## NCH Sleep DataBank (pediatric)
@@ -289,13 +289,13 @@ biosignal-data download nsrr/mros --dest s3://<bucket> --staging-dir <local scra
 **Before downloading**
 
 1. Create an account at https://sleepdata.org and submit a data access request for this dataset; wait for approval.
-2. Copy your token from https://sleepdata.org/token and set NSRR_TOKEN.
+2. Copy your token from https://sleepdata.org/token and set BIOSIGNAL_NSRR_TOKEN.
 3. Install the official NSRR tool: `gem install nsrr --no-document` (needs Ruby).
 
-**Credentials**: `NSRR_TOKEN`
+**Credentials**: `BIOSIGNAL_NSRR_TOKEN`
 
 ```bash
-biosignal-data download nsrr/nchsdb --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download nsrr/nchsdb --dest s3://<bucket>
 ```
 
 ## Sleep Heart Health Study
@@ -316,13 +316,13 @@ biosignal-data download nsrr/nchsdb --dest s3://<bucket> --staging-dir <local sc
 **Before downloading**
 
 1. Create an account at https://sleepdata.org and submit a data access request for this dataset; wait for approval.
-2. Copy your token from https://sleepdata.org/token and set NSRR_TOKEN.
+2. Copy your token from https://sleepdata.org/token and set BIOSIGNAL_NSRR_TOKEN.
 3. Install the official NSRR tool: `gem install nsrr --no-document` (needs Ruby).
 
-**Credentials**: `NSRR_TOKEN`
+**Credentials**: `BIOSIGNAL_NSRR_TOKEN`
 
 ```bash
-biosignal-data download nsrr/shhs --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download nsrr/shhs --dest s3://<bucket>
 ```
 
 ## Study of Osteoporotic Fractures
@@ -341,13 +341,13 @@ biosignal-data download nsrr/shhs --dest s3://<bucket> --staging-dir <local scra
 **Before downloading**
 
 1. Create an account at https://sleepdata.org and submit a data access request for this dataset; wait for approval.
-2. Copy your token from https://sleepdata.org/token and set NSRR_TOKEN.
+2. Copy your token from https://sleepdata.org/token and set BIOSIGNAL_NSRR_TOKEN.
 3. Install the official NSRR tool: `gem install nsrr --no-document` (needs Ruby).
 
-**Credentials**: `NSRR_TOKEN`
+**Credentials**: `BIOSIGNAL_NSRR_TOKEN`
 
 ```bash
-biosignal-data download nsrr/sof --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download nsrr/sof --dest s3://<bucket>
 ```
 
 ## Stanford Technology Analytics and Genomics in Sleep
@@ -368,13 +368,13 @@ biosignal-data download nsrr/sof --dest s3://<bucket> --staging-dir <local scrat
 **Before downloading**
 
 1. Create an account at https://sleepdata.org and submit a data access request for this dataset; wait for approval.
-2. Copy your token from https://sleepdata.org/token and set NSRR_TOKEN.
+2. Copy your token from https://sleepdata.org/token and set BIOSIGNAL_NSRR_TOKEN.
 3. Install the official NSRR tool: `gem install nsrr --no-document` (needs Ruby).
 
-**Credentials**: `NSRR_TOKEN`
+**Credentials**: `BIOSIGNAL_NSRR_TOKEN`
 
 ```bash
-biosignal-data download nsrr/stages --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download nsrr/stages --dest s3://<bucket>
 ```
 
 ## Wisconsin Sleep Cohort
@@ -395,11 +395,11 @@ biosignal-data download nsrr/stages --dest s3://<bucket> --staging-dir <local sc
 **Before downloading**
 
 1. Create an account at https://sleepdata.org and submit a data access request for this dataset; wait for approval.
-2. Copy your token from https://sleepdata.org/token and set NSRR_TOKEN.
+2. Copy your token from https://sleepdata.org/token and set BIOSIGNAL_NSRR_TOKEN.
 3. Install the official NSRR tool: `gem install nsrr --no-document` (needs Ruby).
 
-**Credentials**: `NSRR_TOKEN`
+**Credentials**: `BIOSIGNAL_NSRR_TOKEN`
 
 ```bash
-biosignal-data download nsrr/wsc --dest s3://<bucket> --staging-dir <local scratch folder>
+biosignal-data download nsrr/wsc --dest s3://<bucket>
 ```

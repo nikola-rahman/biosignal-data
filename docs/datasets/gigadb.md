@@ -23,5 +23,5 @@
 1. Download all files into one folder, keeping the provider's folder structure.
 
 ```bash
-biosignal-data download gigadb/openbmi --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import gigadb/openbmi <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```

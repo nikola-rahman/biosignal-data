@@ -15,6 +15,7 @@ Guarantees:
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor, as_completed
@@ -23,13 +24,14 @@ from typing import Protocol
 
 from biosignal_data import __version__
 from biosignal_data.catalog.models import Dataset
-from biosignal_data.fetchers import FetchOptions, RemoteFile, fetcher_for
+from biosignal_data.fetchers import FetchError, FetchOptions, RemoteFile, fetcher_for
 from biosignal_data.fetchers.base import Fetcher, ResolvedVersion
 from biosignal_data.read.raw import stored_versions
 from biosignal_data.selection import Selection, select
 from biosignal_data.storage.layout import VersionLocation
 from biosignal_data.storage.manifest import FileEntry, HashingReader, Manifest, utcnow
 from biosignal_data.storage.stores import Store
+from biosignal_data.text import plural
 
 log = logging.getLogger(__name__)
 
@@ -118,12 +120,13 @@ def copy_file(
     location: VersionLocation,
     remote: RemoteFile,
     on_read: Callable[[int], None] | None = None,
+    stop: threading.Event | None = None,
 ) -> FileEntry:
     key = location.data_key(remote.path)
     reader: HashingReader | None = None
     try:
         with remote.open() as stream:
-            reader = HashingReader(stream, on_read)
+            reader = HashingReader(stream, on_read, stop)
             store.put_stream(key, reader)  # type: ignore[arg-type]
         try:
             _check(remote, reader)
@@ -158,6 +161,7 @@ def ingest(
     limit: int | None = None,
     progress: IngestProgress | None = None,
     executor: Executor | None = None,
+    stop: threading.Event | None = None,
 ) -> IngestReport:
     """Copy `dataset` into `store`.
 
@@ -172,8 +176,9 @@ def ingest(
     fetcher = fetcher or fetcher_for(dataset, options)
     fetcher.check_access()
     fetcher.prepare()
+    complete = False
     try:
-        return _ingest(
+        report = _ingest(
             dataset,
             store,
             fetcher,
@@ -185,9 +190,12 @@ def ingest(
             limit=limit,
             progress=progress,
             executor=executor,
+            stop=stop,
         )
+        complete = report.complete
+        return report
     finally:
-        fetcher.cleanup()
+        fetcher.cleanup(complete)
 
 
 def _start_manifest(
@@ -258,6 +266,7 @@ def _copy_all(
     progress: IngestProgress | None,
     tracker: _RecordingTracker | None,
     executor: Executor | None,
+    stop: threading.Event | None,
 ) -> None:
     # Results are handled in this thread only, so `done` and `report` need no lock.
     on_read = progress.advance if progress else None
@@ -265,7 +274,7 @@ def _copy_all(
     def copy(remote: RemoteFile) -> FileEntry:
         if progress:
             progress.file_started(remote.path)
-        return copy_file(store, location, remote, on_read)
+        return copy_file(store, location, remote, on_read, stop)
 
     pool = executor or ThreadPoolExecutor(max_workers=max(1, workers))
     try:
@@ -290,6 +299,21 @@ def _copy_all(
         if pool is not executor:
             pool.shutdown(cancel_futures=True)
     checkpoint(force=True)
+
+
+def _check_pinning(dataset: Dataset, version: ResolvedVersion, policy: str | None) -> None:
+    """A version the catalog does not pin is used only if the config says so."""
+    if version.origin == "user" or dataset.pinned_version:
+        return
+    if policy is None:
+        raise FetchError(
+            f"{dataset.id}: no version pinned in the catalog; set download.unpinned_version "
+            "in the config file (latest or fail)"
+        )
+    if policy == "fail":
+        raise FetchError(
+            f"{dataset.id}: no version pinned in the catalog (download.unpinned_version: fail)"
+        )
 
 
 def _continue_dated_version(
@@ -324,20 +348,30 @@ def _warn_implicit(
     """Say every choice made without the user asking for it, and everything skipped."""
     d = dataset.id
     if version.origin == "retrieval-date":
-        log.warning("%s: the source has no versions; using today's date %s", d, version.value)
+        log.warning(
+            "%s: the source has no versions; labelling this download with today's date %s "
+            "(download.unpinned_version: latest)",
+            d,
+            version.value,
+        )
     elif version.origin == "source" and not dataset.pinned_version:
-        log.warning("%s: no version pinned; using the latest, %s", d, version.value)
+        log.warning(
+            "%s: no version pinned in the catalog; using the latest, %s "
+            "(download.unpinned_version: latest)",
+            d,
+            version.value,
+        )
     if report.skipped:
         log.warning(
-            "%s: %d files are already stored from an earlier run; not downloading them again",
+            "%s: %s already stored by an earlier run; not copied again",
             d,
-            report.skipped,
+            plural(report.skipped, "file"),
         )
     if report.subset:
         log.warning(
-            "%s: subset only (%d recordings%s); version %s stays incomplete",
+            "%s: subset only (%s%s); version %s stays incomplete",
             d,
-            len(selection.recordings),
+            plural(len(selection.recordings), "recording"),
             f" + {selection.metadata_added} metadata files they need"
             if selection.metadata_added
             else "",
@@ -350,9 +384,9 @@ def _warn_implicit(
     unchecked = sum(1 for f in todo if f.checksum is None)
     if unchecked:
         log.warning(
-            "%s: %d files have no published checksum; they are hashed but cannot be verified",
+            "%s: %s without a published checksum; hashed, but cannot be verified",
             d,
-            unchecked,
+            plural(unchecked, "file"),
         )
 
 
@@ -369,8 +403,11 @@ def _ingest(
     limit: int | None,
     progress: IngestProgress | None,
     executor: Executor | None,
+    stop: threading.Event | None,
 ) -> IngestReport:
-    version = _continue_dated_version(dataset, store, root, fetcher.resolve_version())
+    version = fetcher.resolve_version()
+    _check_pinning(dataset, version, fetcher.options.unpinned_version)
+    version = _continue_dated_version(dataset, store, root, version)
     location = VersionLocation(dataset.id, version.value, root)
     report = IngestReport(dataset.id, version.value, f"{store.uri}/{location.prefix}")
     if store.exists(location.success_key):
@@ -379,6 +416,8 @@ def _ingest(
     manifest = _start_manifest(dataset, store, location, version)
     done = {f.path: f for f in manifest.files}
     files = list(fetcher.list_files())
+    if not files:
+        raise FetchError(f"{dataset.id} {version.value}: the source lists no files")
     if len({f.path for f in files}) != len(files):
         raise RuntimeError("the source listed the same path twice")
     by_path = {f.path: f for f in files}
@@ -388,13 +427,13 @@ def _ingest(
     report.recordings = len(selection.recordings)
     todo, report.skipped = _plan(selected, done, store, location)
     log.info(
-        "%s %s: %d recordings (%d files) selected of %d files; %d files to copy",
+        "%s %s: %s (%s) selected of %s; %s to copy",
         dataset.id,
         version.value,
-        len(selection.recordings),
-        len(selected),
-        len(files),
-        len(todo),
+        plural(len(selection.recordings), "recording"),
+        plural(len(selected), "file"),
+        plural(len(files), "file"),
+        plural(len(todo), "file"),
     )
     _warn_implicit(dataset, version, selection, report, todo)
     if dry_run:
@@ -407,7 +446,9 @@ def _ingest(
         total = sum(s for s in sizes if s is not None) if None not in sizes else None
         progress.start(version.value, len(selection.recordings), tracker.already_done, total)
     checkpoint = _Checkpointer(store, location, manifest, done, checkpoint_every)
-    _copy_all(todo, store, location, done, report, checkpoint, workers, progress, tracker, executor)
+    _copy_all(
+        todo, store, location, done, report, checkpoint, workers, progress, tracker, executor, stop
+    )
     if report.failed:
         log.error("%d files failed; re-run to retry them", len(report.failed))
         return report

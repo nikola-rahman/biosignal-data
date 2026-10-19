@@ -15,6 +15,7 @@ from biosignal_data.catalog.models import (
     ZenodoSource,
 )
 from biosignal_data.fetchers.base import (
+    AccessRestrictedError,
     Fetcher,
     FetchError,
     RemoteFile,
@@ -40,7 +41,8 @@ class ZenodoFetcher(Fetcher):
     def _get(self) -> dict[str, Any]:
         if self._record is None:
             headers = {}
-            if token := os.environ.get("ZENODO_TOKEN"):  # only needed for restricted records
+            # Only restricted records need a token; it comes from BIOSIGNAL_ZENODO_TOKEN only.
+            if token := os.environ.get("BIOSIGNAL_ZENODO_TOKEN"):
                 headers["Authorization"] = f"Bearer {token}"
             response = http_session().get(
                 f"{self.API}/{self.source.record}", headers=headers, timeout=60
@@ -89,29 +91,42 @@ class FigshareFetcher(Fetcher):
         response.raise_for_status()
         return response.json()
 
-    def _article_files(self, article_id: int) -> list[dict[str, Any]]:
-        files: list[dict[str, Any]] = []
+    def _pages(self, path: str) -> list[dict[str, Any]]:
+        """Every item of a paged listing."""
+        items: list[dict[str, Any]] = []
         page = 1
-        while batch := self._api(f"articles/{article_id}/files?page={page}&page_size=1000"):
-            files.extend(batch)
+        while batch := self._api(f"{path}?page={page}&page_size=1000"):
+            items.extend(batch)
             page += 1
+        return items
+
+    def _article_files(self, article_id: int) -> list[dict[str, Any]]:
+        files = self._pages(f"articles/{article_id}/files")
+        if not files:
+            meta = self._api(f"articles/{article_id}")
+            if meta.get("is_embargoed"):
+                raise AccessRestrictedError(
+                    f"{self.dataset.id}: figshare holds the files of article {article_id} "
+                    f"under embargo ({meta.get('embargo_type')}); request access on its page"
+                )
         return files
 
     def resolve_version(self) -> ResolvedVersion:
         if self.options.version:
             return super().resolve_version()
-        if self.source.article is not None:
-            meta = self._api(f"articles/{self.source.article}")
-            return ResolvedVersion(f"v{meta.get('version', 1)}", "source")
-        meta = self._api(f"collections/{self.source.collection}")
-        return ResolvedVersion(f"v{meta.get('version', 1)}", "source")
+        kind = "articles" if self.source.article is not None else "collections"
+        item = self.source.article if self.source.article is not None else self.source.collection
+        meta = self._api(f"{kind}/{item}")
+        if "version" not in meta:
+            raise FetchError(f"{self.dataset.id}: figshare reports no version for {kind}/{item}")
+        return ResolvedVersion(f"v{meta['version']}", "source")
 
     def list_files(self) -> Iterator[RemoteFile]:
         session = http_session()
         if self.source.article is not None:
             articles = [(self.source.article, "")]
         else:
-            listing = self._api(f"collections/{self.source.collection}/articles?page_size=1000")
+            listing = self._pages(f"collections/{self.source.collection}/articles")
             articles = [(a["id"], f"{a['id']}/") for a in listing]
         for article_id, folder in articles:
             for f in self._article_files(article_id):
@@ -131,7 +146,8 @@ class FigshareFetcher(Fetcher):
 def _dandi_client() -> Any:
     from dandi.dandiapi import DandiAPIClient  # noqa: PLC0415 - heavy import, only when used
 
-    return DandiAPIClient(token=os.environ.get("DANDI_API_KEY"))
+    # Embargoed dandisets need a key; it comes from BIOSIGNAL_DANDI_API_KEY only.
+    return DandiAPIClient(token=os.environ.get("BIOSIGNAL_DANDI_API_KEY"))
 
 
 class DandiFetcher(Fetcher):
@@ -180,6 +196,12 @@ def _hf() -> Any:
     return huggingface_hub
 
 
+def _hf_token() -> str | bool:
+    """BIOSIGNAL_HF_TOKEN, or False: huggingface_hub must not fall back to HF_TOKEN or a
+    token saved on this machine."""
+    return os.environ.get("BIOSIGNAL_HF_TOKEN") or False
+
+
 class HuggingFaceFetcher(Fetcher):
     @property
     def source(self) -> HuggingFaceSource:
@@ -189,7 +211,7 @@ class HuggingFaceFetcher(Fetcher):
         if self.options.version:
             return super().resolve_version()
         hf = _hf()
-        info = hf.HfApi().repo_info(
+        info = hf.HfApi(token=_hf_token()).repo_info(
             self.source.repo_id, repo_type=self.source.repo_type, revision=self.source.revision
         )
         # The commit hash is the only immutable identifier of a Hugging Face repo state.
@@ -198,10 +220,10 @@ class HuggingFaceFetcher(Fetcher):
     def list_files(self) -> Iterator[RemoteFile]:
         hf = _hf()
         revision = self.resolve_version().value
-        token = hf.get_token()
+        token = _hf_token()
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         session = http_session()
-        tree = hf.HfApi().list_repo_tree(
+        tree = hf.HfApi(token=token).list_repo_tree(
             self.source.repo_id, repo_type=self.source.repo_type, revision=revision, recursive=True
         )
         for entry in tree:

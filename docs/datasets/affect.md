@@ -22,7 +22,7 @@
 2. Download all files into one folder, keeping the provider's folder structure.
 
 ```bash
-biosignal-data download affect/amigos --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import affect/amigos <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```
 
 ## CASE: continuously annotated signals of emotion
@@ -42,7 +42,7 @@ biosignal-data download affect/amigos --dest s3://<bucket> --from-dir <folder yo
 1. Download all files into one folder, keeping the provider's folder structure.
 
 ```bash
-biosignal-data download affect/case --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import affect/case <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```
 
 ## DREAMER
@@ -63,7 +63,7 @@ biosignal-data download affect/case --dest s3://<bucket> --from-dir <folder you 
 2. Download all files into one folder, keeping the provider's folder structure.
 
 ```bash
-biosignal-data download affect/dreamer --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import affect/dreamer <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```
 
 ## K-EmoCon
@@ -84,7 +84,7 @@ biosignal-data download affect/dreamer --dest s3://<bucket> --from-dir <folder y
 2. Download all files into one folder, keeping the provider's folder structure.
 
 ```bash
-biosignal-data download affect/k-emocon --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import affect/k-emocon <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```
 
 ## MAHNOB-HCI
@@ -105,5 +105,5 @@ biosignal-data download affect/k-emocon --dest s3://<bucket> --from-dir <folder 
 2. Download all files into one folder, keeping the provider's folder structure.
 
 ```bash
-biosignal-data download affect/mahnob-hci --dest s3://<bucket> --from-dir <folder you downloaded into>
+biosignal-data import affect/mahnob-hci <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```

@@ -6,9 +6,9 @@
 
 | Access | Datasets |
 | --- | --- |
-| Open: anonymous download | 804 |
+| Open: anonymous download | 803 |
 | Registration: free account, token or license click-through | 18 |
-| Application: a request that someone reviews | 36 |
+| Application: a request that someone reviews | 37 |
 | Credentialed: approval plus training or identity checks | 7 |
 | Unavailable: known, but not obtainable | 8 |
 

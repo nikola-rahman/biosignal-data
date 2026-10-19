@@ -11,24 +11,31 @@ from botocore import UNSIGNED
 from botocore.config import Config
 
 from biosignal_data.catalog.models import S3Source
-from biosignal_data.fetchers.base import Fetcher, FetchError, RemoteFile
+from biosignal_data.fetchers.base import Fetcher, FetchError, RemoteFile, require_env
 
 if TYPE_CHECKING:
     from mypy_boto3_s3 import S3Client
 
 
-def s3_client(*, anonymous: bool, region: str, profile: str | None = None) -> S3Client:
-    """A client for a source bucket on AWS. Endpoint settings in the environment (meant for
-    the destination storage) are ignored, so sources are always read from AWS."""
-    config = Config(signature_version=UNSIGNED) if anonymous else Config()
+def s3_client(*, region: str, connections: int, keys: tuple[str, str] | None = None) -> S3Client:
+    """A client for a source bucket on AWS: anonymous, or with the given (key id, secret).
+    `connections`: the most requests it runs at the same time. Nothing is read from AWS
+    config files or AWS_* variables."""
+    config = Config(signature_version=UNSIGNED) if keys is None else Config()
     config = config.merge(
         Config(  # type: ignore[call-arg]  # stubs lag botocore 1.31+
             retries={"max_attempts": 10, "mode": "adaptive"},
             ignore_configured_endpoint_urls=True,
+            max_pool_connections=connections,
         )
     )
-    session = boto3.Session(profile_name=profile) if profile else boto3.Session()
-    return session.client("s3", region_name=region, config=config)
+    return boto3.session.Session().client(
+        "s3",
+        region_name=region,
+        aws_access_key_id=keys[0] if keys else None,
+        aws_secret_access_key=keys[1] if keys else None,
+        config=config,
+    )
 
 
 def s3_opener(
@@ -71,16 +78,24 @@ class S3Fetcher(Fetcher):
     def source(self) -> S3Source:
         return self._source(S3Source)
 
+    def _keys(self) -> tuple[str, str] | None:
+        if self.source.anonymous:
+            return None
+        if not (self.source.key_id_env and self.source.secret_env):  # the schema ensures it
+            raise FetchError(f"{self.dataset.id}: key_id_env/secret_env missing in the catalog")
+        key_id, secret = require_env(self.source.key_id_env, self.source.secret_env)
+        return key_id, secret
+
+    def check_access(self) -> None:
+        self._keys()
+
     def list_files(self) -> Iterator[RemoteFile]:
-        prefix = self.options.source_prefix or self.source.prefix
-        if prefix is None:
+        if self.source.prefix is None:
             raise FetchError(
-                f"{self.dataset.id}: the source key prefix is not in the catalog. Look it up "
-                "in the provider's instructions after approval and pass --source-prefix."
+                f"{self.dataset.id}: the key prefix is not known yet. The provider gives it "
+                f"after approval; write it into catalog/{self.dataset.id}.yaml as source.prefix."
             )
         client = s3_client(
-            anonymous=self.source.anonymous,
-            region=self.source.region,
-            profile=self.options.aws_profile,
+            region=self.source.region, connections=self.options.connections, keys=self._keys()
         )
-        yield from iter_s3_files(client, self.source.bucket, prefix)
+        yield from iter_s3_files(client, self.source.bucket, self.source.prefix)

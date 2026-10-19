@@ -581,9 +581,9 @@ biosignal-data download physionet/ludb --dest s3://<bucket>
 
 1. Create a PhysioNet account and complete credentialing (CITI 'Data or Specimens Only Research' training) at https://physionet.org/settings/credentialing/.
 2. Sign the data use agreement on the dataset's PhysioNet page.
-3. Set PHYSIONET_USERNAME and PHYSIONET_PASSWORD.
+3. Set BIOSIGNAL_PHYSIONET_USERNAME and BIOSIGNAL_PHYSIONET_PASSWORD.
 
-**Credentials**: `PHYSIONET_USERNAME`, `PHYSIONET_PASSWORD`
+**Credentials**: `BIOSIGNAL_PHYSIONET_USERNAME`, `BIOSIGNAL_PHYSIONET_PASSWORD`
 
 ```bash
 biosignal-data download physionet/mimic-iii-ext-ppg --dest s3://<bucket>

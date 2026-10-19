@@ -17,10 +17,10 @@ access:
   steps:
   - Create an account at https://sleepdata.org and submit a data access request for this dataset; wait
     for approval.
-  - Copy your token from https://sleepdata.org/token and set NSRR_TOKEN.
+  - Copy your token from https://sleepdata.org/token and set BIOSIGNAL_NSRR_TOKEN.
   - 'Install the official NSRR tool: `gem install nsrr --no-document` (needs Ruby).'
   credentials:
-  - NSRR_TOKEN
+  - BIOSIGNAL_NSRR_TOKEN
 homepage: https://sleepdata.org/datasets/mesa
 stats:
   subjects: 2237
