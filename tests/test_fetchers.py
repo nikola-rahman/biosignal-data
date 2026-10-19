@@ -307,3 +307,20 @@ def test_rsync_needs_staging_and_the_tool(monkeypatch: pytest.MonkeyPatch, tmp_p
         fetcher_for(dataset).prepare()  # no staging folder configured
     with pytest.raises(FetchError, match="rsync"):
         fetcher_for(dataset, FetchOptions(staging_dir=tmp_path, keep_staging=True)).prepare()
+
+
+def test_figshare_connects_over_ipv4_only() -> None:
+    from requests.adapters import HTTPAdapter  # noqa: PLC0415
+
+    from biosignal_data.fetchers.archives import FigshareFetcher  # noqa: PLC0415
+    from biosignal_data.fetchers.base import http_session  # noqa: PLC0415
+
+    dataset = make_dataset(id="figshare/1", source={"type": "figshare", "article": 1})
+    fetcher = fetcher_for(dataset)
+    assert isinstance(fetcher, FigshareFetcher)
+    adapter = fetcher._session().get_adapter("https://api.figshare.com/")  # noqa: SLF001
+    default = http_session().get_adapter("https://example.org/")
+    assert isinstance(adapter, HTTPAdapter) and isinstance(default, HTTPAdapter)
+    ipv4_bind = ("0.0.0.0", 0)  # noqa: S104 - the bind address that forces IPv4
+    assert adapter.poolmanager.connection_pool_kw["source_address"] == ipv4_bind
+    assert "source_address" not in default.poolmanager.connection_pool_kw  # others unchanged

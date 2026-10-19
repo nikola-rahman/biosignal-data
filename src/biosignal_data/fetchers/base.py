@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import BinaryIO, Literal, TypeVar, cast
+from typing import Any, BinaryIO, Literal, TypeVar, cast
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -129,7 +129,11 @@ class Fetcher(ABC):
 # --- helpers shared by HTTP-based fetchers --------------------------------------------------
 
 
-def http_session(auth: tuple[str, str] | None = None) -> requests.Session:
+def http_session(
+    auth: tuple[str, str] | None = None, *, ipv4_only: bool = False
+) -> requests.Session:
+    """A session with retries. `ipv4_only` binds every connection to an IPv4 address, for
+    sources that refuse requests over IPv6 (figshare's API answers them with 403)."""
     session = requests.Session()
     session.headers["User-Agent"] = USER_AGENT
     if auth:
@@ -142,9 +146,24 @@ def http_session(auth: tuple[str, str] | None = None) -> requests.Session:
     )
     # One session serves all parallel downloads of a dataset: keep enough connections.
     adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=64)
+    if ipv4_only:
+        adapter = _IPv4Adapter(max_retries=retry, pool_connections=4, pool_maxsize=64)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
+
+
+class _IPv4Adapter(HTTPAdapter):
+    """Connects over IPv4 only: a socket bound to 0.0.0.0 cannot reach an IPv6 address, so
+    urllib3 skips a host's IPv6 addresses and uses its IPv4 ones."""
+
+    def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
+        kwargs["source_address"] = ("0.0.0.0", 0)  # noqa: S104 - a bind for outgoing sockets
+        super().init_poolmanager(*args, **kwargs)
+
+    def proxy_manager_for(self, proxy: str, **kwargs: Any) -> Any:
+        kwargs["source_address"] = ("0.0.0.0", 0)  # noqa: S104 - as above
+        return super().proxy_manager_for(proxy, **kwargs)
 
 
 class _ResponseStream(AbstractContextManager[BinaryIO]):

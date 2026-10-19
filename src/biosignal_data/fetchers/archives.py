@@ -7,6 +7,8 @@ import os
 from collections.abc import Iterator
 from typing import Any
 
+import requests
+
 from biosignal_data.catalog.models import (
     DandiSource,
     FigshareSource,
@@ -82,12 +84,21 @@ class ZenodoFetcher(Fetcher):
 
 
 class FigshareFetcher(Fetcher):
+    _http: requests.Session | None = None
+
     @property
     def source(self) -> FigshareSource:
         return self._source(FigshareSource)
 
+    def _session(self) -> requests.Session:
+        # figshare's API (AWS load balancer) refuses requests over IPv6 with 403.
+        if self._http is None:
+            self._http = http_session(ipv4_only=True)
+        return self._http
+
     def _api(self, path: str) -> Any:
-        response = http_session().get(f"{str(self.source.api).rstrip('/')}/{path}", timeout=60)
+        url = f"{str(self.source.api).rstrip('/')}/{path}"
+        response = self._session().get(url, timeout=60)
         response.raise_for_status()
         return response.json()
 
@@ -122,7 +133,7 @@ class FigshareFetcher(Fetcher):
         return ResolvedVersion(f"v{meta['version']}", "source")
 
     def list_files(self) -> Iterator[RemoteFile]:
-        session = http_session()
+        session = self._session()
         if self.source.article is not None:
             articles = [(self.source.article, "")]
         else:
