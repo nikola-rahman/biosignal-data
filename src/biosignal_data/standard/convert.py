@@ -243,7 +243,7 @@ def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -
         location = plan.location
         try:
             source: Source = (
-                WfdbSource(unit.path, fetch)
+                WfdbSource(unit.path, fetch, raw.has)
                 if unit.format == "wfdb"
                 else EdfSource(unit.path, fetch)
             )
@@ -281,7 +281,15 @@ def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -
                 "channels": tables.channel_table(unit.id, source),
                 "events": tables.event_table(unit.id, events),
             }
-            _record(store, location, unit, used=used, not_converted=skipped, parts=parts)
+            _record(
+                store,
+                location,
+                unit,
+                used=used,
+                not_converted=skipped,
+                parts=parts,
+                problems=source.problems,
+            )
         finally:
             source.close()
     finally:
@@ -296,6 +304,7 @@ def _record(
     used: list[str],
     not_converted: list[NotConverted],
     parts: dict[str, pa.Table],
+    problems: list[str] | None = None,
 ) -> None:
     for name, table in parts.items():
         store.put_bytes(
@@ -308,6 +317,7 @@ def _record(
         "tables": sorted(parts),
         "used": used,
         "not_converted": [n.model_dump() for n in not_converted],
+        "problems": problems or [],
     }
     store.put_bytes(location.part_key(unit.id, DONE), json.dumps(done).encode())
 
@@ -368,7 +378,7 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
         channels=joined["channels"].num_rows,
         events=joined["events"].num_rows,
         files_used=len(used),
-        problems=plan.discovery.problems,
+        problems=plan.discovery.problems + [p for done, _ in loaded for p in done["problems"]],
         not_converted=[NotConverted(path=p, reason=r) for p, r in sorted(skipped.items())],
     )
     store.put_bytes(location.manifest_key, manifest.model_dump_json(indent=2).encode())

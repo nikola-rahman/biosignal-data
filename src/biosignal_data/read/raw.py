@@ -91,6 +91,10 @@ class RawDataset:
     def _by_path(self) -> dict[str, FileEntry]:
         return {f.path: f for f in self.manifest.files}
 
+    def has(self, path: str) -> bool:
+        """Whether `path` is a file of this version."""
+        return path in self._by_path
+
     def entry(self, path: str) -> FileEntry:
         """The manifest entry of `path`."""
         if path not in self._by_path:

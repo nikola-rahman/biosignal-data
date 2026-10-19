@@ -20,6 +20,7 @@ from typing import Any, Protocol
 import numpy as np
 
 Fetch = Callable[[str], Path]
+Available = Callable[[str], bool]  # whether a raw file is in the raw version
 
 
 class UnsupportedError(Exception):
@@ -71,6 +72,7 @@ class Source(Protocol):
     groups: list[Group]
     events: list[Event]  # stored in the signal file itself (EDF+)
     frame_rate: float  # the rate WFDB annotation files of this record count samples at
+    problems: list[str]  # e.g. signal files the source does not publish
     start_time: datetime | None
     duration_s: float | None  # None: the header does not say
     header: str  # the source header, as written
@@ -94,7 +96,7 @@ class WfdbSource:
 
     format = "wfdb"
 
-    def __init__(self, record: str, fetch: Fetch) -> None:
+    def __init__(self, record: str, fetch: Fetch, available: Available) -> None:
         import wfdb  # noqa: PLC0415 - readers load only when used
         from wfdb.io._signal import _digi_nan  # noqa: PLC0415
 
@@ -104,9 +106,18 @@ class WfdbSource:
         head = wfdb.rdheader(str(header_path.with_suffix("")))
         if getattr(head, "seg_name", None):
             raise UnsupportedError("multi-segment WFDB record (not converted yet)")
-        # A record without signals (only its annotations are published) has no groups.
+        # A record without signals (only its annotations are published) has no groups; so
+        # has one whose signal files the source does not publish (only its header).
         folder = posixpath.dirname(record)
         signal_files = sorted({posixpath.join(folder, f) for f in head.file_name or []})
+        self.problems = []
+        unpublished = [p for p in signal_files if not available(p)]
+        if unpublished:
+            self.problems.append(
+                f"{record}: the header names {', '.join(unpublished)}, which the source does "
+                "not publish; the recording is kept without signals"
+            )
+            signal_files = []
         for path in signal_files:
             fetch(path)
         self.files = [record + ".hea", *signal_files]
@@ -119,7 +130,7 @@ class WfdbSource:
         self.duration_s = head.sig_len / head.fs if head.sig_len is not None else None
         lines = _signal_lines(self.header, head.n_sig)
         by_rate: dict[int, list[int]] = {}
-        for i, spf in enumerate(head.samps_per_frame or []):
+        for i, spf in enumerate(head.samps_per_frame if signal_files else []):
             by_rate.setdefault(spf, []).append(i)
         self.groups, self._indices = [], []
         for spf, indices in sorted(by_rate.items(), reverse=True):
@@ -231,6 +242,8 @@ class EdfSource:
 
     def __init__(self, path: str, fetch: Fetch) -> None:
         import pyedflib  # noqa: PLC0415
+
+        self.problems: list[str] = []
 
         local = fetch(path)
         with local.open("rb") as f:
