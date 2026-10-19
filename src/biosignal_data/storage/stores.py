@@ -12,18 +12,30 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO, ClassVar, Literal, Protocol
+from typing import TYPE_CHECKING, Any, BinaryIO, ClassVar, Literal, Protocol
 from urllib.parse import urlparse
 
 import boto3
-from boto3.s3.transfer import TransferConfig
 from botocore.config import Config
 from botocore.exceptions import ClientError
+from s3transfer.manager import TransferConfig, TransferManager
+from s3transfer.subscribers import BaseSubscriber
 
 if TYPE_CHECKING:
     from mypy_boto3_s3 import S3Client
 
 MiB = 1024 * 1024
+# Uploads read a stream, so every part is held in memory until S3 has it. The part size is
+# the smallest that S3's limit of 10,000 parts per object allows for the file, and at
+# least PART_SIZE; a file whose size the source does not give gets UNKNOWN_SIZE_PART
+# (objects up to 625 GiB).
+PART_SIZE = 8 * MiB
+UNKNOWN_SIZE_PART = 64 * MiB
+MAX_PARTS = 10_000
+# Per file uploading at the same time: parts read but not yet sent (one more is being read),
+# and parts sent at the same time.
+PARTS_IN_MEMORY = 2
+PARTS_IN_FLIGHT = 4
 
 
 @dataclass(frozen=True)
@@ -44,7 +56,7 @@ class Store(Protocol):
 
     def exists(self, key: str) -> bool: ...
     def size(self, key: str) -> int | None: ...
-    def put_stream(self, key: str, stream: BinaryIO) -> None: ...
+    def put_stream(self, key: str, stream: BinaryIO, size: int | None) -> None: ...
     def put_bytes(self, key: str, data: bytes, content_type: str = ...) -> None: ...
     def get_bytes(self, key: str) -> bytes | None: ...
     def open(self, key: str) -> BinaryIO: ...
@@ -109,25 +121,28 @@ class S3Store:
         settings: S3Settings | None = None,
         parallel_uploads: int = 1,
         client: S3Client | None = None,
-        multipart_chunksize: int = 64 * MiB,
-        max_concurrency: int = 8,
+        part_size: int = PART_SIZE,
     ) -> None:
         """Give `settings` (or, in tests, a ready `client`). `parallel_uploads`: files uploaded
-        at the same time; each uploads up to `max_concurrency` parts at once."""
+        at the same time.
+
+        All uploads share two transfer managers, so the memory they use is bounded:
+        `parallel_uploads * (PARTS_IN_MEMORY + 1) * part size` for files with a known size,
+        plus `(PARTS_IN_MEMORY + 1) * UNKNOWN_SIZE_PART` for files without one, which upload
+        one at a time. The part size grows above `part_size` only for files bigger than
+        10,000 parts of it (78 GiB at 8 MiB)."""
         if client is None:
             if settings is None:
                 raise ValueError("S3Store needs settings (endpoint, region, addressing, keys)")
-            client = settings.client(connections=parallel_uploads * max_concurrency)
+            client = settings.client(connections=(parallel_uploads + 1) * PARTS_IN_FLIGHT)
         self.bucket = bucket
         self.prefix = prefix.strip("/")
         self.settings = settings
         self.client: S3Client = client
         self.uri = f"s3://{bucket}/{self.prefix}".rstrip("/")
-        self._transfer = TransferConfig(
-            multipart_threshold=multipart_chunksize,
-            multipart_chunksize=multipart_chunksize,
-            max_concurrency=max_concurrency,
-        )
+        self._part_size = part_size
+        self._known_size = _transfer_manager(client, parallel_uploads, part_size)
+        self._unknown_size = _transfer_manager(client, 1, max(part_size, UNKNOWN_SIZE_PART))
 
     def _key(self, key: str) -> str:
         return f"{self.prefix}/{key}" if self.prefix else key
@@ -144,10 +159,18 @@ class S3Store:
             raise
         return int(head["ContentLength"])
 
-    def put_stream(self, key: str, stream: BinaryIO) -> None:
-        # boto3 reads non-seekable streams sequentially, so a hashing wrapper sees every byte
-        # once and in order while parts upload in parallel.
-        self.client.upload_fileobj(stream, self.bucket, self._key(key), Config=self._transfer)
+    def put_stream(self, key: str, stream: BinaryIO, size: int | None) -> None:
+        """`size`: the size the source gives, or None. It sets the part size only; the
+        stream is always read to its end, and one longer than 10,000 parts fails."""
+        # s3transfer reads non-seekable streams sequentially, so a hashing wrapper sees
+        # every byte once and in order while parts upload in parallel.
+        manager = self._unknown_size if size is None else self._known_size
+        # Given a size below one part, s3transfer reads the whole stream in one call; so the
+        # size is given only where it makes the parts bigger, and a wrong small size from a
+        # source cannot fill the memory.
+        bigger_parts = size is not None and size > MAX_PARTS * self._part_size
+        subscribers = [_KnownSize(size)] if bigger_parts and size is not None else []
+        manager.upload(stream, self.bucket, self._key(key), subscribers=subscribers).result()
 
     def put_bytes(self, key: str, data: bytes, content_type: str = "application/json") -> None:
         self.client.put_object(
@@ -230,7 +253,7 @@ class LocalStore:
         path = self._path(key)
         return path.stat().st_size if path.is_file() else None
 
-    def put_stream(self, key: str, stream: BinaryIO) -> None:
+    def put_stream(self, key: str, stream: BinaryIO, size: int | None) -> None:
         path = self._path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.part")
@@ -286,6 +309,27 @@ class LocalStore:
 
     def discard(self, item: Unfinished) -> None:
         self._path(item.key).unlink(missing_ok=True)
+
+
+class _KnownSize(BaseSubscriber):
+    """Tells s3transfer the size of a stream, which it cannot find out by itself."""
+
+    def __init__(self, size: int) -> None:
+        self.size = size
+
+    def on_queued(self, future: Any, **kwargs: Any) -> None:
+        future.meta.provide_transfer_size(self.size)
+
+
+def _transfer_manager(client: S3Client, files: int, part_size: int) -> TransferManager:
+    config = TransferConfig(
+        multipart_threshold=part_size,
+        multipart_chunksize=part_size,
+        max_submission_concurrency=files,  # each reads one file's stream
+        max_request_concurrency=files * PARTS_IN_FLIGHT,
+        max_in_memory_upload_chunks=files * PARTS_IN_MEMORY,
+    )
+    return TransferManager(client, config)
 
 
 def open_store(uri: str, s3: S3Settings | None = None, parallel_uploads: int = 1) -> Store:

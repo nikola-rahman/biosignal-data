@@ -268,7 +268,7 @@ def copy_file(
     try:
         with remote.open() as stream:
             reader = HashingReader(stream, on_read, stop)
-            store.put_stream(key, reader)  # type: ignore[arg-type]
+            store.put_stream(key, reader, remote.size)  # type: ignore[arg-type]
         try:
             _check(remote, reader)
         except IntegrityError:

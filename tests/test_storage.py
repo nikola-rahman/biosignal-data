@@ -68,13 +68,13 @@ def s3_store() -> Iterator[S3Store]:
     with mock_aws():
         client = boto3.client("s3", region_name="us-east-1")
         client.create_bucket(Bucket="lake")
-        yield S3Store("lake", "prefix", client=client, multipart_chunksize=5 * 1024 * 1024)
+        yield S3Store("lake", "prefix", client=client, part_size=5 * 1024 * 1024)
 
 
 def test_s3_store_roundtrip_including_multipart(s3_store: S3Store) -> None:
     body = bytes(range(256)) * 50_000  # ~12.8 MB -> multipart with 5 MB parts
     reader = HashingReader(io.BytesIO(body))
-    s3_store.put_stream("raw/x/1/data/big.bin", reader)  # type: ignore[arg-type]
+    s3_store.put_stream("raw/x/1/data/big.bin", reader, len(body))  # type: ignore[arg-type]
     assert reader.bytes_read == len(body)
     assert s3_store.size("raw/x/1/data/big.bin") == len(body)
     assert s3_store.get_bytes("raw/x/1/data/big.bin") == body
@@ -83,6 +83,18 @@ def test_s3_store_roundtrip_including_multipart(s3_store: S3Store) -> None:
     assert list(s3_store.list("raw/x/")) == ["raw/x/1/data/big.bin"]
     s3_store.delete("raw/x/1/data/big.bin")
     assert not s3_store.exists("raw/x/1/data/big.bin")
+
+
+@pytest.mark.parametrize("size", [None, 1, 3 * 1024 * 1024 * 1024 * 1024])
+def test_s3_store_reads_the_stream_to_its_end_whatever_size_is_given(
+    s3_store: S3Store, size: int | None
+) -> None:
+    # No size, a wrong small one, one that needs bigger parts: the whole stream is stored.
+    body = bytes(range(256)) * 30_000  # ~7.7 MB: one part or two, by the part size
+    reader = HashingReader(io.BytesIO(body))
+    s3_store.put_stream("raw/x/1/data/f.bin", reader, size)  # type: ignore[arg-type]
+    assert reader.bytes_read == len(body)
+    assert s3_store.get_bytes("raw/x/1/data/f.bin") == body
 
 
 def test_s3_settings_are_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
