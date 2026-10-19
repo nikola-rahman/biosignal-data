@@ -24,17 +24,18 @@ Your own S3 storage (the destination): `BIOSIGNAL_ACCESS_KEY_ID` and
 `BIOSIGNAL_SECRET_ACCESS_KEY`; its endpoint, region and addressing are in
 `biosignal-data.yaml`.
 
-## PhysioNet: one source per dataset, no switching
+## PhysioNet: the AWS copy where it has the files, physionet.org for the rest
 
-- **Open datasets** come only from PhysioNet's own copy on AWS, `s3://physionet-open`
-  (AWS Open Data program, no account). It is faster than physionet.org and gives file
-  sizes. If the version, or a file of it, is not on the copy, the download fails with an
-  error; it does not fall back to physionet.org.
+- **Open datasets** come from PhysioNet's own copy on AWS, `s3://physionet-open` (AWS Open
+  Data program, no account), where it has them: it is faster than physionet.org and gives
+  file sizes. A file that the copy lacks, or a version that is not on it at all, comes from
+  physionet.org. The run says so in a warning, with the number of files.
 - **Credentialed datasets** are not on that copy. They come only from physionet.org, with
   your PhysioNet account.
-- The file list and SHA-256 checksums come from the version's `SHA256SUMS.txt`. Old versions
-  publish none: their files are then listed from the AWS listing (open) or the physionet.org
-  folder index (credentialed), and cannot be checked against published checksums (warning).
+- The file list and SHA-256 checksums come from the version's `SHA256SUMS.txt`, whichever
+  way a file is downloaded, so every file is checked the same way. Old versions publish no
+  `SHA256SUMS.txt`: their files are then listed from the AWS listing or the physionet.org
+  folder index, and cannot be checked against published checksums (warning).
 - For an entry without a pinned version, the latest version is read from physionet.org.
 
 ## Versions

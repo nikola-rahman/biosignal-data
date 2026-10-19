@@ -78,7 +78,7 @@ See [`docs/reading.md`](docs/reading.md).
 
 | Source | How | Access |
 | --- | --- | --- |
-| PhysioNet | files and SHA-256 from each version's `SHA256SUMS.txt`; open data only from PhysioNet's AWS copy, credentialed data only from physionet.org | open or PhysioNet credentialed |
+| PhysioNet | files and SHA-256 from each version's `SHA256SUMS.txt`; open data from PhysioNet's AWS copy where it has the files, else physionet.org; credentialed data from physionet.org | open or PhysioNet credentialed |
 | OpenNeuro | OpenNeuro's public S3 bucket (latest snapshot) | open |
 | NEMAR | official `nemar-py` client, version-pinned with checksums | open |
 | DANDI | official `dandi` client | open |

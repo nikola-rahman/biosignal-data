@@ -119,19 +119,28 @@ def test_physionet_version_without_sha256sums_walks_the_folder_index(
     assert files[1].url == f"{base}/training/A%2001.mat"
 
 
-def test_physionet_open_version_missing_on_aws_copy_is_an_error(
+def test_physionet_uses_the_website_for_what_the_aws_copy_lacks(
     store: LocalStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    with mock_aws():
+    import hashlib  # noqa: PLC0415
+
+    files = {"100.hea": b"header", "notes.shtml": b"<html>"}
+    sums = "".join(f"{hashlib.sha256(b).hexdigest()}  {n}\n" for n, b in files.items())
+    with mock_aws(), responses.RequestsMock(assert_all_requests_are_fired=True) as web:
+        web.add_passthru("https://s3.amazonaws.com")  # moto answers these
         s3 = boto3.client("s3", region_name="us-east-1")
         monkeypatch.setattr(physionet, "s3_client", lambda **_: s3)
-        monkeypatch.setattr(PhysioNetFetcher, "_https_files", _no_https)
         s3.create_bucket(Bucket="physionet-open")
+        s3.put_object(Bucket="physionet-open", Key="x/1.0/SHA256SUMS.txt", Body=sums)
+        s3.put_object(Bucket="physionet-open", Key="x/1.0/100.hea", Body=files["100.hea"])
+        # notes.shtml is not on the AWS copy: it comes from physionet.org
+        web.get("https://physionet.org/files/x/1.0/notes.shtml", body=files["notes.shtml"])
         dataset = make_dataset(
-            id="physionet/x", source={"type": "physionet", "slug": "x", "version": "9.9"}
+            id="physionet/x", source={"type": "physionet", "slug": "x", "version": "1.0"}
         )
-        with pytest.raises(FetchError, match="not on PhysioNet's AWS copy"):
-            ingest(dataset, store)
+        report = ingest(dataset, store)
+    assert report.complete and report.copied == 3
+    assert store.get_bytes("raw/physionet/x/1.0/data/notes.shtml") == b"<html>"
 
 
 @responses.activate
