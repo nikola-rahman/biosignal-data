@@ -58,12 +58,14 @@ def download_many(
     *,
     options: FetchOptions | None = None,
     root: str = "raw",
+    replace: bool = False,
     workers: int,
     parallel_datasets: int,
     progress_for: Callable[[Dataset], IngestProgress | None] | None = None,
     on_done: Callable[[Outcome], None] | None = None,
 ) -> list[Outcome]:
-    """Download `datasets`; returns one outcome per dataset, in the order they finished."""
+    """Download `datasets`; returns one outcome per dataset, in the order they finished.
+    `replace`: complete versions are made again (see `ingest`)."""
     outcomes: list[Outcome] = []
     if not datasets:
         return outcomes
@@ -81,6 +83,7 @@ def download_many(
                 store,
                 options=options,
                 root=root,
+                replace=replace,
                 progress=progress,
                 executor=files,
                 stop=stop,

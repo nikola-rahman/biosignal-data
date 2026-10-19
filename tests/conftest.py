@@ -56,6 +56,7 @@ class FakeFetcher(Fetcher):
         sizes: dict[str, int] | None = None,
         fail: set[str] | None = None,
         missing: set[str] | None = None,
+        damaged: set[str] | None = None,
         options: FetchOptions | None = None,
     ) -> None:
         super().__init__(dataset, options)
@@ -65,6 +66,7 @@ class FakeFetcher(Fetcher):
         self.sizes = sizes or {}
         self.fail = fail or set()
         self.missing = missing or set()  # listed, but the source answers 404
+        self.damaged = damaged or set()  # other bytes at each download: a transfer error
         self.opened: dict[str, int] = {}
         self.listed = 0
 
@@ -77,6 +79,8 @@ class FakeFetcher(Fetcher):
             raise OSError(f"simulated failure for {path}")
         if path in self.missing:
             raise SourceFileMissingError(f"{path} answered 404 Not Found")
+        if path in self.damaged:
+            return nullcontext(io.BytesIO(self.files[path][:-1] + bytes([self.opened[path]])))
         return nullcontext(io.BytesIO(self.files[path]))
 
     def list_files(self) -> Iterator[RemoteFile]:

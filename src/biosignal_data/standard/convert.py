@@ -99,6 +99,7 @@ class StandardPlan:
     location: StandardLocation
     discovery: Discovery
     done: set[str]  # units finished by an earlier run
+    replace: bool = False  # the version is complete and is made again
 
     @property
     def units(self) -> list[Unit]:
@@ -123,16 +124,21 @@ class StandardReport:
 
 
 def plan_standard(
-    store: Store, dataset_id: str, version: str, *, raw_root: str = "raw"
+    store: Store, dataset_id: str, version: str, *, raw_root: str = "raw", replace: bool = False
 ) -> StandardPlan:
-    """Find the recordings of a complete raw version, and those an earlier run finished."""
+    """Find the recordings of a complete raw version, and those an earlier run finished.
+    `replace`: a complete version is made again (by `convert`, which first removes it)
+    instead of raising `AlreadyStandard`."""
     raw_location = VersionLocation(dataset_id, version, raw_root)
     data = store.get_bytes(raw_location.manifest_key)
     if data is None or not store.exists(raw_location.success_key):
         raise FileNotFoundError(f"{store.uri}/{raw_location.prefix} is not a complete version")
     location = StandardLocation(dataset_id, version)
-    if store.exists(location.success_key):
-        raise AlreadyStandard(f"{store.uri}/{location.prefix} is already complete")
+    complete = store.exists(location.success_key)
+    if complete and not replace:
+        raise AlreadyStandard(
+            f"{store.uri}/{location.prefix} is already complete; use --replace to make it again"
+        )
     raw = RawDataset(store, raw_location, Manifest.from_json(data), Path())
 
     def read_text(path: str) -> str:
@@ -140,12 +146,18 @@ def plan_standard(
             return f.read().decode("utf-8", errors="replace")
 
     discovery = discover((f.path for f in raw.files), read_text)
-    done = {
-        key[len(location.parts_prefix) : -len("/" + DONE)]
-        for key in store.list(location.parts_prefix)
-        if key.endswith("/" + DONE)
-    }
-    plan = StandardPlan(raw, hashlib.sha256(data).hexdigest(), location, discovery, done)
+    done = (
+        set()
+        if complete
+        else {
+            key[len(location.parts_prefix) : -len("/" + DONE)]
+            for key in store.list(location.parts_prefix)
+            if key.endswith("/" + DONE)
+        }
+    )
+    plan = StandardPlan(
+        raw, hashlib.sha256(data).hexdigest(), location, discovery, done, replace=complete
+    )
     log.info(
         "%s %s: %s, %s to convert",
         dataset_id,
@@ -177,6 +189,9 @@ def convert(
         units=len(plan.units),
         skipped=len(plan.done),
     )
+    if plan.replace:  # made again from the raw version: the old one goes first
+        log.warning("%s: removing the complete version to make it again", report.location)
+        store.delete_many(list(store.list(plan.location.prefix + "/")))
     if progress:
         progress.start(len(plan.units), len(plan.done))
     work_dir.mkdir(parents=True, exist_ok=True)

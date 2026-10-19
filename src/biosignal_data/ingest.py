@@ -9,13 +9,17 @@
 Guarantees:
 - Bytes are copied unchanged, to `data/<path as published>`.
 - Every file is hashed in flight (SHA-256 and MD5) and checked against the size and
-  checksum the source publishes, when it publishes them. A mismatch deletes the object
-  and fails the file.
+  checksum the source publishes, when it publishes them. At a mismatch the file is
+  downloaded again: the same bytes twice means the source serves them so, and the file is
+  kept with the difference in its manifest entry; other bytes fail the file.
 - A run can be interrupted and re-run: progress is checkpointed to
   `_manifest.partial.json`, and files already recorded there with a matching object size
   are not copied again.
 - `_manifest.json` and then `_SUCCESS` are written only when every file succeeded. A
-  version with `_SUCCESS` is never written to again.
+  version with `_SUCCESS` is written to again only when asked (`replace=True`): then every
+  file is copied again in place, over the old one.
+- A complete version holds exactly the files of its manifest: before `_SUCCESS`, stored
+  files the source does not list (any more) are removed.
 """
 
 from __future__ import annotations
@@ -50,7 +54,9 @@ log = logging.getLogger(__name__)
 
 
 class IntegrityError(RuntimeError):
-    pass
+    def __init__(self, message: str, sha256: str) -> None:
+        super().__init__(message)
+        self.sha256 = sha256  # of the bytes the source served
 
 
 class AlreadyComplete(RuntimeError):  # noqa: N818 - reads naturally at the call site
@@ -87,6 +93,7 @@ class Plan:
     to_copy: list[RemoteFile]  # those not stored yet by an earlier run
     manifest: Manifest  # new, or the partial one of an earlier run
     fetcher: Fetcher = field(repr=False)
+    replace: bool = False  # the version is complete and is made again
     complete: bool = False  # set by apply() when the version is complete
 
     @property
@@ -121,6 +128,7 @@ class IngestReport:
     bytes_copied: int = 0
     failed: dict[str, str] = field(default_factory=dict)
     missing: dict[str, str] = field(default_factory=dict)  # listed, but the source has not
+    differs: dict[str, str] = field(default_factory=dict)  # served other than listed, twice
     complete: bool = False
 
 
@@ -132,15 +140,17 @@ def planned(
     options: FetchOptions | None = None,
     fetcher: Fetcher | None = None,
     root: str = "raw",
+    replace: bool = False,
 ) -> Iterator[Plan]:
     """Check access, prepare the source, and plan the copy. On exit, the source cleans up
-    what it prepared; staged files are removed only if `apply` completed the version."""
+    what it prepared; staged files are removed only if `apply` completed the version.
+    `replace`: a complete version is made again instead of raising `AlreadyComplete`."""
     fetcher = fetcher or fetcher_for(dataset, options)
     fetcher.check_access()
     fetcher.prepare()
     plan: Plan | None = None
     try:
-        plan = _plan(dataset, store, fetcher, root)
+        plan = _plan(dataset, store, fetcher, root, replace)
         yield plan
     finally:
         fetcher.cleanup(plan.complete if plan else False)
@@ -153,6 +163,7 @@ def ingest(
     options: FetchOptions | None = None,
     fetcher: Fetcher | None = None,
     root: str = "raw",
+    replace: bool = False,
     workers: int = 8,
     checkpoint_every: float = 30.0,
     progress: IngestProgress | None = None,
@@ -161,7 +172,9 @@ def ingest(
 ) -> IngestReport:
     """Plan and copy `dataset` into `store`. Files are copied by `workers` threads, or by
     `executor` if given (a pool shared by several datasets copying at the same time)."""
-    with planned(dataset, store, options=options, fetcher=fetcher, root=root) as plan:
+    with planned(
+        dataset, store, options=options, fetcher=fetcher, root=root, replace=replace
+    ) as plan:
         return apply(
             plan,
             store,
@@ -173,15 +186,19 @@ def ingest(
         )
 
 
-def _plan(dataset: Dataset, store: Store, fetcher: Fetcher, root: str) -> Plan:
+def _plan(dataset: Dataset, store: Store, fetcher: Fetcher, root: str, replace: bool) -> Plan:
     version = fetcher.resolve_version()
     version = _continue_dated_version(dataset, store, root, version)
     location = VersionLocation(dataset.id, version.value, root)
-    if store.exists(location.success_key):
+    complete = store.exists(location.success_key)
+    if complete and not replace:
         raise AlreadyComplete(
-            f"{store.uri}/{location.prefix} is already complete; versions are immutable"
+            f"{store.uri}/{location.prefix} is already complete; use --replace to make it again"
         )
-    manifest = _start_manifest(dataset, store, location, version)
+    if complete:  # every file is copied again: nothing from earlier runs is reused
+        manifest = _new_manifest(dataset, version)
+    else:
+        manifest = _start_manifest(dataset, store, location, version)
     files = list(fetcher.list_files())
     if not files:
         raise FetchError(f"{dataset.id} {version.value}: the source lists no files")
@@ -196,7 +213,13 @@ def _plan(dataset: Dataset, store: Store, fetcher: Fetcher, root: str) -> Plan:
             done.pop(remote.path, None)
             to_copy.append(remote)
     manifest.files = sorted(done.values(), key=lambda f: f.path)
-    plan = Plan(dataset, version, location, files, to_copy, manifest, fetcher)
+    plan = Plan(dataset, version, location, files, to_copy, manifest, fetcher, replace=complete)
+    if complete:
+        log.warning(
+            "%s %s: complete, and made again (--replace): every file is copied again",
+            dataset.id,
+            version.value,
+        )
     log.info(
         "%s %s: %s, %s to copy",
         dataset.id,
@@ -229,6 +252,9 @@ def apply(
         skipped=plan.already_stored,
     )
     done = {f.path: f for f in plan.manifest.files}
+    if plan.replace:  # incomplete from here on, so readers ignore it until it is done
+        store.delete(location.success_key)
+        store.delete(location.manifest_key)
     if progress:
         total = plan.total_bytes if not plan.unknown_sizes else None
         progress.start(plan.version.value, len(plan.files), plan.already_stored, total)
@@ -258,6 +284,7 @@ def apply(
             plan.version.value,
             plural(len(missing), "file"),
         )
+    _remove_unlisted(plan, store)
     plan.manifest.files = sorted(done.values(), key=lambda f: f.path)
     plan.manifest.missing = sorted(missing.values(), key=lambda f: f.path)
     plan.manifest.completed_at = utcnow()
@@ -273,14 +300,14 @@ def apply(
 
 def _check(remote: RemoteFile, reader: HashingReader) -> None:
     if remote.size is not None and reader.bytes_read != remote.size:
-        raise IntegrityError(f"size {reader.bytes_read} != published {remote.size}")
+        raise IntegrityError(f"size {reader.bytes_read} != published {remote.size}", reader.sha256)
     if remote.checksum:
         algorithm, _, expected = remote.checksum.partition(":")
         actual = {"sha256": reader.sha256, "md5": reader.md5}.get(algorithm.lower())
         if actual is None:
             log.warning("%s: cannot verify %s checksum; recorded only", remote.path, algorithm)
         elif actual != expected.lower():
-            raise IntegrityError(f"{algorithm} {actual} != published {expected}")
+            raise IntegrityError(f"{algorithm} {actual} != published {expected}", reader.sha256)
 
 
 def copy_file(
@@ -289,18 +316,24 @@ def copy_file(
     remote: RemoteFile,
     on_read: Callable[[int], None] | None = None,
     stop: threading.Event | None = None,
+    served_before: str | None = None,
 ) -> FileEntry:
+    """`served_before`: the SHA-256 an earlier download of this file gave, which did not
+    match the source's list. If this download gives the same bytes, they are kept."""
     key = location.data_key(remote.path)
     reader: HashingReader | None = None
+    differs = None
     try:
         with remote.open() as stream:
             reader = HashingReader(stream, on_read, stop)
             store.put_stream(key, reader, remote.size)  # type: ignore[arg-type]
         try:
             _check(remote, reader)
-        except IntegrityError:
-            store.delete(key)
-            raise
+        except IntegrityError as exc:
+            if served_before != exc.sha256:
+                store.delete(key)
+                raise
+            differs = f"{exc}; the same bytes in two downloads, kept as served"
     except Exception:
         if on_read and reader is not None:
             on_read(-reader.bytes_read)  # progress counts only files that succeed
@@ -312,7 +345,24 @@ def copy_file(
         md5=reader.md5,
         source_checksum=remote.checksum,
         source_url=remote.url,
+        differs_from_source=differs,
     )
+
+
+def _remove_unlisted(plan: Plan, store: Store) -> None:
+    """Before a version completes: remove stored files the source does not list (left by
+    an earlier copy, e.g. one replaced, or one the source has removed since)."""
+    listed = {plan.location.data_key(f.path) for f in plan.files}
+    unlisted = [k for k in store.list(plan.location.data_prefix) if k not in listed]
+    if unlisted:
+        log.warning(
+            "%s %s: removing %s the source no longer lists, e.g. %s",
+            plan.dataset.id,
+            plan.version.value,
+            plural(len(unlisted), "stored file"),
+            unlisted[0],
+        )
+        store.delete_many(unlisted)
 
 
 class _Checkpointer:
@@ -354,7 +404,12 @@ def _copy_all(
     def copy(remote: RemoteFile) -> FileEntry:
         if progress:
             progress.file_started(remote.path)
-        return copy_file(store, location, remote, on_read, stop)
+        try:
+            return copy_file(store, location, remote, on_read, stop)
+        except IntegrityError as exc:
+            # A transfer error, or the source serves other bytes than it lists? Again.
+            log.warning("%s: %s; downloading it again to tell which", remote.path, exc)
+            return copy_file(store, location, remote, on_read, stop, served_before=exc.sha256)
 
     pool = executor or ThreadPoolExecutor(max_workers=max(1, workers))
     try:
@@ -379,6 +434,9 @@ def _copy_all(
                     progress.file_done(remote.path, ok=False)
                 continue
             done[entry.path] = entry
+            if entry.differs_from_source:
+                log.warning("%s: kept as served: %s", entry.path, entry.differs_from_source)
+                report.differs[entry.path] = entry.differs_from_source
             report.copied += 1
             report.bytes_copied += entry.size
             checkpoint()
@@ -403,6 +461,10 @@ def _start_manifest(
         if manifest.version != version.value:
             raise RuntimeError(f"partial manifest at {location.prefix} is for another version")
         return manifest
+    return _new_manifest(dataset, version)
+
+
+def _new_manifest(dataset: Dataset, version: ResolvedVersion) -> Manifest:
     return Manifest(
         dataset_id=dataset.id,
         version=version.value,

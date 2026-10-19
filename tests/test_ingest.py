@@ -43,10 +43,14 @@ def test_completed_version_is_immutable(store: LocalStore) -> None:
         ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES))
 
 
-def test_checksum_mismatch_deletes_object_and_fails(store: LocalStore) -> None:
+def test_checksum_mismatch_from_a_damaged_transfer_deletes_object_and_fails(
+    store: LocalStore,
+) -> None:
     dataset = make_dataset()
-    bad = {"README": "sha256:" + "0" * 64}
-    report = ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES, checksums=bad))
+    good = {"README": "sha256:" + hashlib.sha256(FILES["README"]).hexdigest()}
+    fetcher = FakeFetcher(dataset, FILES, checksums=good, damaged={"README"})
+    report = ingest(dataset, store, fetcher=fetcher)
+    assert fetcher.opened["README"] == 2  # downloaded again before it fails
     assert not report.complete
     assert "README" in report.failed
     assert not store.exists("raw/test/example/1.0.0/data/README")
@@ -59,10 +63,12 @@ def test_matching_published_checksums_pass(store: LocalStore) -> None:
     assert ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES, checksums=good)).complete
 
 
-def test_size_mismatch_fails(store: LocalStore) -> None:
+def test_size_mismatch_served_the_same_twice_is_kept_with_the_difference(
+    store: LocalStore,
+) -> None:
     dataset = make_dataset()
     report = ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES, sizes={"README": 99}))
-    assert "README" in report.failed
+    assert report.complete and "size 5 != published 99" in report.differs["README"]
 
 
 def test_rerun_resumes_and_skips_finished_files(store: LocalStore) -> None:
@@ -136,9 +142,10 @@ class _Recorder:
 
 def test_progress_counts_only_successful_bytes(store: LocalStore) -> None:
     dataset = make_dataset()
-    bad = {"README": "sha256:" + "0" * 64}
+    good = {"README": "sha256:" + hashlib.sha256(FILES["README"]).hexdigest()}
     recorder = _Recorder()
-    ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES, checksums=bad), progress=recorder)
+    fetcher = FakeFetcher(dataset, FILES, checksums=good, damaged={"README"})
+    ingest(dataset, store, fetcher=fetcher, progress=recorder)
     assert recorder.bytes == sum(len(b) for p, b in FILES.items() if p != "README")
     assert sorted(recorder.begun) == sorted(FILES)
     assert sorted(recorder.files) == [
@@ -218,3 +225,56 @@ def test_a_file_the_source_lists_but_does_not_have_is_recorded_not_failed(
     assert [m.path for m in manifest.missing] == ["a/b/c.csv"]
     assert "404" in manifest.missing[0].reason
     assert verify(store, "test/example", "1.0.0", "raw", deep=True) == {}
+
+
+def test_replace_copies_a_complete_version_again_and_drops_files_no_longer_listed(
+    store: LocalStore,
+) -> None:
+    dataset = make_dataset()
+    ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES), workers=2)
+    with pytest.raises(AlreadyComplete, match="--replace"):
+        ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES), workers=2)
+
+    changed = {"README": b"hello again", "sub-01/eeg/data.edf": b"\x01" * 1000}  # c.csv gone
+    report = ingest(dataset, store, fetcher=FakeFetcher(dataset, changed), replace=True)
+
+    assert report.complete and report.copied == 2 and report.skipped == 0
+    prefix = "raw/test/example/1.0.0"
+    assert store.get_bytes(f"{prefix}/data/README") == b"hello again"
+    assert not store.exists(f"{prefix}/data/a/b/c.csv")
+    manifest = Manifest.from_json(store.get_bytes(f"{prefix}/_manifest.json") or b"")
+    assert sorted(f.path for f in manifest.files) == sorted(changed)
+    assert verify(store, "test/example", "1.0.0", "raw", deep=True) == {}
+
+
+def test_a_stopped_replace_leaves_the_version_incomplete_and_a_normal_run_finishes_it(
+    store: LocalStore,
+) -> None:
+    dataset = make_dataset()
+    ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES), workers=2)
+    broken = FakeFetcher(dataset, FILES, fail={"README"})
+    report = ingest(dataset, store, fetcher=broken, workers=2, replace=True)
+
+    assert not report.complete
+    assert not store.exists("raw/test/example/1.0.0/_SUCCESS")
+    assert not store.exists("raw/test/example/1.0.0/_manifest.json")
+    fetcher = FakeFetcher(dataset, FILES)
+    report = ingest(dataset, store, fetcher=fetcher, workers=2)
+    assert report.complete and report.copied == 1 and fetcher.opened == {"README": 1}
+
+
+def test_a_file_served_other_than_listed_twice_is_kept_with_the_difference(
+    store: LocalStore,
+) -> None:
+    dataset = make_dataset()
+    wrong = {"README": "sha256:" + "0" * 64}
+    report = ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES, checksums=wrong))
+
+    assert report.complete and not report.failed and list(report.differs) == ["README"]
+    manifest = Manifest.from_json(store.get_bytes("raw/test/example/1.0.0/_manifest.json") or b"")
+    entry = next(f for f in manifest.files if f.path == "README")
+    assert entry.sha256 == hashlib.sha256(b"hello").hexdigest()
+    assert entry.differs_from_source and "the same bytes in two downloads" in (
+        entry.differs_from_source
+    )
+    assert store.get_bytes("raw/test/example/1.0.0/data/README") == b"hello"

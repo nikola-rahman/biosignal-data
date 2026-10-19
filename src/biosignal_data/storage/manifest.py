@@ -25,6 +25,11 @@ class FileEntry(BaseModel):
         None, description="Checksum the source published, as '<algorithm>:<hex>', if any."
     )
     source_url: str | None = None
+    differs_from_source: str | None = Field(
+        None,
+        description="How the bytes differ from the size or checksum the source lists. Set "
+        "only when two downloads gave the same bytes: the source serves them so.",
+    )
 
 
 class MissingFile(BaseModel):

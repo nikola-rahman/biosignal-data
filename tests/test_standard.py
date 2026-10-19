@@ -240,7 +240,14 @@ def test_cli_dry_run_then_convert_then_already(
     assert "3 recordings, 4 channels, 5 events" in done.output
     assert "not converted: 1 file: no reader for .csv files" in done.output
     assert "ZarrUserWarning" not in done.output
-    assert "already complete" in runner.invoke(app, args).output
+    assert "already complete (--replace makes it again)" in runner.invoke(app, args).output
+    again = runner.invoke(app, [*args, "--replace", "--dry-run"])
+    assert "(complete; --replace makes it again)" in again.output
+    assert store.exists("standard/physionet/mitdb/1.0.0/_SUCCESS")  # a dry run changes nothing
+    replaced = runner.invoke(app, [*args, "--replace"])
+    assert replaced.exit_code == 0, replaced.output
+    assert "3 recordings, 4 channels, 5 events" in replaced.output
+    assert store.exists("standard/physionet/mitdb/1.0.0/_SUCCESS")
 
 
 def test_reader_opens_tables_and_reads_windows_in_physical_units(

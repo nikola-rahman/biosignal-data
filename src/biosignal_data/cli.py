@@ -122,6 +122,10 @@ IdsFileOpt = Annotated[
     typer.Option("--ids-file", help="A file with one catalog id per line (# starts a comment)."),
 ]
 VerboseOpt = Annotated[bool, typer.Option("--verbose", "-v", help="More log output.")]
+ReplaceOpt = Annotated[
+    bool,
+    typer.Option("--replace", help="Make complete versions again instead of skipping them."),
+]
 
 
 def _fail(message: str, code: int = 1) -> typer.Exit:
@@ -332,6 +336,7 @@ def download(
             "--dry-run", help="Show the plan for --dest (version, files, size); copy nothing."
         ),
     ] = False,
+    replace: ReplaceOpt = False,
     verbose: VerboseOpt = False,
     config: ConfigOpt = None,
     catalog: CatalogOpt = None,
@@ -347,6 +352,9 @@ def download(
     then exactly that plan is copied, its files in parallel. Files go to
     <dest>/raw/<id>/<version>/data/ with a manifest of checksums. If a run stops, run the
     same command again: it continues where it stopped.
+
+    A complete version is skipped, unless --replace: then every file is copied again, in
+    place over the old one, and the version is complete again when all have succeeded.
     """
     setup_logging(verbose)
     cfg, cfg_path = _config(config)
@@ -371,9 +379,9 @@ def download(
     store = _store(dest, cfg, cfg_path, settings.workers)
     if dry_run:
         for dataset in datasets:
-            _preview(dataset, store, options)
+            _preview(dataset, store, options, replace)
         return
-    _run(datasets, store, options, settings)
+    _run(datasets, store, options, settings, replace)
 
 
 @app.command("import")
@@ -399,7 +407,7 @@ def import_(
     settings = _need(cfg.download, "download", cfg_path)
     store = _store(dest, cfg, cfg_path, settings.workers)
     options = FetchOptions(from_dir=folder, version=version)
-    _run([dataset], store, options, settings)
+    _run([dataset], store, options, settings, replace=False)
 
 
 def _run(
@@ -407,6 +415,7 @@ def _run(
     store: Store,
     options: FetchOptions,
     settings: DownloadConfig,
+    replace: bool,
 ) -> None:
     console.print(
         f"[bold]{plural(len(datasets), 'dataset')}[/] -> {store.uri}/{ROOT}", highlight=False
@@ -419,7 +428,7 @@ def _run(
     )
     _warn_unfinished(store, store.uri)
     try:
-        outcomes = _copy(datasets, store, options, settings)
+        outcomes = _copy(datasets, store, options, settings, replace)
     except KeyboardInterrupt:
         console.print(
             "[yellow]stopped.[/] Files copied so far are kept; run the same command again "
@@ -436,6 +445,7 @@ def _copy(
     store: Store,
     options: FetchOptions,
     settings: DownloadConfig,
+    replace: bool,
 ) -> list[Outcome]:
     with DownloadDisplay(len(datasets)) as display:
         bars: dict[str, ProgressBar] = {}
@@ -456,6 +466,7 @@ def _copy(
             store,
             options=options,
             root=ROOT,
+            replace=replace,
             workers=settings.workers,
             parallel_datasets=settings.parallel_datasets,
             progress_for=progress_for,
@@ -488,6 +499,11 @@ def _print_outcome(outcome: Outcome) -> None:
             text += f" · {r.skipped:,} already there"
         if r.failed:
             text += f" · {plural(len(r.failed), 'file')} failed (run again to retry)"
+        if r.differs:
+            text += (
+                f" · [yellow]{plural(len(r.differs), 'file')} served other than the source "
+                "lists them, kept as served (in the manifest)[/]"
+            )
         if r.missing:
             text += (
                 f" · [yellow]{plural(len(r.missing), 'file')} listed by the source but "
@@ -562,10 +578,10 @@ def _warn_untested(outcomes: list[Outcome]) -> None:
         )
 
 
-def _preview(dataset: Dataset, store: Store, options: FetchOptions) -> None:
+def _preview(dataset: Dataset, store: Store, options: FetchOptions, replace: bool) -> None:
     """The plan of one dataset against --dest, without copying: version, files, size."""
     try:
-        with planned(dataset, store, options=options, root=ROOT) as plan:
+        with planned(dataset, store, options=options, root=ROOT, replace=replace) as plan:
             _print_plan(plan)
     except AlreadyComplete as exc:
         console.print(f"[yellow]•[/] {dataset.id}: {escape(str(exc))}", highlight=False)
@@ -583,7 +599,8 @@ def _preview(dataset: Dataset, store: Store, options: FetchOptions) -> None:
 
 def _print_plan(plan: Plan) -> None:
     unknown = f" ({plan.unknown_sizes} sizes unknown)" if plan.unknown_sizes else ""
-    typer.secho(f"{plan.dataset.id} {plan.version.value}", bold=True)
+    again = " (complete; --replace makes it again)" if plan.replace else ""
+    typer.secho(f"{plan.dataset.id} {plan.version.value}{again}", bold=True)
     typer.echo(
         f"  {plural(len(plan.files), 'file')}, {_size(plan.total_bytes)}{unknown}; "
         f"{plural(plan.recording_files, 'file')} can hold recordings"
@@ -704,6 +721,7 @@ def standardize(
         bool,
         typer.Option("--dry-run", help="Show the recordings found; convert nothing."),
     ] = False,
+    replace: ReplaceOpt = False,
     verbose: VerboseOpt = False,
     config: ConfigOpt = None,
     catalog: CatalogOpt = None,
@@ -716,7 +734,8 @@ def standardize(
     <dest>/standard/<id>/<raw version>/. Without --version, the newest complete raw version
     is used. Every raw file is either used or listed in the manifest as not converted, with
     the reason. If a run stops, run the same command again: it continues where it stopped.
-    See docs/standard-layer.md.
+    A complete version is skipped, unless --replace: then it is removed and made again from
+    the raw version. See docs/standard-layer.md.
     """
     setup_logging(verbose)
     cfg, cfg_path = _config(config)
@@ -739,7 +758,7 @@ def standardize(
     failed = 0
     for d in datasets:
         try:
-            ok = _standardize_one(d.id, version, store, settings, staging.dir, dry_run)
+            ok = _standardize_one(d.id, version, store, settings, staging.dir, dry_run, replace)
         except KeyboardInterrupt:
             console.print(
                 "[yellow]stopped.[/] Recordings finished so far are kept; run the same "
@@ -758,6 +777,7 @@ def _standardize_one(
     settings: StandardizeConfig,
     staging_dir: Path,
     dry_run: bool,
+    replace: bool,
 ) -> bool:
     """Plan (and unless `dry_run`, convert) one dataset; print one result line."""
     if version is None:
@@ -776,10 +796,12 @@ def _standardize_one(
             soft_wrap=True,
         )
     try:
-        plan = plan_standard(store, dataset_id, version, raw_root=ROOT)
+        plan = plan_standard(store, dataset_id, version, raw_root=ROOT, replace=replace)
     except AlreadyStandard:
         console.print(
-            f"[green]✓[/] {dataset_id} {version}: already complete", highlight=False, soft_wrap=True
+            f"[green]✓[/] {dataset_id} {version}: already complete (--replace makes it again)",
+            highlight=False,
+            soft_wrap=True,
         )
         return True
     except FileNotFoundError as exc:
@@ -829,8 +851,9 @@ def _print_standard_plan(plan: StandardPlan) -> None:
         formats[unit.format] = formats.get(unit.format, 0) + 1
     annotations = sum(len(u.annotations) for u in plan.units)
     found = ", ".join(f"{n:,} {fmt.upper()}" for fmt, n in sorted(formats.items()))
+    again = " (complete; --replace makes it again)" if plan.replace else ""
     console.print(
-        f"{plan.raw.location.dataset_id} {plan.raw.location.version}: "
+        f"{plan.raw.location.dataset_id} {plan.raw.location.version}{again}: "
         f"{plural(len(plan.units), 'recording')} ({found or 'none'}), "
         f"{plural(annotations, 'annotation file')}; {len(plan.to_convert):,} to convert, "
         f"{len(plan.done):,} done by an earlier run",

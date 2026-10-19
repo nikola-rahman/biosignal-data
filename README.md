@@ -123,7 +123,7 @@ biosignal-data.yaml     settings that do not change between runs (no defaults)
 catalog.yaml            what a download needs, per dataset
 docs/datasets.yaml      the description of each dataset, for people
 docs/                   design notes; docs/datasets/ is generated from the two files
-scripts/                import_eegdash.py (OpenNeuro/NEMAR entries), check_each.py (test runs)
+scripts/                import_eegdash.py (OpenNeuro/NEMAR entries)
 src/biosignal_data/
     catalog/            schemas and loader of the two files
     fetchers/           one module per kind of source

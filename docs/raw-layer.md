@@ -18,6 +18,11 @@ being able to prove where every byte came from.
    answers 404 for a file in its own file list, the file is recorded under `missing` in the
    manifest, with the answer, and the run warns. Every other error fails the file, and the
    version stays incomplete until a run copies it.
+6. **A file served other than its source lists it is downloaded twice.** When the size or
+   checksum differs from the source's own list, the file is downloaded again. The same bytes
+   twice mean the source serves them so: the file is kept as served, with the difference in
+   its manifest entry (`differs_from_source`), and the run warns. Different bytes mean a
+   transfer error, and the file fails.
 
 ## Keys
 
