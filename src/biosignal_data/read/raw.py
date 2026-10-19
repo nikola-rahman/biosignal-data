@@ -66,8 +66,11 @@ class RawDataset:
         *,
         root: str = "raw",
         cache_dir: Path | None = None,
+        endpoint: str | None = None,
     ) -> RawDataset:
-        store = open_store(store) if isinstance(store, str) else store
+        """`endpoint`: URL of an S3-compatible storage, if `store` is an s3:// URI that is not
+        on AWS S3."""
+        store = open_store(store, endpoint) if isinstance(store, str) else store
         if version is None:
             versions = complete_versions(store, dataset_id, root)
             if not versions:

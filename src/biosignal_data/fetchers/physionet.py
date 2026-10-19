@@ -110,7 +110,11 @@ class PhysioNetFetcher(Fetcher):
             sums = client.get_object(Bucket=MIRROR_BUCKET, Key=prefix + SUMS)["Body"].read()
             sizes = _list_sizes(client, prefix)
         except (BotoCoreError, ClientError) as exc:
-            log.info("%s: not on the AWS mirror (%s); using physionet.org", self.dataset.id, exc)
+            log.warning(
+                "%s: not on PhysioNet's AWS mirror (%s); downloading from physionet.org (slower)",
+                self.dataset.id,
+                exc,
+            )
             return None
         session = self._session()
         base = f"{BASE}/files/{self.source.slug}/{version}"
@@ -152,7 +156,13 @@ class PhysioNetFetcher(Fetcher):
                 opener=s3_opener(client, MIRROR_BUCKET, prefix + SUMS),
             )
         )
-        log.info("%s: downloading from s3://%s/%s", self.dataset.id, MIRROR_BUCKET, prefix)
+        log.warning(
+            "%s: downloading from PhysioNet's AWS mirror s3://%s/%s instead of physionet.org "
+            "(same files, checked against SHA256SUMS.txt)",
+            self.dataset.id,
+            MIRROR_BUCKET,
+            prefix,
+        )
         return files
 
     def _https_files(self, version: str) -> Iterator[RemoteFile]:

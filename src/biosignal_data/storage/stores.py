@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 import boto3
 from boto3.s3.transfer import TransferConfig
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 if TYPE_CHECKING:
@@ -44,12 +45,25 @@ class S3Store:
         prefix: str = "",
         *,
         client: S3Client | None = None,
+        endpoint: str | None = None,
         multipart_chunksize: int = 64 * MiB,
         max_concurrency: int = 8,
     ) -> None:
+        """`endpoint`: the storage's URL for any S3-compatible service; None means AWS S3.
+        Endpoint settings from the environment are ignored: only `endpoint` counts."""
         self.bucket = bucket
         self.prefix = prefix.strip("/")
-        self.client: S3Client = client or boto3.client("s3")
+        session = boto3.Session()
+        credentials = session.get_credentials()
+        # Where the credentials came from ("env", "shared-credentials-file", ...): shown to
+        # the user, since they are picked up implicitly.
+        self.credentials_source = credentials.method if credentials else "none found"
+        self.client: S3Client = client or session.client(
+            "s3",
+            endpoint_url=endpoint,
+            config=Config(ignore_configured_endpoint_urls=True),  # type: ignore[call-arg]
+        )
+        self.endpoint = self.client.meta.endpoint_url
         self.uri = f"s3://{bucket}/{self.prefix}".rstrip("/")
         self._transfer = TransferConfig(
             multipart_threshold=multipart_chunksize,
@@ -165,11 +179,14 @@ class LocalStore:
                 yield path.relative_to(self.root).as_posix()
 
 
-def open_store(uri: str) -> Store:
-    """`s3://bucket/prefix` or a local path / `file://` URI."""
+def open_store(uri: str, endpoint: str | None = None) -> Store:
+    """`s3://bucket/prefix` (on AWS S3, or on any S3-compatible storage at `endpoint`), or a
+    local path / `file://` URI."""
     parsed = urlparse(uri)
     if parsed.scheme == "s3":
-        return S3Store(parsed.netloc, parsed.path)
+        return S3Store(parsed.netloc, parsed.path, endpoint=endpoint)
+    if endpoint:
+        raise ValueError("--endpoint applies to s3:// destinations only")
     if parsed.scheme in ("", "file"):
         return LocalStore(Path(parsed.path if parsed.scheme == "file" else uri))
     raise ValueError(f"unsupported store URI {uri!r}; use s3://bucket/prefix or a local path")

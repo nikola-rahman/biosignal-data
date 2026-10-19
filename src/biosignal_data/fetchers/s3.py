@@ -18,8 +18,15 @@ if TYPE_CHECKING:
 
 
 def s3_client(*, anonymous: bool, region: str, profile: str | None = None) -> S3Client:
+    """A client for a source bucket on AWS. Endpoint settings in the environment (meant for
+    the destination storage) are ignored, so sources are always read from AWS."""
     config = Config(signature_version=UNSIGNED) if anonymous else Config()
-    config = config.merge(Config(retries={"max_attempts": 10, "mode": "adaptive"}))
+    config = config.merge(
+        Config(  # type: ignore[call-arg]  # stubs lag botocore 1.31+
+            retries={"max_attempts": 10, "mode": "adaptive"},
+            ignore_configured_endpoint_urls=True,
+        )
+    )
     session = boto3.Session(profile_name=profile) if profile else boto3.Session()
     return session.client("s3", region_name=region, config=config)
 

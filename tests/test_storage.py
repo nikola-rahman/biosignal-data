@@ -83,3 +83,15 @@ def test_s3_store_roundtrip_including_multipart(s3_store: S3Store) -> None:
     assert list(s3_store.list("raw/x/")) == ["raw/x/1/data/big.bin"]
     s3_store.delete("raw/x/1/data/big.bin")
     assert not s3_store.exists("raw/x/1/data/big.bin")
+
+
+def test_endpoint_comes_only_from_the_option(monkeypatch: pytest.MonkeyPatch) -> None:
+    from biosignal_data.fetchers.s3 import s3_client  # noqa: PLC0415
+    from biosignal_data.storage.stores import S3Store  # noqa: PLC0415
+
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "https://elsewhere.example")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    assert "elsewhere" not in S3Store("bucket").endpoint
+    assert S3Store("bucket", endpoint="https://mine.example").endpoint == "https://mine.example"
+    source = s3_client(anonymous=True, region="us-east-1")
+    assert source.meta.endpoint_url == "https://s3.amazonaws.com"

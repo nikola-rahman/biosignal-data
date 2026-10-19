@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -26,7 +27,7 @@ from biosignal_data.read.raw import stored_versions
 from biosignal_data.selection import select
 from biosignal_data.storage.layout import VersionLocation
 from biosignal_data.storage.manifest import Manifest
-from biosignal_data.storage.stores import Store, open_store
+from biosignal_data.storage.stores import S3Store, Store, open_store
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -52,6 +53,14 @@ DestOpt = Annotated[
         "-d",
         help="Where downloads go: a local folder or s3://bucket[/prefix]. "
         "Default: $BIOSIGNAL_DEST.",
+    ),
+]
+EndpointOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--endpoint",
+        help="URL of your S3-compatible storage, for s3:// destinations not on AWS S3. "
+        "Default: $BIOSIGNAL_ENDPOINT.",
     ),
 ]
 RootOpt = Annotated[
@@ -95,13 +104,32 @@ def _dataset(catalog: Catalog, dataset_id: str) -> Dataset:
         raise _fail(str(exc.args[0] if exc.args else exc)) from exc
 
 
-def _store(dest: str | None) -> Store:
+def _store(dest: str | None, endpoint: str | None) -> Store:
     if not dest:
         dest = os.environ.get("BIOSIGNAL_DEST")
         if not dest:
             raise _fail("missing --dest (a local folder or s3://bucket); or set BIOSIGNAL_DEST")
         _warn(f"no --dest given; using BIOSIGNAL_DEST={dest}")
-    return open_store(dest)
+    if dest.startswith("s3://") and not endpoint:
+        endpoint = os.environ.get("BIOSIGNAL_ENDPOINT")
+        if endpoint:
+            _warn(f"no --endpoint given; using BIOSIGNAL_ENDPOINT={endpoint}")
+        else:
+            _warn("no --endpoint given; using AWS S3")
+    try:
+        return open_store(dest, endpoint)
+    except ValueError as exc:
+        raise _fail(str(exc)) from exc
+
+
+def _data_path(store: Store) -> str:
+    """Where the bytes go, said plainly: they pass through the machine running this."""
+    machine = f"this machine ({socket.gethostname()})"
+    if isinstance(store, S3Store):
+        target = f"{store.uri} at {store.endpoint} (credentials: {store.credentials_source})"
+    else:
+        target = store.uri
+    return f"data flows: sources -> {machine} -> {target}"
 
 
 def _warn(message: str) -> None:
@@ -153,6 +181,7 @@ def list_(
 def info(
     dataset_id: Annotated[str, typer.Argument(help="Catalog id, e.g. physionet/mitdb.")],
     dest: DestOpt = None,
+    endpoint: EndpointOpt = None,
     as_json: Annotated[bool, typer.Option("--json", help="The catalog entry as JSON.")] = False,
     root: RootOpt = "raw",
     catalog: CatalogOpt = None,
@@ -177,7 +206,7 @@ def info(
         for note in d.notes:
             typer.echo(f"    - {note.strip()}")
     if dest:
-        _print_downloads(_store(dest), d.id, root, dest)
+        _print_downloads(_store(dest, endpoint), d.id, root, dest)
 
 
 def _info_rows(d: Dataset) -> list[tuple[str, str]]:
@@ -222,6 +251,7 @@ def download(
         list[str] | None, typer.Argument(help="Catalog ids. Or select with the options below.")
     ] = None,
     dest: DestOpt = None,
+    endpoint: EndpointOpt = None,
     all_: Annotated[bool, typer.Option("--all", help="Every dataset in the catalog.")] = False,
     signal: Annotated[
         list[str], typer.Option("--signal", "-s", help="Datasets with this signal. Repeatable.")
@@ -295,8 +325,9 @@ def download(
             _preview(dataset, options, include, limit)
         return
 
-    store = _store(dest)
-    console.print(f"[bold]{len(datasets)} datasets[/] -> {store.uri}/{root}")
+    store = _store(dest, endpoint)
+    console.print(f"[bold]{len(datasets)} datasets[/] -> {store.uri}/{root}", highlight=False)
+    console.print(f"[yellow]{_data_path(store)}[/]", highlight=False, soft_wrap=True)
     with download_progress() as progress:
         run = RunBar(progress, len(datasets)) if len(datasets) > 1 else None
 
@@ -461,6 +492,7 @@ def _describe(files: list[RemoteFile]) -> str:
 def check(
     dataset_id: Annotated[str, typer.Argument(help="Catalog id.")],
     dest: DestOpt = None,
+    endpoint: EndpointOpt = None,
     version: Annotated[
         str | None, typer.Option(help="Version to check (default: the latest downloaded).")
     ] = None,
@@ -473,7 +505,7 @@ def check(
     root: RootOpt = "raw",
 ) -> None:
     """Check that the downloaded files are all there, with the right size (and checksum)."""
-    store = _store(dest)
+    store = _store(dest, endpoint)
     versions = stored_versions(store, dataset_id, root)
     if version is None:
         if not versions:
