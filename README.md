@@ -25,17 +25,16 @@ uv run biosignal-data download physionet/mitdb --dest ./lake --limit 5   # 5 rec
 uv run biosignal-data download physionet/mitdb --limit 5 --dry-run      # what that would download
 uv run biosignal-data check physionet/mitdb --dest ./lake --latest
 
-# S3 storage (keys in BIOSIGNAL_ACCESS_KEY_ID / BIOSIGNAL_SECRET_ACCESS_KEY), e.g. Hippius:
-uv run biosignal-data download --all --dest s3://bucket \
-    --endpoint https://s3.hippius.com --region decentralized --addressing path
+# S3 storage: settings in biosignal-data.yaml, keys in BIOSIGNAL_ACCESS_KEY_ID / _SECRET_ACCESS_KEY
+uv run biosignal-data download --all --dest s3://bucket
 ```
 
 - **Which datasets:** ids, `--ids-file`, `--signal`, `--repository` or `--all`. Many
   datasets download at the same time, sharing `--workers` parallel file downloads.
-- **Where to:** `--dest` (required) takes a local folder or `s3://bucket[/prefix]`. An S3
-  destination also needs `--endpoint`, `--region` and `--addressing` (`path` or
-  `virtual`), as your storage provider documents them; there are no defaults. The keys come
-  only from `BIOSIGNAL_ACCESS_KEY_ID` and `BIOSIGNAL_SECRET_ACCESS_KEY`.
+- **Where to:** `--dest` (required) takes a local folder or `s3://bucket[/prefix]`. For an S3
+  destination, the storage's endpoint, region and addressing style come from
+  [`biosignal-data.yaml`](biosignal-data.yaml) (no defaults), and the keys only from
+  `BIOSIGNAL_ACCESS_KEY_ID` and `BIOSIGNAL_SECRET_ACCESS_KEY`.
 - **Test subsets:** `--limit N` copies the first N recordings (each with its companion files
   and the metadata it needs); `--include <glob>` only matching paths. The version stays
   incomplete; a later run without them continues from it.

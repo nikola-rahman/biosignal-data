@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from biosignal_data.catalog import Catalog
@@ -87,3 +88,15 @@ def test_eegdash_import_maps_rows() -> None:
     assert data["stats"] == {"subjects": 3, "hours": 1.23, "size_bytes": 10}
     assert data["references"] == ["https://doi.org/10.1/x"]
     assert module.entry({**row, "dataset": "EEG2025r1"}, "abc") is None
+
+
+def test_s3_destination_reads_the_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("BIOSIGNAL_ACCESS_KEY_ID", "hip_key")
+    monkeypatch.setenv("BIOSIGNAL_SECRET_ACCESS_KEY", "secret")
+    config = tmp_path / "biosignal-data.yaml"
+    args = ["check", "x/y", "--dest", "s3://bucket", "--latest", "--config", str(config)]
+    assert "no config file" in runner.invoke(app, args).output
+    config.write_text("s3:\n  endpoint: https://s3.example\n  region: r1\n")
+    assert "addressing" in runner.invoke(app, args).output  # missing value: an error

@@ -13,7 +13,6 @@ import json
 import os
 import socket
 import sys
-from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -21,6 +20,7 @@ import typer
 
 from biosignal_data.batch import DONE, NEEDS_ACTION, Outcome, download_many
 from biosignal_data.catalog import AccessTier, Catalog, CatalogError, Dataset
+from biosignal_data.config import ConfigError, load_config
 from biosignal_data.console import ProgressBar, RunBar, console, download_progress, setup_logging
 from biosignal_data.fetchers import FetchError, FetchOptions, RemoteFile, fetcher_for
 from biosignal_data.ingest import verify
@@ -39,11 +39,6 @@ dev = typer.Typer(no_args_is_help=True, help="Maintainer commands.")
 app.add_typer(dev, name="dev")
 
 
-class Addressing(StrEnum):
-    path = "path"
-    virtual = "virtual"
-
-
 CatalogOpt = Annotated[
     Path | None,
     typer.Option(
@@ -59,29 +54,9 @@ DestOpt = Annotated[
         "--dest", "-d", help="Where downloads go: a local folder or s3://bucket[/prefix]."
     ),
 ]
-EndpointOpt = Annotated[
-    str | None,
-    typer.Option(
-        "--endpoint",
-        help="s3:// only: URL of the S3 storage, e.g. https://s3.hippius.com.",
-        rich_help_panel="S3 storage (keys: $BIOSIGNAL_ACCESS_KEY_ID, $BIOSIGNAL_SECRET_ACCESS_KEY)",
-    ),
-]
-RegionOpt = Annotated[
-    str | None,
-    typer.Option(
-        "--region",
-        help="s3:// only: region name the storage expects, e.g. decentralized (Hippius).",
-        rich_help_panel="S3 storage (keys: $BIOSIGNAL_ACCESS_KEY_ID, $BIOSIGNAL_SECRET_ACCESS_KEY)",
-    ),
-]
-AddressingOpt = Annotated[
-    Addressing | None,
-    typer.Option(
-        "--addressing",
-        help="s3:// only: path (https://host/bucket/key) or virtual (https://bucket.host/key).",
-        rich_help_panel="S3 storage (keys: $BIOSIGNAL_ACCESS_KEY_ID, $BIOSIGNAL_SECRET_ACCESS_KEY)",
-    ),
+ConfigOpt = Annotated[
+    Path | None,
+    typer.Option("--config", help="Settings file (default: biosignal-data.yaml).", hidden=True),
 ]
 RootOpt = Annotated[
     str, typer.Option("--root", help="Layer folder inside the destination.", hidden=True)
@@ -124,28 +99,25 @@ def _dataset(catalog: Catalog, dataset_id: str) -> Dataset:
         raise _fail(str(exc.args[0] if exc.args else exc)) from exc
 
 
-def _store(
-    dest: str | None,
-    endpoint: str | None,
-    region: str | None,
-    addressing: Addressing | None,
-) -> Store:
-    """Open --dest. Nothing has a default: an s3:// destination needs all of --endpoint,
-    --region and --addressing, and its keys come only from BIOSIGNAL_* variables."""
+def _store(dest: str | None, config_path: Path | None) -> Store:
+    """Open --dest. An s3:// destination is reached with the `s3` settings of the config
+    file and the keys in BIOSIGNAL_ACCESS_KEY_ID / BIOSIGNAL_SECRET_ACCESS_KEY."""
     if not dest:
         raise _fail("missing --dest (a local folder or s3://bucket[/prefix])")
-    s3_options = {"--endpoint": endpoint, "--region": region, "--addressing": addressing}
-    try:
-        if dest.startswith("s3://"):
-            if not (endpoint and region and addressing):
-                missing = [name for name, value in s3_options.items() if not value]
-                raise _fail(f"an s3:// destination needs {', '.join(missing)}")
-            return open_store(dest, S3Settings.from_env(endpoint, region, addressing.value))
-        given = [name for name, value in s3_options.items() if value]
-        if given:
-            raise _fail(f"{', '.join(given)} apply to s3:// destinations only")
+    if not dest.startswith("s3://"):
         return open_store(dest)
-    except ValueError as exc:
+    try:
+        config, path = load_config(config_path)
+        if config.s3 is None:
+            raise _fail(f"{path} has no `s3` section, needed for an s3:// destination")
+        s3 = config.s3
+        console.print(
+            f"S3 storage from {path}: {s3.endpoint}, region {s3.region}, "
+            f"{s3.addressing} addressing",
+            highlight=False,
+        )
+        return open_store(dest, S3Settings.from_env(s3.endpoint, s3.region, s3.addressing))
+    except (ConfigError, ValueError) as exc:
         raise _fail(str(exc)) from exc
 
 
@@ -212,9 +184,7 @@ def list_(
 def info(
     dataset_id: Annotated[str, typer.Argument(help="Catalog id, e.g. physionet/mitdb.")],
     dest: DestOpt = None,
-    endpoint: EndpointOpt = None,
-    region: RegionOpt = None,
-    addressing: AddressingOpt = None,
+    config: ConfigOpt = None,
     as_json: Annotated[bool, typer.Option("--json", help="The catalog entry as JSON.")] = False,
     root: RootOpt = "raw",
     catalog: CatalogOpt = None,
@@ -239,7 +209,7 @@ def info(
         for note in d.notes:
             typer.echo(f"    - {note.strip()}")
     if dest:
-        _print_downloads(_store(dest, endpoint, region, addressing), d.id, root, dest)
+        _print_downloads(_store(dest, config), d.id, root, dest)
 
 
 def _info_rows(d: Dataset) -> list[tuple[str, str]]:
@@ -284,9 +254,7 @@ def download(
         list[str] | None, typer.Argument(help="Catalog ids. Or select with the options below.")
     ] = None,
     dest: DestOpt = None,
-    endpoint: EndpointOpt = None,
-    region: RegionOpt = None,
-    addressing: AddressingOpt = None,
+    config: ConfigOpt = None,
     all_: Annotated[bool, typer.Option("--all", help="Every dataset in the catalog.")] = False,
     signal: Annotated[
         list[str], typer.Option("--signal", "-s", help="Datasets with this signal. Repeatable.")
@@ -360,7 +328,7 @@ def download(
             _preview(dataset, options, include, limit)
         return
 
-    store = _store(dest, endpoint, region, addressing)
+    store = _store(dest, config)
     console.print(f"[bold]{len(datasets)} datasets[/] -> {store.uri}/{root}", highlight=False)
     console.print(f"[yellow]{_data_path(store)}[/]", highlight=False, soft_wrap=True)
     with download_progress() as progress:
@@ -527,9 +495,7 @@ def _describe(files: list[RemoteFile]) -> str:
 def check(
     dataset_id: Annotated[str, typer.Argument(help="Catalog id.")],
     dest: DestOpt = None,
-    endpoint: EndpointOpt = None,
-    region: RegionOpt = None,
-    addressing: AddressingOpt = None,
+    config: ConfigOpt = None,
     version: Annotated[str | None, typer.Option(help="The version to check.")] = None,
     latest: Annotated[
         bool, typer.Option("--latest", help="Check the newest downloaded version.")
@@ -545,7 +511,7 @@ def check(
     """Check that the downloaded files are all there, with the right size (and checksum)."""
     if (version is None) == (not latest):
         raise _fail("give either --version <version> or --latest")
-    store = _store(dest, endpoint, region, addressing)
+    store = _store(dest, config)
     versions = stored_versions(store, dataset_id, root)
     if version is None:
         if not versions:

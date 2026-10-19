@@ -223,10 +223,12 @@ def open_store(uri: str, s3: S3Settings | None = None) -> Store:
     parsed = urlparse(uri)
     if parsed.scheme == "s3":
         if s3 is None:
-            raise ValueError("an s3:// destination needs --endpoint, --region and --addressing")
+            raise ValueError(
+                "an s3:// destination needs S3Settings (endpoint, region, addressing, keys)"
+            )
         return S3Store(parsed.netloc, parsed.path, settings=s3)
     if s3 is not None:
-        raise ValueError("--endpoint, --region and --addressing apply to s3:// only")
+        raise ValueError("S3Settings apply to s3:// destinations only")
     if parsed.scheme in ("", "file"):
         return LocalStore(Path(parsed.path if parsed.scheme == "file" else uri))
     raise ValueError(f"unsupported store URI {uri!r}; use s3://bucket/prefix or a local path")

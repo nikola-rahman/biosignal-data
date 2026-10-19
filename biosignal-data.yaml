@@ -1,0 +1,9 @@
+# Settings that do not change between runs. Nothing has a default: every value is used as
+# written here. Keys are not stored here: set BIOSIGNAL_ACCESS_KEY_ID and
+# BIOSIGNAL_SECRET_ACCESS_KEY in the environment.
+
+# The S3 storage used for s3:// destinations (values from the provider's S3 guide).
+s3:
+  endpoint: https://s3.hippius.com
+  region: decentralized
+  addressing: path

@@ -94,7 +94,7 @@ def test_s3_settings_are_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("BIOSIGNAL_ACCESS_KEY_ID", raising=False)
     with pytest.raises(ValueError, match="BIOSIGNAL_ACCESS_KEY_ID"):
         S3Settings.from_env("https://s3.hippius.com", "decentralized", "path")
-    with pytest.raises(ValueError, match="--endpoint"):
+    with pytest.raises(ValueError, match="needs"):
         open_store("s3://bucket")
 
     monkeypatch.setenv("BIOSIGNAL_ACCESS_KEY_ID", "hip_key")
