@@ -32,6 +32,8 @@ class S3Config(_Section):
 class DownloadConfig(_Section):
     workers: int = Field(ge=1)  # parallel file downloads, shared by all datasets of a run
     parallel_datasets: int = Field(ge=1)  # datasets listed and copied at the same time
+    # All requests to physionet.org at the same time, over every dataset of a run.
+    physionet_website_connections: int = Field(ge=1)
 
 
 class StandardizeConfig(_Section):

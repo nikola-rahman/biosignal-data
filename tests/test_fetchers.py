@@ -23,6 +23,8 @@ from biosignal_data.ingest import ingest
 from biosignal_data.storage.stores import LocalStore
 from tests.conftest import make_dataset
 
+PHYSIONET = FetchOptions(physionet_website_connections=2)
+
 SUMS = (
     "8d8a5349fb16638ebbf649f1779d12e96d91b736b2aafe59db43719ae583d471 100.atr\n"
     "b2ea3c250e56e48f4b7b90697832b8ecd1afa1e0bb31f2dcfea4ed6e1075a639  sub/100.dat\n"
@@ -59,7 +61,7 @@ def test_physionet_lists_from_sha256sums_and_verifies(
         id="physionet/mitdb",
         source={"type": "physionet", "slug": "mitdb", "version": "1.0.0", "credentialed": True},
     )
-    report = ingest(dataset, store)
+    report = ingest(dataset, store, options=PHYSIONET)
     assert report.complete
     assert store.get_bytes("raw/physionet/mitdb/1.0.0/data/100.hea") == body
     assert store.exists("raw/physionet/mitdb/1.0.0/data/SHA256SUMS.txt")
@@ -85,14 +87,14 @@ def test_physionet_downloads_from_aws_mirror(
         dataset = make_dataset(
             id="physionet/mitdb", source={"type": "physionet", "slug": "mitdb", "version": "1.0.0"}
         )
-        listed = list(fetcher_for(dataset).list_files())
+        listed = list(fetcher_for(dataset, PHYSIONET).list_files())
         assert {f.path: f.size for f in listed} == {
             "100.hea": 6,
             "100.dat": 100,
             "SHA256SUMS.txt": len(sums),
         }
         assert all(f.url and f.url.startswith("s3://physionet-open/mitdb/1.0.0/") for f in listed)
-        report = ingest(dataset, store)
+        report = ingest(dataset, store, options=PHYSIONET)
     assert report.complete
     assert store.get_bytes("raw/physionet/mitdb/1.0.0/data/100.dat") == files["100.dat"]
 
@@ -114,7 +116,7 @@ def test_physionet_version_without_sha256sums_walks_the_folder_index(
         id="physionet/old",
         source={"type": "physionet", "slug": "old", "version": "1.0.0", "credentialed": True},
     )
-    files = list(fetcher_for(dataset).list_files())
+    files = list(fetcher_for(dataset, PHYSIONET).list_files())
     assert [(f.path, f.checksum) for f in files] == [("a.csv", None), ("training/A 01.mat", None)]
     assert files[1].url == f"{base}/training/A%2001.mat"
 
@@ -138,7 +140,7 @@ def test_physionet_uses_the_website_for_what_the_aws_copy_lacks(
         dataset = make_dataset(
             id="physionet/x", source={"type": "physionet", "slug": "x", "version": "1.0"}
         )
-        report = ingest(dataset, store)
+        report = ingest(dataset, store, options=PHYSIONET)
     assert report.complete and report.copied == 3
     assert store.get_bytes("raw/physionet/x/1.0/data/notes.shtml") == b"<html>"
 
@@ -152,7 +154,7 @@ def test_physionet_resolves_latest_version_from_redirect() -> None:
     )
     responses.get("https://physionet.org/content/ptb-xl/1.0.3/", body="ok")
     dataset = make_dataset(id="physionet/ptb-xl", source={"type": "physionet", "slug": "ptb-xl"})
-    assert fetcher_for(dataset).resolve_version().value == "1.0.3"
+    assert fetcher_for(dataset, PHYSIONET).resolve_version().value == "1.0.3"
 
 
 def test_physionet_credentialed_needs_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -162,7 +164,7 @@ def test_physionet_credentialed_needs_credentials(monkeypatch: pytest.MonkeyPatc
         source={"type": "physionet", "slug": "x", "version": "1", "credentialed": True},
     )
     with pytest.raises(FetchError, match="PHYSIONET_USERNAME"):
-        list(fetcher_for(dataset).list_files())
+        list(fetcher_for(dataset, PHYSIONET).list_files())
 
 
 @responses.activate
@@ -333,3 +335,23 @@ def test_figshare_connects_over_ipv4_only() -> None:
     ipv4_bind = ("0.0.0.0", 0)  # noqa: S104 - the bind address that forces IPv4
     assert adapter.poolmanager.connection_pool_kw["source_address"] == ipv4_bind
     assert "source_address" not in default.poolmanager.connection_pool_kw  # others unchanged
+
+
+def test_physionet_org_connections_are_limited_across_sessions() -> None:
+    from biosignal_data.fetchers.base import http_session, limit_host  # noqa: PLC0415
+
+    url = "https://physionet.org/files/x/1.0.0/a"
+    first = limit_host(http_session(), "https://physionet.org/", 2)
+    second = limit_host(http_session(("u", "p")), "https://physionet.org/", 2)
+    adapter = first.get_adapter(url)
+    assert adapter is second.get_adapter(url)  # one pool for the whole run
+    assert adapter._pool_maxsize == 2 and adapter._pool_block  # waits instead of opening more
+    assert first.get_adapter("https://example.org/") is not adapter
+
+
+def test_physionet_without_a_connection_limit_says_which_setting_is_missing() -> None:
+    dataset = make_dataset(
+        id="physionet/mitdb", source={"type": "physionet", "slug": "mitdb", "version": "1.0.0"}
+    )
+    with pytest.raises(FetchError, match="physionet_website_connections"):
+        fetcher_for(dataset)._session()

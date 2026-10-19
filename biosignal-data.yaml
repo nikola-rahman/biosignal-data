@@ -12,6 +12,8 @@ s3:
 download:
   workers: 16                  # parallel file downloads, shared by all datasets of a run
   parallel_datasets: 6         # datasets listed and copied at the same time
+  physionet_website_connections: 2  # all requests to physionet.org at once; it blocks a
+                               # server that opens many (16 did, on 2026-10-19)
 
 standardize:
   workers: 4                   # recordings converted at the same time

@@ -32,6 +32,7 @@ CONFIG = """
 download:
   workers: 2
   parallel_datasets: 2
+  physionet_website_connections: 1
 """
 
 

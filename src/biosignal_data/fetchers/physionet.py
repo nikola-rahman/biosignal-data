@@ -38,6 +38,7 @@ from biosignal_data.fetchers.base import (
     ResolvedVersion,
     http_opener,
     http_session,
+    limit_host,
     require_env,
 )
 from biosignal_data.fetchers.s3 import s3_client, s3_opener
@@ -79,7 +80,13 @@ class PhysioNetFetcher(Fetcher):
         if self.source.credentialed:
             user, password = require_env(*CREDENTIAL_VARS)
             auth = (user, password)
-        return http_session(auth)
+        limit = self.options.physionet_website_connections
+        if limit is None:
+            raise FetchError(
+                "physionet.org needs a connection limit: set download."
+                "physionet_website_connections in the config file"
+            )
+        return limit_host(http_session(auth), f"{BASE}/", limit)
 
     def check_access(self) -> None:
         if self.source.credentialed:

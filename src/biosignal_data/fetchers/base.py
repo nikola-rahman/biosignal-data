@@ -10,6 +10,7 @@ folder first and then behave like `LocalDirFetcher`.
 from __future__ import annotations
 
 import os
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
@@ -84,6 +85,7 @@ class FetchOptions:
     staging_dir: Path | None = None  # disk for sources whose tools write files first
     keep_staging: bool | None = None
     connections: int = 1  # parallel requests to one source: download.workers in the CLI
+    physionet_website_connections: int | None = None  # all requests to physionet.org at once
     from_dir: Path | None = None  # `import`: files downloaded by hand
     version: str | None = None  # `import`: the version label the user gives
 
@@ -133,6 +135,15 @@ class Fetcher(ABC):
 # --- helpers shared by HTTP-based fetchers --------------------------------------------------
 
 
+def _retry() -> Retry:
+    return Retry(
+        total=5,
+        backoff_factor=1.0,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=("GET", "HEAD", "POST"),
+    )
+
+
 def http_session(
     auth: tuple[str, str] | None = None, *, ipv4_only: bool = False
 ) -> requests.Session:
@@ -142,18 +153,32 @@ def http_session(
     session.headers["User-Agent"] = USER_AGENT
     if auth:
         session.auth = auth
-    retry = Retry(
-        total=5,
-        backoff_factor=1.0,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=("GET", "HEAD", "POST"),
-    )
     # One session serves all parallel downloads of a dataset: keep enough connections.
-    adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=64)
-    if ipv4_only:
-        adapter = _IPv4Adapter(max_retries=retry, pool_connections=4, pool_maxsize=64)
+    adapter_type = _IPv4Adapter if ipv4_only else HTTPAdapter
+    adapter = adapter_type(max_retries=_retry(), pool_connections=4, pool_maxsize=64)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
+    return session
+
+
+_host_limits: dict[tuple[str, int], HTTPAdapter] = {}
+_host_limits_lock = threading.Lock()
+
+
+def limit_host(session: requests.Session, prefix: str, connections: int) -> requests.Session:
+    """Let `session` open at most `connections` connections to URLs starting with `prefix`,
+    counted together with every other session of this process limited the same way. A
+    request waits while all are in use; a streamed download holds its connection until
+    its body is read. For sources that block clients opening many connections at once."""
+    with _host_limits_lock:
+        adapter = _host_limits.get((prefix, connections))
+        if adapter is None:
+            adapter = HTTPAdapter(
+                max_retries=_retry(), pool_connections=1, pool_maxsize=connections,
+                pool_block=True,
+            )  # fmt: skip
+            _host_limits[(prefix, connections)] = adapter
+    session.mount(prefix, adapter)
     return session
 
 

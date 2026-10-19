@@ -367,10 +367,12 @@ def download(
         staging_dir=staging.dir if staging else None,
         keep_staging=staging.keep if staging else None,
         connections=settings.workers,
+        physionet_website_connections=settings.physionet_website_connections,
     )
     console.print(
         f"settings from {cfg_path}: workers {settings.workers}, parallel_datasets "
-        f"{settings.parallel_datasets}",
+        f"{settings.parallel_datasets}, physionet_website_connections "
+        f"{settings.physionet_website_connections}",
         highlight=False,
         soft_wrap=True,
     )
