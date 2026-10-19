@@ -24,6 +24,7 @@ from s3transfer.subscribers import BaseSubscriber
 if TYPE_CHECKING:
     import zarr.abc.store
     from mypy_boto3_s3 import S3Client
+    from mypy_boto3_s3.type_defs import ObjectIdentifierTypeDef
 
 MiB = 1024 * 1024
 # Uploads read a stream, so every part is held in memory until S3 has it. The part size is
@@ -62,6 +63,7 @@ class Store(Protocol):
     def get_bytes(self, key: str) -> bytes | None: ...
     def open(self, key: str) -> BinaryIO: ...
     def delete(self, key: str) -> None: ...
+    def delete_many(self, keys: list[str]) -> None: ...
     def list(self, prefix: str) -> Iterator[str]: ...
     def sizes(self, prefix: str) -> dict[str, int]: ...
     def unfinished(self, prefix: str) -> tuple[Unfinished, ...]: ...
@@ -195,6 +197,22 @@ class S3Store:
     def delete(self, key: str) -> None:
         self.client.delete_object(Bucket=self.bucket, Key=self._key(key))
 
+    def delete_many(self, keys: list[str]) -> None:
+        """Up to 1,000 keys per request (the S3 limit); any key not deleted is an error."""
+        for start in range(0, len(keys), 1000):
+            batch: list[ObjectIdentifierTypeDef] = [
+                {"Key": self._key(k)} for k in keys[start : start + 1000]
+            ]
+            result = self.client.delete_objects(
+                Bucket=self.bucket, Delete={"Objects": batch, "Quiet": True}
+            )
+            if errors := result.get("Errors"):
+                first = errors[0]
+                raise OSError(
+                    f"{len(errors)} keys not deleted, e.g. {first.get('Key')}: "
+                    f"{first.get('Code')} {first.get('Message')}"
+                )
+
     def list(self, prefix: str) -> Iterator[str]:
         full = self._key(prefix)
         strip = len(self.prefix) + 1 if self.prefix else 0
@@ -304,6 +322,10 @@ class LocalStore:
 
     def delete(self, key: str) -> None:
         self._path(key).unlink(missing_ok=True)
+
+    def delete_many(self, keys: list[str]) -> None:
+        for key in keys:
+            self.delete(key)
 
     def list(self, prefix: str) -> Iterator[str]:
         base = self._path(prefix) if prefix else self.root

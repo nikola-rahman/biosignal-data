@@ -46,8 +46,8 @@ the specification.
 - **Shard:** as many chunks as fit in 64 MiB uncompressed. One shard is one S3 object.
 
 Array attributes repeat the channel names, units, scales and offsets, so an array can be
-read without the tables. The group metadata is consolidated, so opening a recording is one
-request.
+read without the tables. The metadata is not consolidated: consolidation is not part of the
+Zarr v3 specification. Opening one array of a recording is two small requests.
 
 ## Formats
 

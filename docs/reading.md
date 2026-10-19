@@ -57,3 +57,22 @@ ds.local_paths("**/*.tsv")  # BIDS sidecars at every level
 ds.local_paths("sub-01/**")  # one subject's recordings
 raw = read_bids(ds.local_root, subject="01", task="rest", datatype="eeg")
 ```
+
+## Read the standard layer
+
+```python
+from biosignal_data.read import StandardDataset
+
+ds = StandardDataset.open("s3://my-bucket", "physionet/mitdb", "latest", s3=s3)
+ds.recordings.to_pandas()  # one row per recording: start, duration, arrays, raw files
+ds.channels.to_pandas()  # name, unit, sampling rate, scale, offset per channel
+ds.events.to_pandas()  # annotations: onset, duration, label, text
+
+group = ds.signals("100")  # zarr.Group, read from the store as needed
+group["360Hz"].shape  # (channels, samples), the stored integers
+window = ds.window("100", "360Hz", start_s=600.0, duration_s=30.0)  # physical units
+```
+
+Only the chunks a window needs are read. `physical=False` gives the stored integers. In
+physical units, samples stored as the channel's invalid value and channels without a scale
+are NaN. The format is described in [standard-layer.md](standard-layer.md).

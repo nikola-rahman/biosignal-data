@@ -83,6 +83,11 @@ def test_s3_store_roundtrip_including_multipart(s3_store: S3Store) -> None:
     assert list(s3_store.list("raw/x/")) == ["raw/x/1/data/big.bin"]
     s3_store.delete("raw/x/1/data/big.bin")
     assert not s3_store.exists("raw/x/1/data/big.bin")
+    keys = [f"raw/x/1/data/{i}" for i in range(1005)]  # more than one request
+    for key in keys:
+        s3_store.put_bytes(key, b"x")
+    s3_store.delete_many(keys)
+    assert list(s3_store.list("raw/x/")) == []
 
 
 @pytest.mark.parametrize("size", [None, 1, 3 * 1024 * 1024 * 1024 * 1024])

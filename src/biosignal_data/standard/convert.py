@@ -35,7 +35,7 @@ from pydantic import BaseModel, ConfigDict
 from biosignal_data import __version__
 from biosignal_data.read.raw import RawDataset
 from biosignal_data.standard import arrays, tables
-from biosignal_data.standard.discover import Discovery, Unit, discover
+from biosignal_data.standard.discover import Discovery, Unit, discover, may_be_annotations
 from biosignal_data.standard.layout import DONE, TABLES, StandardLocation
 from biosignal_data.standard.sources import (
     EdfSource,
@@ -333,9 +333,12 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
     used = set(plan.discovery.lists) | {p for done, _ in loaded for p in done["used"]}
     skipped = {n["path"]: n["reason"] for done, _ in loaded for n in done["not_converted"]}
     has_records = any(posixpath.basename(p) == "RECORDS" for p in plan.discovery.lists)
+    records = {u.path for u in plan.units}
     for entry in plan.raw.files:
         if entry.path not in used and entry.path not in skipped:
-            skipped[entry.path] = _leftover_reason(entry.path, has_records)
+            skipped[entry.path] = _leftover_reason(
+                entry.path, has_records, records, plan.discovery.annotators
+            )
     manifest = StandardManifest(
         dataset_id=location.dataset_id,
         raw_version=location.version,
@@ -354,14 +357,20 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
     )
     store.put_bytes(location.manifest_key, manifest.model_dump_json(indent=2).encode())
     store.put_bytes(location.success_key, b"", content_type="text/plain")
-    for key in list(store.list(location.parts_prefix)):
-        store.delete(key)
+    store.delete_many(list(store.list(location.parts_prefix)))
     return manifest
 
 
-def _leftover_reason(path: str, has_records: bool) -> str:
+def _leftover_reason(
+    path: str, has_records: bool, records: set[str], annotators: frozenset[str]
+) -> str:
     name = posixpath.basename(path)
-    ext = name.rpartition(".")[2].lower() if "." in name else ""
+    stem, _, ext = path.rpartition(".") if "." in name else (path, "", "")
+    if annotators and stem in records and may_be_annotations(ext):
+        return f"WFDB annotator {ext!r} is not listed in ANNOTATORS"
+    if ext in annotators:
+        return "WFDB annotation file of no converted record"
+    ext = ext.lower()
     if ext == "hea":
         return "WFDB header of no converted record (e.g. a segment of a multi-segment record)"
     if ext in ("dat", "mat") and has_records:

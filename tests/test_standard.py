@@ -82,6 +82,9 @@ def raw(store: LocalStore, tmp_path: Path) -> dict[str, np.ndarray]:
         "m1_1.hea": b"m1_1 1 100 100\nm1_1.dat 16 200 16 0 0 0 0 I\n",
         "m1_1.dat": b"\x00" * 200,
         "notes.csv": b"a,b\n1,2\n",
+        "r1.at_": files["r1.atr"],  # an annotator not in ANNOTATORS
+        "r0.atr": files["r1.atr"],  # annotations of a record that is not there
+        "r1.xws": b"wave settings",
     }
     dataset = make_dataset(id="physionet/mitdb")
     ingest(dataset, store, fetcher=FakeFetcher(dataset, files), workers=2)
@@ -148,6 +151,9 @@ def test_standard_version_is_exact_and_accounts_for_every_file(
     assert reasons["m1.hea"].startswith("multi-segment WFDB record")
     assert reasons["m1_1.hea"].startswith("WFDB header of no converted record")
     assert reasons["notes.csv"] == "no reader for .csv files"
+    assert reasons["r1.at_"] == "WFDB annotator 'at_' is not listed in ANNOTATORS"
+    assert reasons["r0.atr"] == "WFDB annotation file of no converted record"
+    assert reasons["r1.xws"] == "no reader for .xws files"
     assert "r1.dat" not in reasons and "RECORDS" not in reasons
     assert store.exists(f"{prefix}/_SUCCESS")
     assert not list(store.list(f"{prefix}/_parts/"))
@@ -228,4 +234,22 @@ def test_cli_dry_run_then_convert_then_already(
     assert done.exit_code == 0, done.output
     assert "2 recordings, 4 channels, 3 events" in done.output
     assert "not converted: 1 file: no reader for .csv files" in done.output
+    assert "ZarrUserWarning" not in done.output
     assert "already complete" in runner.invoke(app, args).output
+
+
+def test_reader_opens_tables_and_reads_windows_in_physical_units(
+    store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
+) -> None:
+    from biosignal_data.read import StandardDataset  # noqa: PLC0415
+
+    convert(plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2,
+            work_dir=tmp_path / "work")  # fmt: skip
+    ds = StandardDataset.open(store, "physionet/mitdb", "latest")
+    assert ds.location.version == "1.0.0"
+    assert ds.recordings.num_rows == 2 and ds.manifest.recordings == 2
+    stored = ds.window("r1", "200Hz", 1.0, 0.5, physical=False)
+    np.testing.assert_array_equal(stored, raw["ecg"][None, 200:300])
+    physical = ds.window("r1", "200Hz", 1.0, 0.5)
+    np.testing.assert_allclose(physical, (raw["ecg"][None, 200:300] - 5) / 200)
+    assert np.isnan(ds.window("r1", "100Hz", 0.0, 1.0)).all()  # not calibrated

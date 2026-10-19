@@ -20,7 +20,8 @@ from typing import Literal
 
 EDF_SUFFIXES = (".edf", ".bdf")
 LISTS = ("RECORDS", "ANNOTATORS")
-# Extensions that are never WFDB annotation files: signals, documents, tables, images, code.
+# Extensions that are never WFDB annotation files: signals, documents, tables, images, code,
+# WAVE settings (.xws).
 NOT_ANNOTATIONS = frozenset(
     {
         "hea", "dat", "mat", "edf", "bdf", "rec", "txt", "csv", "tsv", "json", "xml", "html",
@@ -29,7 +30,7 @@ NOT_ANNOTATIONS = frozenset(
         "h5", "hdf5", "nwb", "xls", "xlsx", "doc", "docx", "ppt", "pptx", "wav", "mp3", "mp4",
         "avi", "m", "py", "c", "h", "sh", "r", "ipynb", "log", "ini", "cfg", "yaml", "yml",
         "sha256", "md5", "sig", "asc", "dcm", "fif", "set", "fdt", "vhdr", "vmrk", "eeg",
-        "cnt", "gdf", "xdf",
+        "cnt", "gdf", "xdf", "xws",
     }
 )  # fmt: skip
 _EXTENSION = re.compile(r"^[A-Za-z0-9_]{1,16}$")
@@ -50,6 +51,7 @@ class Unit:
 class Discovery:
     units: list[Unit]
     lists: list[str]  # the RECORDS and ANNOTATORS files read
+    annotators: frozenset[str]  # from ANNOTATORS; empty if there is none
     problems: list[str]  # e.g. a RECORDS entry without files
 
 
@@ -88,13 +90,13 @@ def discover(paths: Iterable[str], read_text: Callable[[str], str]) -> Discovery
         else:
             problems.append(f"{name}: listed in RECORDS, but no such header or EDF file")
             continue
-        is_annotator = annotators.__contains__ if annotators else _may_be_annotations
+        is_annotator = annotators.__contains__ if annotators else may_be_annotations
         found = tuple(sorted(f"{name}.{ext}" for ext in by_stem.get(name, ()) if is_annotator(ext)))
         unit = Unit(unit.id, unit.format, unit.path, found, unit.listed_annotators)
         if unit.id in units:
             raise ValueError(f"two recordings would get the id {unit.id!r}: rename one source")
         units[unit.id] = unit
-    return Discovery(list(units.values()), lists, problems)
+    return Discovery(list(units.values()), lists, frozenset(annotators), problems)
 
 
 def _files_by_stem(paths: set[str]) -> dict[str, set[str]]:
@@ -107,5 +109,5 @@ def _files_by_stem(paths: set[str]) -> dict[str, set[str]]:
     return found
 
 
-def _may_be_annotations(ext: str) -> bool:
+def may_be_annotations(ext: str) -> bool:
     return bool(_EXTENSION.match(ext)) and ext.lower() not in NOT_ANNOTATIONS

@@ -95,7 +95,6 @@ def write_signals(source: Source, store: zarr.abc.store.Store, attributes: dict[
             array[:, start:stop] = data
             if not np.array_equal(array[:, start:stop], data):
                 raise MismatchError(f"{group.name} {start}:{stop}: read back differs from source")
-    zarr.consolidate_metadata(store)
 
 
 def _whole_steps(n: int, step: int) -> int:
