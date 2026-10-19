@@ -10955,20 +10955,26 @@ Notes:
 | | |
 | --- | --- |
 | Signals | fnirs |
-| Access | Open: anonymous download |
+| Access | Unavailable: known, but not obtainable |
 | License | CC0 |
-| Source | openneuro |
+| Source | unavailable |
 | Subjects | 17 |
 | Homepage | <https://openneuro.org/datasets/ds006903> |
 | Download tested | not yet |
+
+**Before downloading**
+
+1. Deleted by OpenNeuro as a duplicate; use openneuro/ds006673.
 
 ```bash
 biosignal-data download openneuro/ds006903 --dest s3://<bucket>
 ```
 
+Related: [`openneuro/ds006673`](openneuro/ds006673.md)
+
 Notes:
 
-- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+- Deleted by OpenNeuro: "Dataset ds006903 has been deleted. Reason: duplicate dataset", with a redirect to ds006673 (checked 2026-10-19). First taken from the EEGDash catalog; edited by hand since, so the EEGDash import leaves it alone.
 
 ## Auditory Naming EC
 

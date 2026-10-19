@@ -7,30 +7,28 @@
 | ID | `kuleuven/seizeit1` |
 | Repository | [kuleuven](../kuleuven.md) |
 | Signals | eeg |
-| Access | Application: a request that someone reviews |
+| Access | Unavailable: known, but not obtainable |
 | License | _unknown (to be filled)_ |
 | Subjects | 82 |
 | Recordings | _unknown (to be filled)_ |
 | Hours | 4,000 (estimated) |
 | Size | _unknown (to be filled)_ |
-| Source type | manual |
+| Source type | unavailable |
 | Download tested | not yet |
 
 ## Access
 
-Application: a request that someone reviews. You must send a request (for example a form, a data use agreement or a fee). A person at the provider reviews it before you get access.
+Unavailable: known, but not obtainable. The dataset is known, but you cannot get it now (for example, it is private or the provider no longer gives it out).
 
 ## Links
 
 - Homepage: <https://rdr.kuleuven.be/dataset.xhtml?persistentId=doi:10.48804/P5Q0OJ>
-- Download page: _unknown (to be filled)_
 - References:
   - <https://doi.org/10.1111/epi.16470>
 
 ## Before downloading
 
-1. Request access through the provider's form and wait for approval.
-2. Download all files into one folder, keeping the provider's folder structure.
+1. No longer shared (its ethical approval expired); use SeizeIT2, openneuro/ds005873.
 
 ## Credentials
 
@@ -38,16 +36,17 @@ None. The tool reads no credentials for it.
 
 ## Get the data
 
-Download the files into a folder as the steps above say, then import the folder:
+You cannot get this dataset now. If you get the files, the command is:
 
 ```bash
-biosignal-data import kuleuven/seizeit1 <folder you downloaded into> --version <label> --dest s3://<bucket>
+biosignal-data download kuleuven/seizeit1 --dest s3://<bucket>
 ```
 
 ## Related datasets
 
-None.
+- [`openneuro/ds005873`](../openneuro/ds005873.md)
 
 ## Notes
 
 - Hours not verified.
+- No longer shared: "The SeizeIT1 dataset will no longer be shared upon request due to expiry of the ethical approval" (KU Leuven RDR, checked 2026-10-19). The provider points to SeizeIT2 instead, which is openneuro/ds005873.

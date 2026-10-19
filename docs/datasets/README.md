@@ -6,11 +6,11 @@
 
 | Access | Datasets |
 | --- | --- |
-| Open: anonymous download | 803 |
+| Open: anonymous download | 802 |
 | Registration: free account, token or license click-through | 18 |
-| Application: a request that someone reviews | 37 |
+| Application: a request that someone reviews | 36 |
 | Credentialed: approval plus training or identity checks | 7 |
-| Unavailable: known, but not obtainable | 8 |
+| Unavailable: known, but not obtainable | 10 |
 
 | Repository | Datasets | Source types |
 | --- | --- | --- |
@@ -49,7 +49,7 @@
 | [isip](isip.md) | 7 | rsync |
 | [isr-uc](isr-uc.md) | 1 | manual |
 | [kaggle](kaggle.md) | 6 | kaggle |
-| [kuleuven](kuleuven.md) | 1 | manual |
+| [kuleuven](kuleuven.md) | 1 | unavailable |
 | [mayo-fnusa](mayo-fnusa.md) | 1 | manual |
 | [meta](meta.md) | 4 | http, unavailable |
 | [mindbigdata](mindbigdata.md) | 1 | manual |
@@ -60,7 +60,7 @@
 | [nmt](nmt.md) | 1 | manual |
 | [nsrr](nsrr.md) | 15 | nsrr |
 | [omega](omega.md) | 1 | manual |
-| [openneuro](openneuro.md) | 550 | openneuro |
+| [openneuro](openneuro.md) | 550 | openneuro, unavailable |
 | [oxford](oxford.md) | 1 | manual |
 | [penn](penn.md) | 1 | manual |
 | [physionet](physionet.md) | 48 | physionet |
@@ -142,7 +142,7 @@
 | [Melbourne University AES/MathWorks/NIH Seizure Prediction](kaggle/melbourne-university-seizure-prediction.md) | `kaggle/melbourne-university-seizure-prediction` | ieeg | registration |
 | [UPenn and Mayo Clinic's Seizure Detection Challenge](kaggle/seizure-detection.md) | `kaggle/seizure-detection` | ieeg | registration |
 | [American Epilepsy Society Seizure Prediction Challenge](kaggle/seizure-prediction.md) | `kaggle/seizure-prediction` | ieeg | registration |
-| [SeizeIT1](kuleuven/seizeit1.md) | `kuleuven/seizeit1` | eeg | application |
+| [SeizeIT1](kuleuven/seizeit1.md) | `kuleuven/seizeit1` | eeg | unavailable |
 | [Mayo/FNUSA multicenter intracranial EEG](mayo-fnusa/multicenter-ieeg.md) | `mayo-fnusa/multicenter-ieeg` | ieeg | open |
 | [emg2pose: sEMG hand pose estimation](meta/emg2pose.md) | `meta/emg2pose` | emg, pose | open |
 | [emg2qwerty: sEMG touch typing](meta/emg2qwerty.md) | `meta/emg2qwerty` | emg | open |
@@ -825,7 +825,7 @@ Imagery](openneuro/ds005815.md) | `openneuro/ds005815` | eeg | open |
 | [Longitudinal Multitask Wireless ECoG Data from Two Fully Implanted Macaca fuscata](openneuro/ds006890.md) | `openneuro/ds006890` | ieeg | open |
 | [No effect of rhythmic visual stimulation on experimental pain perception](openneuro/ds006897.md) | `openneuro/ds006897` | eeg | open |
 | [Profound neuronal differences during Exercise-Induced Hypoalgesia between athletes and non-athletes revealed by functional near-infrared spectroscopy](openneuro/ds006902.md) | `openneuro/ds006902` | fnirs | open |
-| [ball_squeeze_2025](openneuro/ds006903.md) | `openneuro/ds006903` | fnirs | open |
+| [ball_squeeze_2025](openneuro/ds006903.md) | `openneuro/ds006903` | fnirs | unavailable |
 | [Auditory Naming EC](openneuro/ds006910.md) | `openneuro/ds006910` | ieeg | open |
 | [Visual Naming EC](openneuro/ds006914.md) | `openneuro/ds006914` | ieeg | open |
 | [High Density Resting State EEG of Phantom Limb Pain and Controls](openneuro/ds006921.md) | `openneuro/ds006921` | eeg | open |

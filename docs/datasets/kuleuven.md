@@ -11,9 +11,9 @@
 | | |
 | --- | --- |
 | Signals | eeg |
-| Access | Application: a request that someone reviews |
+| Access | Unavailable: known, but not obtainable |
 | License | see homepage |
-| Source | manual |
+| Source | unavailable |
 | Subjects | 82 |
 | Hours | ~4,000 |
 | Homepage | <https://rdr.kuleuven.be/dataset.xhtml?persistentId=doi:10.48804/P5Q0OJ> |
@@ -21,13 +21,15 @@
 
 **Before downloading**
 
-1. Request access through the provider's form and wait for approval.
-2. Download all files into one folder, keeping the provider's folder structure.
+1. No longer shared (its ethical approval expired); use SeizeIT2, openneuro/ds005873.
 
 ```bash
-biosignal-data import kuleuven/seizeit1 <folder you downloaded into> --version <label> --dest s3://<bucket>
+biosignal-data download kuleuven/seizeit1 --dest s3://<bucket>
 ```
+
+Related: [`openneuro/ds005873`](openneuro/ds005873.md)
 
 Notes:
 
 - Hours not verified.
+- No longer shared: "The SeizeIT1 dataset will no longer be shared upon request due to expiry of the ethical approval" (KU Leuven RDR, checked 2026-10-19). The provider points to SeizeIT2 instead, which is openneuro/ds005873.

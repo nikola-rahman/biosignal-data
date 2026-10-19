@@ -958,10 +958,9 @@ datasets:
   signals:
   - eeg
   access:
-    tier: application
+    tier: unavailable
     steps:
-    - Request access through the provider's form and wait for approval.
-    - Download all files into one folder, keeping the provider's folder structure.
+    - No longer shared (its ethical approval expired); use SeizeIT2, openneuro/ds005873.
   homepage: https://rdr.kuleuven.be/dataset.xhtml?persistentId=doi:10.48804/P5Q0OJ
   references:
   - https://doi.org/10.1111/epi.16470
@@ -969,8 +968,13 @@ datasets:
     subjects: 82
     hours: 4000.0
     hours_estimated: true
+  related:
+  - openneuro/ds005873
   notes:
   - Hours not verified.
+  - 'No longer shared: "The SeizeIT1 dataset will no longer be shared upon request due to
+    expiry of the ethical approval" (KU Leuven RDR, checked 2026-10-19). The provider points
+    to SeizeIT2 instead, which is openneuro/ds005873.'
 - id: mayo-fnusa/multicenter-ieeg
   name: Mayo/FNUSA multicenter intracranial EEG
   signals:
@@ -11638,7 +11642,9 @@ datasets:
   signals:
   - fnirs
   access:
-    tier: open
+    tier: unavailable
+    steps:
+    - Deleted by OpenNeuro as a duplicate; use openneuro/ds006673.
   homepage: https://openneuro.org/datasets/ds006903
   references:
   - https://doi.org/10.18112/openneuro.ds006903.v1.0.0
@@ -11646,8 +11652,12 @@ datasets:
     subjects: 17
     recordings: 67
     size_bytes: 5826262353
+  related:
+  - openneuro/ds006673
   notes:
-  - Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+  - 'Deleted by OpenNeuro: "Dataset ds006903 has been deleted. Reason: duplicate dataset",
+    with a redirect to ds006673 (checked 2026-10-19). First taken from the EEGDash catalog;
+    edited by hand since, so the EEGDash import leaves it alone.'
 - id: openneuro/ds006910
   name: Auditory Naming EC
   signals:

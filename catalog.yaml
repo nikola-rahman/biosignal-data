@@ -283,7 +283,8 @@ datasets:
     ref: seizure-prediction
 - id: kuleuven/seizeit1
   source:
-    type: manual
+    type: unavailable
+    url: https://rdr.kuleuven.be/dataset.xhtml?persistentId=doi:10.48804/P5Q0OJ
 - id: mayo-fnusa/multicenter-ieeg
   source:
     type: manual
@@ -3654,8 +3655,8 @@ datasets:
   license: CC0
 - id: openneuro/ds006903
   source:
-    type: openneuro
-    accession: ds006903
+    type: unavailable
+    url: https://openneuro.org/datasets/ds006673
   license: CC0
 - id: openneuro/ds006910
   source:
