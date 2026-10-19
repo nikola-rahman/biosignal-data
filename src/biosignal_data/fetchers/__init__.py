@@ -18,6 +18,7 @@ from biosignal_data.fetchers.base import (
     LocalDirFetcher,
     ManualDownloadError,
     MissingCredentialsError,
+    NoRecordingsError,
     RemoteFile,
     ResolvedVersion,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "Fetcher",
     "ManualDownloadError",
     "MissingCredentialsError",
+    "NoRecordingsError",
     "RemoteFile",
     "ResolvedVersion",
     "fetcher_for",

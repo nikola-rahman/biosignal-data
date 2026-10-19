@@ -24,7 +24,13 @@ from typing import Protocol
 
 from biosignal_data import __version__
 from biosignal_data.catalog.models import Dataset
-from biosignal_data.fetchers import FetchError, FetchOptions, RemoteFile, fetcher_for
+from biosignal_data.fetchers import (
+    FetchError,
+    FetchOptions,
+    NoRecordingsError,
+    RemoteFile,
+    fetcher_for,
+)
 from biosignal_data.fetchers.base import Fetcher, ResolvedVersion
 from biosignal_data.read.raw import stored_versions
 from biosignal_data.selection import Selection, select
@@ -407,6 +413,11 @@ def _ingest(
     selected = [by_path[p] for p in selection.paths]
     report.subset = len(selected) < len(files)
     report.recordings = len(selection.recordings)
+    if (include or limit is not None) and not selection.recordings:
+        raise NoRecordingsError(
+            f"{dataset.id} {version.value}: the source holds no recordings among its "
+            f"{plural(len(files), 'file')} (only metadata), so there is no subset to copy"
+        )
     todo, report.skipped = _plan(selected, done, store, location)
     log.info(
         "%s %s: %s (%s) selected of %s; %s to copy",

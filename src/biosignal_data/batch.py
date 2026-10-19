@@ -24,6 +24,7 @@ from biosignal_data.fetchers import (
     FetchOptions,
     ManualDownloadError,
     MissingCredentialsError,
+    NoRecordingsError,
 )
 from biosignal_data.ingest import AlreadyComplete, IngestProgress, IngestReport, ingest
 from biosignal_data.storage.stores import Store
@@ -37,6 +38,7 @@ Status = Literal[
     "restricted",  # the source holds the files back (embargo, request needed)
     "manual",  # must be downloaded by hand, then --from-dir
     "unavailable",  # the catalog says there is no way to get it
+    "no-recordings",  # a subset was asked for, but the source holds no recordings
     "failed",  # an error before copying (listing, network, ...)
 ]
 DONE: frozenset[Status] = frozenset({"complete", "subset", "already"})
@@ -96,6 +98,8 @@ def download_many(
             return Outcome(dataset, "credentials", message=str(exc))
         except AccessRestrictedError as exc:
             return Outcome(dataset, "restricted", message=str(exc))
+        except NoRecordingsError as exc:
+            return Outcome(dataset, "no-recordings", message=str(exc))
         except ManualDownloadError as exc:
             return Outcome(dataset, "manual", message=str(exc))
         except (FetchError, OSError, RuntimeError, ValueError) as exc:

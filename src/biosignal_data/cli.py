@@ -432,6 +432,7 @@ _OUTCOME_STYLE = {
     "incomplete": ("✗", "red"),
     "credentials": ("!", "yellow"),
     "restricted": ("!", "yellow"),
+    "no-recordings": ("✗", "red"),
     "manual": ("!", "yellow"),
     "unavailable": ("!", "yellow"),
     "failed": ("✗", "red"),
@@ -455,6 +456,7 @@ def _print_outcome(outcome: Outcome) -> None:
             "already": "skipped, already complete",
             "credentials": "skipped, needs credentials",
             "restricted": "skipped, access restricted by the source",
+            "no-recordings": "no recordings found",
             "manual": "skipped, download by hand",
             "unavailable": "skipped, not available",
             "failed": "failed",
@@ -470,7 +472,7 @@ def _print_summary(outcomes: list[Outcome]) -> None:
     _warn_untested(outcomes)
     done = sum(len(by_status.get(s, [])) for s in DONE)
     action = sum(len(by_status.get(s, [])) for s in NEEDS_ACTION)
-    failed = len(by_status.get("failed", [])) + len(by_status.get("incomplete", []))
+    failed = sum(len(by_status.get(s, [])) for s in ("failed", "incomplete", "no-recordings"))
     console.print(
         f"\n[bold]Done:[/] {done} copied · [yellow]{action} need your action[/] · "
         f"[red]{failed} failed[/]",
@@ -482,6 +484,7 @@ def _print_summary(outcomes: list[Outcome]) -> None:
         ("Access restricted by the source (request access on its page)", "restricted"),
         ("Download by hand, then `biosignal-data import`", "manual"),
         ("Not available", "unavailable"),
+        ("No recordings at the source (only metadata)", "no-recordings"),
         ("Failed", "failed"),
         ("Incomplete, some files failed (run again to retry)", "incomplete"),
     ]
@@ -489,7 +492,7 @@ def _print_summary(outcomes: list[Outcome]) -> None:
         items = by_status.get(status, [])
         if not items:
             continue
-        color = "red" if status in ("failed", "incomplete") else "yellow"
+        color = "red" if status in ("failed", "incomplete", "no-recordings") else "yellow"
         console.print(f"[{color}]{title}:[/] {len(items)}", highlight=False)
         for o in sorted(items, key=lambda o: o.dataset.id):
             detail = (

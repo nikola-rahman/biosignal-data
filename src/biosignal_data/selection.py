@@ -37,6 +37,8 @@ SIGNAL_SUFFIXES = frozenset(
 DIRECTORY_SUFFIXES = frozenset({".ds", ".mefd", ".mff"})
 METADATA_SUFFIXES = frozenset({".json", ".tsv", ".txt", ".csv", ".md", ".rst", ".pdf", ".xml"})
 COMPRESSION_SUFFIXES = frozenset({".gz", ".bz2", ".xz", ".zst"})
+# Top-level folders of processed or supporting data (BIDS and common practice).
+SECONDARY_FOLDERS = frozenset({"derivatives", "sourcedata", "code", "stimuli"})
 
 
 @dataclass(frozen=True)
@@ -104,14 +106,39 @@ def _group_key(path: str) -> tuple[str, str]:
     return folder, stem
 
 
+def _is_compressed_table(name: str) -> bool:
+    """`x_physio.tsv.gz`, `x.csv.gz`: in BIDS and elsewhere, compressed tables hold
+    continuous data (physiology, stimulus channels), never sidecar metadata."""
+    base, ext = posixpath.splitext(name)
+    return ext.lower() in COMPRESSION_SUFFIXES and posixpath.splitext(base)[1].lower() in (
+        ".tsv",
+        ".csv",
+    )
+
+
+def _is_hidden(path: str) -> bool:
+    """Inside a hidden folder or a hidden file (.datalad/, .git/, ...): never a recording."""
+    return any(part.startswith(".") for part in path.split("/"))
+
+
+def _is_secondary(path: str) -> bool:
+    """Processed or supporting data: recordings there come after the raw ones."""
+    return path.split("/", 1)[0] in SECONDARY_FOLDERS
+
+
 def _is_signal(path: str) -> bool:
-    if _unit(path) != path:
+    if _is_hidden(path):
+        return False
+    if _unit(path) != path or _is_compressed_table(posixpath.basename(path)):
         return True
     return _suffix_and_stem(posixpath.basename(path))[0] in SIGNAL_SUFFIXES
 
 
 def _is_metadata(path: str) -> bool:
-    suffix, _ = _suffix_and_stem(posixpath.basename(path))
+    name = posixpath.basename(path)
+    if _is_compressed_table(name):
+        return False
+    suffix, _ = _suffix_and_stem(name)
     return suffix in METADATA_SUFFIXES or suffix == ""
 
 
@@ -126,9 +153,16 @@ def recordings_of(paths: Sequence[str]) -> list[list[str]]:
         groups.setdefault(_group_key(path), []).append(path)
     recordings = sorted(
         (members for members in groups.values() if any(_is_signal(p) for p in members)),
-        key=lambda members: min(p for p in members if _is_signal(p)),
+        key=lambda members: (
+            _is_secondary(first := min(p for p in members if _is_signal(p))),
+            first,
+        ),
     )
-    return recordings or [[p] for p in paths if not _is_metadata(p)] or [[p] for p in paths]
+    if recordings:
+        return recordings
+    # No known signal format: each data file (not metadata, not hidden) is one recording.
+    # A dataset of metadata only has no recordings at all.
+    return [[p] for p in paths if not _is_metadata(p) and not _is_hidden(p)]
 
 
 def select(

@@ -84,3 +84,31 @@ def test_unknown_formats_count_each_data_file() -> None:
 def test_compressed_signal_files() -> None:
     files = ["a.edf.gz", "a.txt", "b.edf.gz"]
     assert select(files, limit=1).paths == ["a.edf.gz", "a.txt"]
+
+
+def test_hidden_files_are_never_recordings() -> None:
+    files = [".datalad/config", ".gitattributes", "README", "sub-1/eeg/sub-1_task-a_eeg.edf"]
+    assert select(files, limit=1).recordings == [["sub-1/eeg/sub-1_task-a_eeg.edf"]]
+
+
+def test_raw_recordings_come_before_derivatives() -> None:
+    files = [
+        "derivatives/db.mat",
+        "sub-1/eeg/sub-1_task-a_eeg.set",
+        "sub-1/eeg/sub-1_task-a_eeg.fdt",
+    ]
+    first = select(files, limit=1).recordings[0]
+    assert first == ["sub-1/eeg/sub-1_task-a_eeg.fdt", "sub-1/eeg/sub-1_task-a_eeg.set"]
+
+
+def test_compressed_tables_are_data() -> None:
+    files = ["sub-1/sub-1_task-a_physio.tsv.gz", "sub-1/sub-1_task-a_physio.json", "README"]
+    selection = select(files, limit=1)
+    assert selection.recordings == [
+        ["sub-1/sub-1_task-a_physio.json", "sub-1/sub-1_task-a_physio.tsv.gz"]
+    ]
+
+
+def test_metadata_only_has_no_recordings() -> None:
+    files = [".datalad/config", "README", "sub-1/eeg/sub-1_task-a_channels.tsv"]
+    assert select(files, limit=1).recordings == []

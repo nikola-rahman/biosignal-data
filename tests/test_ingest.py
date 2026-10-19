@@ -219,3 +219,12 @@ def test_stop_ends_copies_and_keeps_what_is_finished(store: LocalStore) -> None:
     assert not report.complete and set(report.failed) == set(FILES)
     assert all("stopped" in reason for reason in report.failed.values())
     assert store.unfinished("raw") == ()  # no temporary files are left behind
+
+
+def test_subset_of_a_metadata_only_source_is_reported(store: LocalStore) -> None:
+    from biosignal_data.fetchers import NoRecordingsError  # noqa: PLC0415
+
+    dataset = make_dataset()
+    only_metadata = {"README": b"r", "sub-1/eeg/sub-1_channels.tsv": b"t"}
+    with pytest.raises(NoRecordingsError, match="no recordings"):
+        ingest(dataset, store, fetcher=FakeFetcher(dataset, only_metadata), limit=1)
