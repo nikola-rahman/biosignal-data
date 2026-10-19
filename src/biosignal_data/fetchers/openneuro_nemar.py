@@ -59,7 +59,7 @@ class OpenNeuroFetcher(Fetcher):
             raise FetchError(
                 f"{self.dataset.id}: snapshot {wanted} requested, but OpenNeuro's S3 bucket "
                 f"serves only the latest ({self._latest}). Get {wanted} with DataLad, then "
-                "ingest it with --from-dir and --version."
+                f"run `biosignal-data import {self.dataset.id} <folder> --version {wanted}`."
             )
         return ResolvedVersion(self._latest, "source")
 

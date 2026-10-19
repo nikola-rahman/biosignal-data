@@ -301,21 +301,6 @@ def _copy_all(
     checkpoint(force=True)
 
 
-def _check_pinning(dataset: Dataset, version: ResolvedVersion, policy: str | None) -> None:
-    """A version the catalog does not pin is used only if the config says so."""
-    if version.origin == "user" or dataset.pinned_version:
-        return
-    if policy is None:
-        raise FetchError(
-            f"{dataset.id}: no version pinned in the catalog; set download.unpinned_version "
-            "in the config file (latest or fail)"
-        )
-    if policy == "fail":
-        raise FetchError(
-            f"{dataset.id}: no version pinned in the catalog (download.unpinned_version: fail)"
-        )
-
-
 def _continue_dated_version(
     dataset: Dataset, store: Store, root: str, version: ResolvedVersion
 ) -> ResolvedVersion:
@@ -349,15 +334,13 @@ def _warn_implicit(
     d = dataset.id
     if version.origin == "retrieval-date":
         log.warning(
-            "%s: the source has no versions; labelling this download with today's date %s "
-            "(download.unpinned_version: latest)",
+            "%s: the source has no versions; labelling this download with today's date %s",
             d,
             version.value,
         )
     elif version.origin == "source" and not dataset.pinned_version:
         log.warning(
-            "%s: no version pinned in the catalog; using the latest, %s "
-            "(download.unpinned_version: latest)",
+            "%s: no version pinned in the catalog; using the latest, %s",
             d,
             version.value,
         )
@@ -406,7 +389,6 @@ def _ingest(
     stop: threading.Event | None,
 ) -> IngestReport:
     version = fetcher.resolve_version()
-    _check_pinning(dataset, version, fetcher.options.unpinned_version)
     version = _continue_dated_version(dataset, store, root, version)
     location = VersionLocation(dataset.id, version.value, root)
     report = IngestReport(dataset.id, version.value, f"{store.uri}/{location.prefix}")
@@ -436,6 +418,13 @@ def _ingest(
         plural(len(todo), "file"),
     )
     _warn_implicit(dataset, version, selection, report, todo)
+    if fetcher.version_is_label and dataset.pinned_version and version.origin != "user":
+        log.warning(
+            "%s: version %s is only the catalog's label: this source cannot be asked for a "
+            "version, so the files are what it serves now",
+            dataset.id,
+            version.value,
+        )
     if dry_run:
         return report
 

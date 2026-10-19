@@ -247,6 +247,8 @@ class HuggingFaceFetcher(Fetcher):
 
 
 class HttpFetcher(Fetcher):
+    version_is_label = True
+
     @property
     def source(self) -> HttpSource:
         return self._source(HttpSource)

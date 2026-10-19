@@ -3,14 +3,19 @@
 Every published PhysioNet version ships a `SHA256SUMS.txt` listing all of its files with
 their SHA-256, so it is used as the file list and every file is verified against it.
 
-Open datasets are downloaded from PhysioNet's official AWS mirror
-(`s3://physionet-open/<slug>/<version>/`, AWS Open Data program, no credentials), which is
-much faster than physionet.org and also gives file sizes. A dataset or file that is not on
-the mirror is downloaded from physionet.org over HTTPS. The file list and checksums come from
-`SHA256SUMS.txt` either way, so both routes copy the same files.
+One source per kind of dataset, never a switch between them:
 
-Credentialed projects use HTTPS with basic auth with the user's PhysioNet account
-(PHYSIONET_USERNAME / PHYSIONET_PASSWORD) after the DUA has been signed on the website.
+- Open datasets come only from PhysioNet's own copy on AWS
+  (`s3://physionet-open/<slug>/<version>/`, AWS Open Data program, no credentials): faster
+  than physionet.org, and it gives file sizes. A version or a file that is not on it is an
+  error.
+- Credentialed datasets are not on that copy; they come only from physionet.org, with the
+  user's PhysioNet account (BIOSIGNAL_PHYSIONET_USERNAME / _PASSWORD) after the DUA is signed.
+
+Old versions publish no SHA256SUMS.txt; their file list then comes from the AWS listing or
+the physionet.org folder index, without checksums, with a warning.
+
+The latest version (for entries that pin none) is read from physionet.org's redirect.
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ import logging
 import re
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
+from urllib.parse import quote, unquote
 
 import requests
 from botocore.exceptions import BotoCoreError, ClientError
@@ -27,6 +33,7 @@ from biosignal_data.catalog.models import PhysioNetSource
 from biosignal_data.fetchers.base import (
     Fetcher,
     FetchError,
+    MissingCredentialsError,
     RemoteFile,
     ResolvedVersion,
     http_opener,
@@ -73,19 +80,9 @@ class PhysioNetFetcher(Fetcher):
             auth = (user, password)
         return http_session(auth)
 
-    def _route(self) -> str:
-        """Where to read from: credentialed data is only on physionet.org; open data as
-        `download.physionet_source` in the config file says."""
-        if self.source.credentialed:
-            return "physionet.org"
-        if self.options.physionet_source is None:
-            raise FetchError("set download.physionet_source in the config file")
-        return self.options.physionet_source
-
     def check_access(self) -> None:
         if self.source.credentialed:
             require_env(*CREDENTIAL_VARS)
-        self._route()
 
     def resolve_version(self) -> ResolvedVersion:
         if self.options.version or self.source.version:
@@ -103,99 +100,106 @@ class PhysioNetFetcher(Fetcher):
 
     def list_files(self) -> Iterator[RemoteFile]:
         version = self.resolve_version().value
-        route = self._route()
-        if route == "physionet.org":
+        if self.source.credentialed:
             yield from self._https_files(version)
-            return
-        mirrored = self._mirror_files(version, website_for_missing=route != "aws-mirror")
-        if mirrored is not None:
-            yield from mirrored
-        elif route == "aws-mirror":
-            raise FetchError(
-                f"{self.dataset.id} {version} is not on PhysioNet's AWS mirror, and "
-                "download.physionet_source is aws-mirror"
-            )
         else:
-            log.warning(
-                "%s: not on PhysioNet's AWS mirror; reading physionet.org "
-                "(download.physionet_source: aws-mirror-else-physionet.org)",
-                self.dataset.id,
-            )
-            yield from self._https_files(version)
+            yield from self._mirror_files(version)
 
-    def _mirror_files(self, version: str, website_for_missing: bool) -> list[RemoteFile] | None:
-        """The files from the AWS mirror, or None if this version is not on it."""
+    def _mirror_files(self, version: str) -> list[RemoteFile]:
+        """The files of this version on PhysioNet's AWS copy, the only source of open data."""
         prefix = f"{self.source.slug}/{version}/"
+        where = f"s3://{MIRROR_BUCKET}/{prefix}"
         try:
             client = s3_client(region=MIRROR_REGION, connections=self.options.connections)
-            sums = client.get_object(Bucket=MIRROR_BUCKET, Key=prefix + SUMS)["Body"].read()
             sizes = _list_sizes(client, prefix)
+            if not sizes:
+                raise FetchError(
+                    f"{self.dataset.id} {version} is not on PhysioNet's AWS copy ({where}), "
+                    "the only source for open PhysioNet data (docs/access.md)"
+                )
+            if SUMS not in sizes:
+                return self._mirror_files_without_sums(client, prefix, sizes)
+            sums = client.get_object(Bucket=MIRROR_BUCKET, Key=prefix + SUMS)["Body"].read()
         except (BotoCoreError, ClientError) as exc:
-            log.debug("%s: mirror lookup failed: %s", self.dataset.id, exc)
-            return None
-        session = self._session()
-        base = f"{BASE}/files/{self.source.slug}/{version}"
-        files: list[RemoteFile] = []
-        missing = 0
-        for name, digest in parse_sha256sums(sums.decode("utf-8")):
-            if name in sizes:
-                files.append(
-                    RemoteFile(
-                        path=name,
-                        size=sizes[name],
-                        checksum=f"sha256:{digest}",
-                        url=f"s3://{MIRROR_BUCKET}/{prefix}{name}",
-                        opener=s3_opener(client, MIRROR_BUCKET, prefix + name),
-                    )
-                )
-            else:  # not mirrored: physionet.org
-                missing += 1
-                url = f"{base}/{name}"
-                files.append(
-                    RemoteFile(
-                        path=name,
-                        checksum=f"sha256:{digest}",
-                        url=url,
-                        opener=http_opener(session, url),
-                    )
-                )
-        if missing and not website_for_missing:
-            raise FetchError(
-                f"{self.dataset.id}: {missing} files are not on PhysioNet's AWS mirror, and "
-                "download.physionet_source is aws-mirror"
-            )
+            raise FetchError(f"{self.dataset.id}: reading {where} failed: {exc}") from exc
+        listed = list(parse_sha256sums(sums.decode("utf-8")))
+        missing = [name for name, _ in listed if name not in sizes]
         if missing:
-            log.warning(
-                "%s: %d files are not on the AWS mirror; reading them from physionet.org "
-                "(download.physionet_source: aws-mirror-else-physionet.org)",
-                self.dataset.id,
-                missing,
+            raise FetchError(
+                f"{self.dataset.id} {version}: {len(missing)} files of {SUMS} are not on "
+                f"PhysioNet's AWS copy ({where}), e.g. {missing[0]}"
             )
+        files = [
+            RemoteFile(
+                path=name,
+                size=sizes[name],
+                checksum=f"sha256:{digest}",
+                url=f"{where}{name}",
+                opener=s3_opener(client, MIRROR_BUCKET, prefix + name),
+            )
+            for name, digest in listed
+        ]
+        # The checksum list is itself part of the published version; keep it.
         files.append(
             RemoteFile(
                 path=SUMS,
                 size=len(sums),
-                url=f"s3://{MIRROR_BUCKET}/{prefix}{SUMS}",
+                url=f"{where}{SUMS}",
                 opener=s3_opener(client, MIRROR_BUCKET, prefix + SUMS),
             )
         )
-        log.info(
-            "%s: reading PhysioNet's AWS mirror s3://%s/%s (download.physionet_source)",
-            self.dataset.id,
-            MIRROR_BUCKET,
-            prefix,
-        )
         return files
+
+    def _mirror_files_without_sums(
+        self, client: S3Client, prefix: str, sizes: dict[str, int]
+    ) -> list[RemoteFile]:
+        """An old version without SHA256SUMS.txt: the mirror's object listing is the file
+        list, with sizes but no checksums."""
+        self._warn_no_sums("the AWS mirror's object listing")
+        return [
+            RemoteFile(
+                path=name,
+                size=size,
+                url=f"s3://{MIRROR_BUCKET}/{prefix}{name}",
+                opener=s3_opener(client, MIRROR_BUCKET, prefix + name),
+            )
+            for name, size in sorted(sizes.items())
+        ]
+
+    def _warn_no_sums(self, source: str) -> None:
+        log.warning(
+            "%s: this version publishes no %s; the file list comes from %s, and the files "
+            "cannot be checked against published checksums",
+            self.dataset.id,
+            SUMS,
+            source,
+        )
+
+    def _crawl(self, session: requests.Session, base: str, folder: str) -> Iterator[RemoteFile]:
+        """Walk the physionet.org folder index, as PhysioNet's documented `wget -r` does."""
+        response = session.get(f"{base}/{folder}", timeout=60)
+        response.raise_for_status()
+        for link in _index_links(response.text):
+            path = folder + link
+            if link.endswith("/"):
+                yield from self._crawl(session, base, path)
+            else:
+                url = f"{base}/{quote(path)}"
+                yield RemoteFile(path=path, url=url, opener=http_opener(session, url))
 
     def _https_files(self, version: str) -> Iterator[RemoteFile]:
         session = self._session()
         base = f"{BASE}/files/{self.source.slug}/{version}"
         response = session.get(f"{base}/{SUMS}", timeout=60)
         if response.status_code in (401, 403):
-            raise FetchError(
+            raise MissingCredentialsError(
                 f"{self.dataset.id}: access denied. Sign the data use agreement on "
-                f"{BASE}/content/{self.source.slug}/ and set PHYSIONET_USERNAME/PASSWORD"
+                f"{BASE}/content/{self.source.slug}/ and set {' and '.join(CREDENTIAL_VARS)}"
             )
+        if response.status_code == 404:
+            self._warn_no_sums("the folder index on physionet.org")
+            yield from self._crawl(session, base, "")
+            return
         response.raise_for_status()
         sums_body = response.content
         for name, digest in parse_sha256sums(sums_body.decode("utf-8")):
@@ -208,6 +212,18 @@ class PhysioNetFetcher(Fetcher):
         yield RemoteFile(
             path=SUMS, size=len(sums_body), url=sums_url, opener=http_opener(session, sums_url)
         )
+
+
+_HREF = re.compile(r'href="([^"?#]+)"')
+
+
+def _index_links(html: str) -> list[str]:
+    """Links of a physionet.org folder index: files, and folders ending with "/"."""
+    return [
+        unquote(h)
+        for h in _HREF.findall(html)
+        if not h.startswith(("/", "..", "http:", "https:", "mailto:"))
+    ]
 
 
 def _list_sizes(client: S3Client, prefix: str) -> dict[str, int]:

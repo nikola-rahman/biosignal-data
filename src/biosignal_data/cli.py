@@ -312,14 +312,11 @@ def download(
     options = FetchOptions(
         staging_dir=staging.dir if staging else None,
         keep_staging=staging.keep if staging else None,
-        physionet_source=settings.physionet_source,
-        unpinned_version=settings.unpinned_version,
         connections=settings.workers,
     )
     console.print(
         f"settings from {cfg_path}: workers {settings.workers}, parallel_datasets "
-        f"{settings.parallel_datasets}, unpinned_version {settings.unpinned_version}, "
-        f"physionet_source {settings.physionet_source}",
+        f"{settings.parallel_datasets}",
         highlight=False,
         soft_wrap=True,
     )
@@ -528,8 +525,17 @@ def _preview(
         fetcher.prepare()
         resolved = fetcher.resolve_version()
         files = {f.path: f for f in fetcher.list_files()}
-    except FetchError as exc:
-        console.print(f"[yellow]![/] {dataset.id}: {exc}", highlight=False, soft_wrap=True)
+    except FetchError as exc:  # needs action, or the source refused: say so, go on
+        console.print(
+            f"[yellow]![/] {dataset.id}: {escape(str(exc))}", highlight=False, soft_wrap=True
+        )
+        return
+    except (OSError, RuntimeError, ValueError) as exc:  # as in a real run: report, go on
+        console.print(
+            f"[red]✗[/] {dataset.id}: {type(exc).__name__}: {escape(str(exc))}",
+            highlight=False,
+            soft_wrap=True,
+        )
         return
     finally:
         fetcher.cleanup(complete=False)

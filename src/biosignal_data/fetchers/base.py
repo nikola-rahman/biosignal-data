@@ -70,13 +70,11 @@ class RemoteFile:
 @dataclass
 class FetchOptions:
     """Run-time settings that are not part of the catalog: from the config file (staging,
-    physionet_source, unpinned_version) or from `import` (from_dir, version). A fetcher
-    that needs a setting that is None stops with an error; nothing has a default."""
+    connections) or from `import` (from_dir, version). A fetcher that needs a setting that
+    is None stops with an error."""
 
     staging_dir: Path | None = None  # disk for sources whose tools write files first
     keep_staging: bool | None = None
-    physionet_source: str | None = None  # see config.DownloadConfig
-    unpinned_version: str | None = None  # see config.DownloadConfig
     connections: int = 1  # parallel requests to one source: download.workers in the CLI
     from_dir: Path | None = None  # `import`: files downloaded by hand
     version: str | None = None  # `import`: the version label the user gives
@@ -86,6 +84,10 @@ S = TypeVar("S")
 
 
 class Fetcher(ABC):
+    # True for sources that cannot be asked for a version (plain HTTP, rsync, an S3 prefix):
+    # a version in the catalog is then only a label for what the source serves now.
+    version_is_label = False
+
     def __init__(self, dataset: Dataset, options: FetchOptions | None = None) -> None:
         self.dataset = dataset
         self.options = options or FetchOptions()

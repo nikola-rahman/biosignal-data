@@ -53,12 +53,13 @@ def test_physionet_lists_from_sha256sums_and_verifies(
     base = "https://physionet.org/files/mitdb/1.0.0"
     responses.get(f"{base}/SHA256SUMS.txt", body=f"{digest} 100.hea\n")
     responses.get(f"{base}/100.hea", body=body)
-    dataset = make_dataset(
-        id="physionet/mitdb", source={"type": "physionet", "slug": "mitdb", "version": "1.0.0"}
+    monkeypatch.setenv("BIOSIGNAL_PHYSIONET_USERNAME", "u")
+    monkeypatch.setenv("BIOSIGNAL_PHYSIONET_PASSWORD", "p")
+    dataset = make_dataset(  # credentialed: only on physionet.org
+        id="physionet/mitdb",
+        source={"type": "physionet", "slug": "mitdb", "version": "1.0.0", "credentialed": True},
     )
-    with pytest.raises(FetchError, match="physionet_source"):
-        ingest(dataset, store)  # the config must say where to read from
-    report = ingest(dataset, store, options=FetchOptions(physionet_source="physionet.org"))
+    report = ingest(dataset, store)
     assert report.complete
     assert store.get_bytes("raw/physionet/mitdb/1.0.0/data/100.hea") == body
     assert store.exists("raw/physionet/mitdb/1.0.0/data/SHA256SUMS.txt")
@@ -84,17 +85,53 @@ def test_physionet_downloads_from_aws_mirror(
         dataset = make_dataset(
             id="physionet/mitdb", source={"type": "physionet", "slug": "mitdb", "version": "1.0.0"}
         )
-        mirror = FetchOptions(physionet_source="aws-mirror")
-        listed = list(fetcher_for(dataset, mirror).list_files())
+        listed = list(fetcher_for(dataset).list_files())
         assert {f.path: f.size for f in listed} == {
             "100.hea": 6,
             "100.dat": 100,
             "SHA256SUMS.txt": len(sums),
         }
         assert all(f.url and f.url.startswith("s3://physionet-open/mitdb/1.0.0/") for f in listed)
-        report = ingest(dataset, store, options=mirror)
+        report = ingest(dataset, store)
     assert report.complete
     assert store.get_bytes("raw/physionet/mitdb/1.0.0/data/100.dat") == files["100.dat"]
+
+
+@responses.activate
+def test_physionet_version_without_sha256sums_walks_the_folder_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BIOSIGNAL_PHYSIONET_USERNAME", "u")
+    monkeypatch.setenv("BIOSIGNAL_PHYSIONET_PASSWORD", "p")
+    base = "https://physionet.org/files/old/1.0.0"
+    responses.get(f"{base}/SHA256SUMS.txt", status=404)
+    responses.get(
+        f"{base}/",
+        body='<a href="../">up</a> <a href="a.csv">a</a> <a href="training/">t</a>',
+    )
+    responses.get(f"{base}/training/", body='<a href="../">up</a> <a href="A%2001.mat">x</a>')
+    dataset = make_dataset(  # credentialed: read from physionet.org's folder index
+        id="physionet/old",
+        source={"type": "physionet", "slug": "old", "version": "1.0.0", "credentialed": True},
+    )
+    files = list(fetcher_for(dataset).list_files())
+    assert [(f.path, f.checksum) for f in files] == [("a.csv", None), ("training/A 01.mat", None)]
+    assert files[1].url == f"{base}/training/A%2001.mat"
+
+
+def test_physionet_open_version_missing_on_aws_copy_is_an_error(
+    store: LocalStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with mock_aws():
+        s3 = boto3.client("s3", region_name="us-east-1")
+        monkeypatch.setattr(physionet, "s3_client", lambda **_: s3)
+        monkeypatch.setattr(PhysioNetFetcher, "_https_files", _no_https)
+        s3.create_bucket(Bucket="physionet-open")
+        dataset = make_dataset(
+            id="physionet/x", source={"type": "physionet", "slug": "x", "version": "9.9"}
+        )
+        with pytest.raises(FetchError, match="not on PhysioNet's AWS copy"):
+            ingest(dataset, store)
 
 
 @responses.activate
@@ -171,7 +208,7 @@ def test_figshare_embargo_is_restricted_access(store: LocalStore) -> None:
     responses.get(f"{api}/articles/5/files?page=1&page_size=1000", json=[])
     dataset = make_dataset(id="figshare/5", source={"type": "figshare", "article": 5})
     with pytest.raises(AccessRestrictedError, match="embargo"):
-        ingest(dataset, store, options=FetchOptions(unpinned_version="latest"))
+        ingest(dataset, store)
 
 
 def test_figshare_requires_exactly_one_target() -> None:

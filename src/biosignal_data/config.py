@@ -32,15 +32,6 @@ class S3Config(_Section):
 class DownloadConfig(_Section):
     workers: int = Field(ge=1)  # parallel file downloads, shared by all datasets of a run
     parallel_datasets: int = Field(ge=1)  # datasets listed and copied at the same time
-    # A catalog entry without a pinned version: "latest" takes the newest the source
-    # publishes (or today's date if the source has no versions); "fail" stops.
-    unpinned_version: Literal["latest", "fail"]
-    # Where open PhysioNet datasets are read from. Same files either way.
-    #   aws-mirror: PhysioNet's copy on AWS (s3://physionet-open): faster, gives file sizes;
-    #               a dataset or file that is not on it fails.
-    #   physionet.org: the website.
-    #   aws-mirror-else-physionet.org: the mirror, and the website for what it lacks.
-    physionet_source: Literal["aws-mirror", "physionet.org", "aws-mirror-else-physionet.org"]
 
 
 class StagingConfig(_Section):

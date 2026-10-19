@@ -29,8 +29,6 @@ CONFIG = """
 download:
   workers: 2
   parallel_datasets: 2
-  unpinned_version: latest
-  physionet_source: physionet.org
 """
 
 
@@ -78,7 +76,7 @@ def test_config_values_have_no_defaults(tmp_path: Path) -> None:
     result = runner.invoke(
         app, ["download", "physionet/mitdb", "--dry-run", "--config", str(config)]
     )
-    assert result.exit_code == 2 and "unpinned_version" in result.output
+    assert result.exit_code == 2 and "parallel_datasets" in result.output
 
 
 def test_generated_docs_are_up_to_date() -> None:

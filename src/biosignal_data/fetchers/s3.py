@@ -74,6 +74,8 @@ def iter_s3_files(client: S3Client, bucket: str, prefix: str) -> Iterator[Remote
 
 
 class S3Fetcher(Fetcher):
+    version_is_label = True
+
     @property
     def source(self) -> S3Source:
         return self._source(S3Source)

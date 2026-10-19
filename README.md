@@ -41,9 +41,10 @@ uv run biosignal-data import <id> <folder> --version <label> --dest s3://my-buck
 - **Which datasets** (`download`, `status`, `check`): ids, `--ids-file`, `--signal` /
   `--repository`, or `--all`, exactly one of these.
 - **Settings** that do not change between runs are in [`biosignal-data.yaml`](biosignal-data.yaml):
-  the S3 storage (endpoint, region, addressing), parallel downloads, what to do with
-  unpinned versions, where PhysioNet data is read from, the staging folder for TUH, and the
-  read cache. Nothing has a default.
+  the S3 storage (endpoint, region, addressing), parallel downloads, the staging folder for
+  TUH, and the read cache. Nothing has a default.
+- **Versions:** a version in the catalog is downloaded exactly, or the download fails; an
+  entry without one gets the latest, with a warning ([`docs/access.md`](docs/access.md)).
 - **Secrets** come only from `BIOSIGNAL_*` variables: `BIOSIGNAL_ACCESS_KEY_ID` and
   `BIOSIGNAL_SECRET_ACCESS_KEY` for your storage, and one or two per gated source
   ([`docs/access.md`](docs/access.md)).
@@ -75,7 +76,7 @@ See [`docs/reading.md`](docs/reading.md).
 
 | Source | How | Access |
 | --- | --- | --- |
-| PhysioNet | files and SHA-256 from each version's `SHA256SUMS.txt`; read from PhysioNet's AWS copy or physionet.org (config) | open or PhysioNet credentialed |
+| PhysioNet | files and SHA-256 from each version's `SHA256SUMS.txt`; open data only from PhysioNet's AWS copy, credentialed data only from physionet.org | open or PhysioNet credentialed |
 | OpenNeuro | OpenNeuro's public S3 bucket (latest snapshot) | open |
 | NEMAR | official `nemar-py` client, version-pinned with checksums | open |
 | DANDI | official `dandi` client | open |

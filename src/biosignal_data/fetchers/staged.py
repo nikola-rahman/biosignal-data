@@ -79,6 +79,8 @@ class StagedFetcher(Fetcher):
 
 
 class RsyncFetcher(StagedFetcher):
+    version_is_label = True
+
     @property
     def source(self) -> RsyncSource:
         return self._source(RsyncSource)

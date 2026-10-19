@@ -12,14 +12,11 @@ s3:
 download:
   workers: 16                  # parallel file downloads, shared by all datasets of a run
   parallel_datasets: 6         # datasets listed and copied at the same time
-  unpinned_version: latest     # catalog entry without a pinned version: latest | fail
-  # open PhysioNet data: aws-mirror | physionet.org | aws-mirror-else-physionet.org
-  physionet_source: aws-mirror-else-physionet.org
 
-# Disk for sources whose tools write files before upload (TUH, NSRR, Kaggle).
+# Disk for TUH EEG: rsync writes files here before they are uploaded.
 staging:
   dir: ~/biosignal-staging
-  keep: false
+  keep: true
 
 # Where RawDataset.local_path keeps fetched raw files.
 read:

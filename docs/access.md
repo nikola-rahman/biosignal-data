@@ -6,8 +6,8 @@ tools' variables. Never put secrets in the catalog, the config file, or a commit
 
 | Repository | What you need | Variables |
 | --- | --- | --- |
-| PhysioNet (open) | nothing | |
-| PhysioNet (credentialed) | a credentialed PhysioNet account (CITI training) and the dataset's DUA signed on its page | `BIOSIGNAL_PHYSIONET_USERNAME`, `BIOSIGNAL_PHYSIONET_PASSWORD` |
+| PhysioNet (open) | nothing; read only from PhysioNet's copy on AWS (see below) | |
+| PhysioNet (credentialed) | a credentialed PhysioNet account (CITI training) and the dataset's DUA signed on its page; read only from physionet.org | `BIOSIGNAL_PHYSIONET_USERNAME`, `BIOSIGNAL_PHYSIONET_PASSWORD` |
 | OpenNeuro | nothing | |
 | NEMAR | nothing | |
 | DANDI | nothing for public dandisets; an API key for embargoed ones | `BIOSIGNAL_DANDI_API_KEY` |
@@ -23,6 +23,27 @@ tools' variables. Never put secrets in the catalog, the config file, or a commit
 Your own S3 storage (the destination): `BIOSIGNAL_ACCESS_KEY_ID` and
 `BIOSIGNAL_SECRET_ACCESS_KEY`; its endpoint, region and addressing are in
 `biosignal-data.yaml`.
+
+## PhysioNet: one source per dataset, no switching
+
+- **Open datasets** come only from PhysioNet's own copy on AWS, `s3://physionet-open`
+  (AWS Open Data program, no account). It is faster than physionet.org and gives file
+  sizes. If the version, or a file of it, is not on the copy, the download fails with an
+  error; it does not fall back to physionet.org.
+- **Credentialed datasets** are not on that copy. They come only from physionet.org, with
+  your PhysioNet account.
+- The file list and SHA-256 checksums come from the version's `SHA256SUMS.txt`. Old versions
+  publish none: their files are then listed from the AWS listing (open) or the physionet.org
+  folder index (credentialed), and cannot be checked against published checksums (warning).
+- For an entry without a pinned version, the latest version is read from physionet.org.
+
+## Versions
+
+- A version in the catalog entry is downloaded exactly; if the source does not have it, the
+  download fails.
+- An entry without a version gets the source's latest, with a warning naming it.
+- Plain HTTP, rsync (TUH) and S3 prefixes (BDSP) cannot be asked for a version: there the
+  catalog's version is only a label for what the source serves now (warning on every run).
 
 ## How each source is read
 

@@ -188,18 +188,15 @@ def test_undated_source_continues_an_earlier_days_download(
     from biosignal_data.fetchers import base  # noqa: PLC0415
 
     dataset = make_dataset(source={"type": "manual"})  # no version
-    latest = base.FetchOptions(unpinned_version="latest")
 
     class Undated(FakeFetcher):
         def resolve_version(self) -> base.ResolvedVersion:
             return base.Fetcher.resolve_version(self)
 
-    with pytest.raises(base.FetchError, match="unpinned_version"):
-        ingest(dataset, store, fetcher=Undated(dataset, FILES))  # the config must allow it
     monkeypatch.setattr(base, "retrieval_version", lambda: "2026-10-01")
-    ingest(dataset, store, fetcher=Undated(dataset, FILES, options=latest), limit=1)
+    ingest(dataset, store, fetcher=Undated(dataset, FILES), limit=1)
     monkeypatch.setattr(base, "retrieval_version", lambda: "2026-10-02")
-    report = ingest(dataset, store, fetcher=Undated(dataset, FILES, options=latest))
+    report = ingest(dataset, store, fetcher=Undated(dataset, FILES))
     assert report.version == "2026-10-01" and report.complete and report.skipped >= 1
 
 
