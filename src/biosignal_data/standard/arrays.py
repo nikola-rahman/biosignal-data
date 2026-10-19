@@ -3,8 +3,8 @@
 Each group is one array `(channels, samples)` in the source's integer type, compressed
 with Blosc (zstd and bit shuffle, lossless), a codec of the Zarr v3 specification. A chunk
 is a whole number of 30-second epochs, at least 64 KiB; a shard is as many chunks as fit in
-64 MiB. Arrays are written one shard at a time, and every shard is read back and compared
-with the source before the next one.
+64 MiB. Arrays are written one shard at a time. Every shard is read by two independent
+readers of the same raw files, which must agree, and read back after writing and compared.
 """
 
 from __future__ import annotations
@@ -57,8 +57,12 @@ def settings() -> dict[str, Any]:
     }
 
 
-def write_signals(source: Source, store: zarr.abc.store.Store, attributes: dict[str, Any]) -> None:
-    """Write every group of `source` to a new Zarr group (an earlier attempt is replaced)."""
+def write_signals(
+    source: Source, check: Source, store: zarr.abc.store.Store, attributes: dict[str, Any]
+) -> None:
+    """Write every group of `source` to a new Zarr group (an earlier attempt is replaced).
+    `check` is a second reader of the same files, opened on its own: a reader that returns
+    another file's samples (as pyedflib did) disagrees with it, and the recording fails."""
     root = zarr.open_group(store=store, mode="w", zarr_format=3, attributes=attributes)
     for index, group in enumerate(source.groups):
         shape = layout(group)
@@ -92,6 +96,8 @@ def write_signals(source: Source, store: zarr.abc.store.Store, attributes: dict[
                 raise MismatchError(
                     f"{group.name}: the source gave {data.shape} for {start}:{stop}"
                 )
+            if not np.array_equal(data, check.read(index, start, stop)):
+                raise MismatchError(f"{group.name} {start}:{stop}: two readers of the file differ")
             array[:, start:stop] = data
             if not np.array_equal(array[:, start:stop], data):
                 raise MismatchError(f"{group.name} {start}:{stop}: read back differs from source")

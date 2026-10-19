@@ -27,6 +27,11 @@ Things that are not settled yet, in rough order of how much they matter.
    BIDS (OpenNeuro, NEMAR), NWB, MATLAB and the other formats come next. Subjects, and the
    mapping of channel and event names to a common vocabulary, are not done yet.
 
+10. **BDF files are read whole.** edfio 0.4 has no lazy loading for BDF, so a BDF file is
+    read into memory at once (about 4/3 of its size). Large BDF recordings (e.g. 128
+    channels at 2 kHz for hours) need more memory than a worker has; read them in slices
+    when BIDS datasets with BDF are converted.
+
 ## Research questions for the model
 
 The data layers keep everything native (rates, values, units, channel metadata, times) so

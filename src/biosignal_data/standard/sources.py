@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 import posixpath
 import re
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -236,14 +237,20 @@ def _gain_written(line: str) -> bool:
 
 
 class EdfSource:
-    """An EDF, EDF+ or BDF file. Discontinuous EDF+ (EDF+D) is not converted yet."""
+    """An EDF, EDF+ or BDF file, read with edfio. Discontinuous EDF+ (EDF+D) is not
+    converted yet.
+
+    edfio reads the data records through a memory map: a slice reads only the records it
+    needs, and no state is shared between files. A file shorter than its header says is
+    read as far as its whole records go; edfio's warning about it is kept as a problem.
+    (pyedflib was used before. A file it refused to open closed the handle of another open
+    file, which then read a third file's samples: capslpdb, 2026-10-19.)
+    """
 
     format = "edf"
 
     def __init__(self, path: str, fetch: Fetch) -> None:
-        import pyedflib  # noqa: PLC0415
-
-        self.problems: list[str] = []
+        import edfio  # noqa: PLC0415 - readers load only when used
 
         local = fetch(path)
         with local.open("rb") as f:
@@ -254,67 +261,84 @@ class EdfSource:
             raise UnsupportedError("discontinuous EDF+ (EDF+D) (not converted yet)")
         self.format = "bdf" if fixed[:1] == b"\xff" else "edf"
         self.files = [path]
-        self._reader = reader = pyedflib.EdfReader(str(local))
-        try:
-            self.start_time: datetime | None = reader.getStartdatetime()
-            self.duration_s: float | None = reader.datarecords_in_file * reader.datarecord_duration
-            dtype = np.dtype("int32" if self.format == "bdf" else "int16")
-            by_rate: dict[float, list[int]] = {}
-            for i in range(reader.signals_in_file):
-                by_rate.setdefault(reader.getSampleFrequency(i), []).append(i)
-            self.groups, self._indices = [], []
-            for rate, indices in sorted(by_rate.items(), reverse=True):
-                lengths = {int(reader.getNSamples()[i]) for i in indices}
-                if len(lengths) != 1:
-                    raise ValueError(f"channels at {rate} Hz have different lengths {lengths}")
-                self.groups.append(
-                    Group(
-                        rate=rate,
-                        dtype=dtype,
-                        length=lengths.pop(),
-                        channels=tuple(_edf_channel(reader, i) for i in indices),
-                    )
+        # Headers are read as latin-1: every byte is one character, so nothing is lost; EDF
+        # asks for ASCII, but real files have e.g. "µV".
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            if self.format == "bdf":  # edfio reads BDF only whole, into memory
+                # Edf or Bdf: edfio types their signals apart, with no public common base.
+                edf: Any = edfio.read_bdf(local, header_encoding="latin-1")
+            else:
+                edf = edfio.read_edf(local, lazy_load_data=True, header_encoding="latin-1")
+        self._edf = edf
+        self.problems = [f"{path}: {w.message}" for w in caught]
+        self.start_time = _edf_start(edf)
+        self.duration_s: float | None = edf.num_data_records * edf.data_record_duration
+        dtype = np.dtype("int32" if self.format == "bdf" else "int16")
+        by_rate: dict[float, list[int]] = {}
+        for i, signal in enumerate(edf.signals):
+            by_rate.setdefault(signal.sampling_frequency, []).append(i)
+        self.groups, self._indices = [], []
+        for rate, indices in sorted(by_rate.items(), reverse=True):
+            lengths = {
+                edf.signals[i].samples_per_data_record * edf.num_data_records for i in indices
+            }
+            if len(lengths) != 1:
+                raise ValueError(f"channels at {rate} Hz have different lengths {lengths}")
+            self.groups.append(
+                Group(
+                    rate=rate,
+                    dtype=dtype,
+                    length=int(lengths.pop()),
+                    channels=tuple(_edf_channel(edf.signals[i]) for i in indices),
                 )
-                self._indices.append(indices)
-            onsets, durations, texts = reader.readAnnotations()
-            # WFDB annotation files of an EDF record count samples at its highest rate.
-            self.frame_rate = max((g.rate for g in self.groups), default=0.0)
-            self.events = [
-                Event(
-                    file=path,
-                    annotator="edf+",
-                    onset_s=float(onset),
-                    duration_s=float(duration) if duration >= 0 else None,
-                    label=str(text),
-                )
-                for onset, duration, text in zip(onsets, durations, texts, strict=True)
-            ]
-        except Exception:
-            reader.close()
-            raise
+            )
+            self._indices.append(indices)
+        # WFDB annotation files of an EDF record count samples at its highest rate.
+        self.frame_rate = max((g.rate for g in self.groups), default=0.0)
+        self.events = [
+            Event(
+                file=path,
+                annotator="edf+",
+                onset_s=float(a.onset),
+                duration_s=float(a.duration) if a.duration is not None else None,
+                label=str(a.text),
+            )
+            for a in edf.annotations
+        ]
 
     def read(self, group: int, start: int, stop: int) -> np.ndarray:
         g = self.groups[group]
-        return np.stack(
-            [
-                np.asarray(
-                    self._reader.readSignal(i, start, stop - start, digital=True), dtype=g.dtype
-                )
-                for i in self._indices[group]
-            ]
-        )
+        rows = []
+        for i in self._indices[group]:
+            # edfio slices by seconds and rounds back to samples, so start / rate is start.
+            row = self._edf.signals[i].get_digital_slice(start / g.rate, stop / g.rate)
+            if len(row) != stop - start:
+                raise ValueError(f"signal {i}: {len(row)} samples read, {stop - start} asked")
+            rows.append(np.asarray(row, dtype=g.dtype))
+        return np.stack(rows)
 
     def close(self) -> None:
-        self._reader.close()
+        pass
 
 
-def _edf_channel(reader: Any, i: int) -> Channel:
-    pmin, pmax = reader.getPhysicalMinimum(i), reader.getPhysicalMaximum(i)
-    dmin, dmax = reader.getDigitalMinimum(i), reader.getDigitalMaximum(i)
+def _edf_start(edf: Any) -> datetime | None:
+    """The start as written; None where the file anonymizes the date (EDF+ "X")."""
+    import edfio  # noqa: PLC0415
+
+    try:
+        return datetime.combine(edf.startdate, edf.starttime)
+    except edfio.AnonymizedDateError:
+        return None
+
+
+def _edf_channel(signal: Any) -> Channel:
+    pmin, pmax = signal.physical_min, signal.physical_max
+    dmin, dmax = signal.digital_min, signal.digital_max
     scale = (pmax - pmin) / (dmax - dmin) if dmax != dmin else None
     return Channel(
-        name=reader.getLabel(i),
-        unit=reader.getPhysicalDimension(i),
+        name=signal.label,
+        unit=signal.physical_dimension,
         scale=scale,
         offset=pmin - dmin * scale if scale is not None and math.isfinite(scale) else None,
         invalid_value=None,
@@ -323,7 +347,7 @@ def _edf_channel(reader: Any, i: int) -> Channel:
             "physical_max": pmax,
             "digital_min": dmin,
             "digital_max": dmax,
-            "transducer": reader.getTransducer(i),
-            "prefilter": reader.getPrefilter(i),
+            "transducer": signal.transducer_type,
+            "prefilter": signal.prefiltering,
         },
     )

@@ -240,13 +240,14 @@ def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -
         def fetch(path: str) -> Path:
             return raw.fetch_to(path, folder)
 
+        def open_source() -> Source:
+            if unit.format == "wfdb":
+                return WfdbSource(unit.path, fetch, raw.has)
+            return EdfSource(unit.path, fetch)
+
         location = plan.location
         try:
-            source: Source = (
-                WfdbSource(unit.path, fetch, raw.has)
-                if unit.format == "wfdb"
-                else EdfSource(unit.path, fetch)
-            )
+            source = open_source()
         except UnsupportedError as exc:
             main = unit.path + ".hea" if unit.format == "wfdb" else unit.path
             skipped = [NotConverted(path=p, reason=str(exc)) for p in (main, *unit.annotations)]
@@ -273,7 +274,13 @@ def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -
                     "raw_version": location.version,
                     "format": source.format,
                 }
-                arrays.write_signals(source, store.zarr_store(key, read_only=False), attributes)
+                check = open_source()  # a second, independent reader of the same files
+                try:
+                    arrays.write_signals(
+                        source, check, store.zarr_store(key, read_only=False), attributes
+                    )
+                finally:
+                    check.close()
                 signals = key[len(location.prefix) + 1 :]
             files = {p: raw.entry(p).sha256 for p in used}
             parts = {

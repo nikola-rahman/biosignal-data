@@ -396,6 +396,7 @@ source = { editable = "." }
 dependencies = [
     { name = "boto3" },
     { name = "dandi" },
+    { name = "edfio" },
     { name = "h5py" },
     { name = "huggingface-hub" },
     { name = "kaggle" },
@@ -405,7 +406,6 @@ dependencies = [
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "pydantic" },
-    { name = "pyedflib" },
     { name = "pynwb" },
     { name = "pyyaml" },
     { name = "requests" },
@@ -424,6 +424,7 @@ dev = [
     { name = "moto", extra = ["s3"] },
     { name = "mypy" },
     { name = "pre-commit" },
+    { name = "pyedflib" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "responses" },
@@ -436,6 +437,7 @@ dev = [
 requires-dist = [
     { name = "boto3", specifier = ">=1.34" },
     { name = "dandi", specifier = ">=0.63" },
+    { name = "edfio", specifier = ">=0.4.18" },
     { name = "h5py", specifier = ">=3.10" },
     { name = "huggingface-hub", specifier = ">=0.24" },
     { name = "kaggle", specifier = ">=1.6" },
@@ -445,7 +447,6 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.1" },
     { name = "pyarrow", specifier = ">=16" },
     { name = "pydantic", specifier = ">=2.7" },
-    { name = "pyedflib", specifier = ">=0.1.38" },
     { name = "pynwb", specifier = ">=2.8" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.31" },
@@ -463,6 +464,7 @@ dev = [
     { name = "moto", extras = ["s3"], specifier = ">=5.0" },
     { name = "mypy", specifier = ">=1.10" },
     { name = "pre-commit", specifier = ">=3.7" },
+    { name = "pyedflib", specifier = ">=0.1.38" },
     { name = "pytest", specifier = ">=8.2" },
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "responses", specifier = ">=0.25" },
@@ -1361,6 +1363,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/25/71/80cc718ff6d7abfbabacb1f57aaa42e9c1552bfdd01e64ddd704e4a03638/donfig-0.8.1.post1.tar.gz", hash = "sha256:3bef3413a4c1c601b585e8d297256d0c1470ea012afa6e8461dc28bfb7c23f52", size = 19506, upload-time = "2024-05-23T14:14:31.513Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0c/d5/c5db1ea3394c6e1732fb3286b3bd878b59507a8f77d32a2cebda7d7b7cd4/donfig-0.8.1.post1-py3-none-any.whl", hash = "sha256:2a3175ce74a06109ff9307d90a230f81215cbac9a751f4d1c6194644b8204f9d", size = 21592, upload-time = "2024-05-23T14:13:55.283Z" },
+]
+
+[[package]]
+name = "edfio"
+version = "0.4.18"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/70/a7/a17605d671d18f45d274235e4d5ae04d8a7c4298817079a3cd75aadc095b/edfio-0.4.18.tar.gz", hash = "sha256:d3bb8bf44966b38499646d4fcd37d8edbfa174ce14f92b6389e6f1fbb101968e", size = 28793, upload-time = "2026-10-01T07:40:35.938Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/01/90/e5c48bbc186630d2a925a2507b60b66fb2efd33fb28254babb43f75b73b1/edfio-0.4.18-py3-none-any.whl", hash = "sha256:6987fcb8d58314ef0d9716bc042bceb005abd4730cdd6ef2d3307d4191a8c6ab", size = 31865, upload-time = "2026-10-01T07:40:34.874Z" },
 ]
 
 [[package]]

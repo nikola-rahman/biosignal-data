@@ -268,3 +268,99 @@ def test_reader_opens_tables_and_reads_windows_in_physical_units(
     physical = ds.window("r1", "200Hz", 1.0, 0.5)
     np.testing.assert_allclose(physical, (raw["ecg"][None, 200:300] - 5) / 200)
     assert np.isnan(ds.window("r1", "100Hz", 0.0, 1.0)).all()  # not calibrated
+
+
+def _write_edf(path: Path, values: list[np.ndarray], rate: int, bdf: bool = False) -> None:
+    kind = pyedflib.FILETYPE_BDF if bdf else pyedflib.FILETYPE_EDF
+    w = pyedflib.EdfWriter(str(path), len(values), file_type=kind)
+    lo, hi = (-8388608, 8388607) if bdf else (-32768, 32767)
+    w.setSignalHeaders(
+        [
+            {"label": f"C{i}", "dimension": "uV", "sample_frequency": rate,
+             "physical_min": -3276.8, "physical_max": 3276.7,
+             "digital_min": lo, "digital_max": hi}
+            for i in range(len(values))
+        ]
+    )  # fmt: skip
+    w.writeSamples([v.astype(np.int32) for v in values], digital=True)
+    w.close()
+
+
+def test_a_file_that_fails_to_open_does_not_change_another_open_file(tmp_path: Path) -> None:
+    # pyedflib closed the handle of another open file here; that file then read a third one.
+    from biosignal_data.standard.sources import EdfSource  # noqa: PLC0415
+
+    a, c = np.full(1000, 111), np.full(1000, 333)
+    _write_edf(tmp_path / "a.edf", [a], 100)
+    _write_edf(tmp_path / "c.edf", [c], 100)
+    (tmp_path / "broken.edf").write_bytes(b"0       not an EDF header")
+    first = EdfSource("a.edf", lambda p: tmp_path / p)
+    with pytest.raises(Exception):  # noqa: B017 - any error: the point is what follows
+        EdfSource("broken.edf", lambda p: tmp_path / p)
+    EdfSource("c.edf", lambda p: tmp_path / p)
+    np.testing.assert_array_equal(first.read(0, 0, 1000)[0], a)
+
+
+def test_bdf_values_are_exact_int32(tmp_path: Path) -> None:
+    from biosignal_data.standard.sources import EdfSource  # noqa: PLC0415
+
+    values = [RNG.integers(-8_000_000, 8_000_000, 2048 * 10) for _ in range(2)]
+    _write_edf(tmp_path / "x.bdf", values, 2048, bdf=True)
+    source = EdfSource("x.bdf", lambda p: tmp_path / p)
+    assert source.format == "bdf" and source.groups[0].dtype == np.int32
+    got = source.read(0, 2048, 2048 * 3)
+    np.testing.assert_array_equal(got, np.stack([v[2048 : 2048 * 3] for v in values]))
+
+
+def test_a_truncated_file_reads_the_records_it_holds_and_says_so(tmp_path: Path) -> None:
+    from biosignal_data.standard.sources import EdfSource  # noqa: PLC0415
+
+    values = RNG.integers(-30000, 30000, 100 * 60)
+    _write_edf(tmp_path / "t.edf", [values], 100)  # 60 records of 1 s
+    data = (tmp_path / "t.edf").read_bytes()
+    (tmp_path / "t.edf").write_bytes(data[: len(data) - 100 * 2 * 20 - 50])  # 20.25 records cut
+    source = EdfSource("t.edf", lambda p: tmp_path / p)
+    assert source.groups[0].length == 100 * 39  # the whole records the file holds
+    np.testing.assert_array_equal(source.read(0, 0, 100 * 39)[0], values[: 100 * 39])
+    assert any("39 records" in problem for problem in source.problems)
+
+
+def test_a_header_with_non_ascii_characters_is_read(tmp_path: Path) -> None:
+    from biosignal_data.standard.sources import EdfSource  # noqa: PLC0415
+
+    values = RNG.integers(-30000, 30000, 1000)
+    _write_edf(tmp_path / "u.edf", [values], 100)
+    data = bytearray((tmp_path / "u.edf").read_bytes())
+    unit_at = 256 + 16 + 80  # first signal's physical dimension, after label and transducer
+    data[unit_at : unit_at + 8] = "µV      ".encode("latin-1")
+    (tmp_path / "u.edf").write_bytes(bytes(data))
+    source = EdfSource("u.edf", lambda p: tmp_path / p)
+    assert source.groups[0].channels[0].unit == "µV"
+    np.testing.assert_array_equal(source.read(0, 0, 1000)[0], values)
+
+
+def test_a_recording_fails_when_two_readers_of_its_file_disagree(
+    store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # What pyedflib did: one reader returned another file's samples, without an error.
+    from biosignal_data.standard import convert as convert_module  # noqa: PLC0415
+    from biosignal_data.standard.sources import EdfSource  # noqa: PLC0415
+
+    opened: list[int] = []
+
+    class OneReaderIsWrong(EdfSource):
+        def __init__(self, *args: object) -> None:
+            super().__init__(*args)  # type: ignore[arg-type]
+            opened.append(1)
+            self._wrong = len(opened) % 2 == 0
+
+        def read(self, group: int, start: int, stop: int) -> np.ndarray:
+            data = super().read(group, start, stop)
+            return data + 1 if self._wrong else data
+
+    monkeypatch.setattr(convert_module, "EdfSource", OneReaderIsWrong)
+    report = convert(plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2,
+                     work_dir=tmp_path / "work")  # fmt: skip
+    assert not report.complete
+    assert list(report.failed) == ["sub/s1"]
+    assert "two readers of the file differ" in report.failed["sub/s1"]

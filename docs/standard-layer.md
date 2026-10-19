@@ -7,7 +7,9 @@ arrays, metadata as Parquet tables. It is made from the raw layer only, never fr
 
 - **Exact.** Signals are the integers the source stored, with a scale and an offset per
   channel (`physical = stored * scale + offset`). Nothing is filtered, resampled, rereferenced,
-  cut or renamed. Every array is read back after writing and compared with the source.
+  cut or renamed. Every shard is read by two independent readers of the raw files, which
+  must agree, and read back after writing and compared. (One reader alone is not enough:
+  pyedflib, used before, returned another file's samples without an error.)
 - **Native sampling rates.** The channels of a recording are grouped by sampling rate; each
   group is one array. Choosing a common rate is a decision for training, not for storage.
 - **Source names.** Channel names, units and labels are kept as the source wrote them. The
@@ -57,7 +59,7 @@ Zarr v3 specification. Opening one array of a recording is two small requests.
 | --- | --- | --- |
 | WFDB record | the `RECORDS` lists, or every `.hea` file where there is no `RECORDS` | `wfdb` |
 | WFDB annotation | `<record>.<annotator>`, annotators from `ANNOTATORS` | `wfdb` |
-| EDF, EDF+, BDF | `.edf`, `.bdf` (and `RECORDS` entries naming them) | `pyedflib` |
+| EDF, EDF+, BDF | `.edf`, `.bdf` (and `RECORDS` entries naming them) | `edfio` |
 
 Not converted yet, so listed in the manifest with the reason: multi-segment WFDB records,
 discontinuous EDF+ (EDF+D), and every other format. Metadata files (CSV, TSV, JSON) are kept
