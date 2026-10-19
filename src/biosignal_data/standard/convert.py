@@ -51,6 +51,7 @@ from biosignal_data.text import plural
 
 log = logging.getLogger(__name__)
 SCHEMA_VERSION = 1
+HEADER_READS = 16  # WFDB headers read at the same time while planning (small files)
 
 
 class AlreadyStandard(RuntimeError):  # noqa: N818 - reads naturally at the call site
@@ -145,7 +146,11 @@ def plan_standard(
         with store.open(raw_location.data_key(path)) as f:
             return f.read().decode("utf-8", errors="replace")
 
-    discovery = discover((f.path for f in raw.files), read_text)
+    def read_texts(paths: list[str]) -> dict[str, str]:
+        with ThreadPoolExecutor(max_workers=HEADER_READS) as pool:
+            return dict(zip(paths, pool.map(read_text, paths), strict=True))
+
+    discovery = discover((f.path for f in raw.files), read_text, read_texts)
     done = (
         set()
         if complete
@@ -369,6 +374,13 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
 
     used = set(plan.discovery.lists) | {p for done, _ in loaded for p in done["used"]}
     skipped = {n["path"]: n["reason"] for done, _ in loaded for n in done["not_converted"]}
+    for view, owners in plan.discovery.views.values():
+        reason = (
+            f"a view of {', '.join(owners)}: its header shows their signal files side by "
+            "side; the signals are converted with those records"
+        )
+        for path in (view.path + ".hea", *view.annotations):
+            skipped.setdefault(path, reason)
     has_records = any(posixpath.basename(p) == "RECORDS" for p in plan.discovery.lists)
     records = {u.path for u in plan.units}
     for entry in plan.raw.files:

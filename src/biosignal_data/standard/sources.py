@@ -119,16 +119,26 @@ class WfdbSource:
                 "not publish; the recording is kept without signals"
             )
             signal_files = []
-        for path in signal_files:
-            fetch(path)
+        local_files = {path: fetch(path) for path in signal_files}
         self.files = [record + ".hea", *signal_files]
         self._local = str(header_path.with_suffix(""))
+        sig_len = head.sig_len
+        if signal_files and sig_len is not None:
+            held = _frames_held(head, folder, local_files)
+            short = {f: n for f, n in held.items() if n < sig_len}
+            if short:
+                sig_len = min(short.values())
+                self.problems.append(
+                    f"{record}: the header says {head.sig_len:,} samples per signal, but "
+                    + ", ".join(f"{f} holds {n:,}" for f, n in sorted(short.items()))
+                    + f"; read as far as the files go ({sig_len:,})"
+                )
         self.start_time = (
             datetime.combine(head.base_date, head.base_time)
             if head.base_date is not None and head.base_time is not None
             else None
         )
-        self.duration_s = head.sig_len / head.fs if head.sig_len is not None else None
+        self.duration_s = sig_len / head.fs if sig_len is not None else None
         lines = _signal_lines(self.header, head.n_sig)
         by_rate: dict[int, list[int]] = {}
         for i, spf in enumerate(head.samps_per_frame if signal_files else []):
@@ -154,7 +164,7 @@ class WfdbSource:
                 Group(
                     rate=head.fs * spf,
                     dtype=np.dtype("int32" if "int32" in dtypes else "int16"),
-                    length=head.sig_len * spf,
+                    length=sig_len * spf,
                     channels=tuple(channels),
                     step=spf,
                 )
@@ -222,6 +232,30 @@ def wfdb_annotations(
         )
     ]
     return events, problems
+
+
+# Bits per sample of the WFDB formats with a fixed size (310 and 311 pack 3 samples in 32
+# bits). The FLAC formats (508, 516, 524) compress, so their length cannot be computed.
+_WFDB_BITS = {
+    "8": 8, "80": 8, "16": 16, "61": 16, "160": 16, "212": 12,
+    "310": 32 / 3, "311": 32 / 3, "24": 24, "32": 32,
+}  # fmt: skip
+
+
+def _frames_held(head: Any, folder: str, local: dict[str, Path]) -> dict[str, int]:
+    """Whole frames each signal file holds, from its size; files in a FLAC format are left
+    out (their size says nothing about their length)."""
+    held = {}
+    for path, file in local.items():
+        signals = [
+            i for i, name in enumerate(head.file_name) if posixpath.join(folder, name) == path
+        ]
+        if any(head.fmt[i] not in _WFDB_BITS for i in signals):
+            continue
+        bits = sum(head.samps_per_frame[i] * _WFDB_BITS[head.fmt[i]] for i in signals)
+        offset = (head.byte_offset or [None] * head.n_sig)[signals[0]] or 0
+        held[path] = math.floor((file.stat().st_size - offset) * 8 / bits + 1e-9)
+    return held
 
 
 def _wfdb_dtype(fmt: str) -> str:

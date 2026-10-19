@@ -852,13 +852,15 @@ def _print_standard_plan(plan: StandardPlan) -> None:
     for unit in plan.units:
         formats[unit.format] = formats.get(unit.format, 0) + 1
     annotations = sum(len(u.annotations) for u in plan.units)
+    views = len(plan.discovery.views)
     found = ", ".join(f"{n:,} {fmt.upper()}" for fmt, n in sorted(formats.items()))
     again = " (complete; --replace makes it again)" if plan.replace else ""
     console.print(
         f"{plan.raw.location.dataset_id} {plan.raw.location.version}{again}: "
         f"{plural(len(plan.units), 'recording')} ({found or 'none'}), "
         f"{plural(annotations, 'annotation file')}; {len(plan.to_convert):,} to convert, "
-        f"{len(plan.done):,} done by an earlier run",
+        f"{len(plan.done):,} done by an earlier run"
+        + (f"; {plural(views, 'view')} of other records, not stored twice" if views else ""),
         highlight=False,
         soft_wrap=True,
     )

@@ -8,6 +8,11 @@ and reported if it does not read as one.
 
 EDF and BDF: every `.edf` / `.bdf` file is a recording, unless `RECORDS` lists the records
 (then only those listed).
+
+A WFDB record that only shows the signal files of other records side by side (it uses two
+or more signal files, and each is the only signal file of another record; apnea-ecg a01er
+shows a01.dat and a01r.dat) is a view, not a recording: its samples are converted with
+those records, so it is listed with them instead of being stored twice.
 """
 
 from __future__ import annotations
@@ -15,7 +20,7 @@ from __future__ import annotations
 import posixpath
 import re
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 EDF_SUFFIXES = (".edf", ".bdf")
@@ -53,10 +58,17 @@ class Discovery:
     lists: list[str]  # the RECORDS and ANNOTATORS files read
     annotators: frozenset[str]  # from ANNOTATORS; empty if there is none
     problems: list[str]  # e.g. a RECORDS entry without files
+    views: dict[str, tuple[Unit, tuple[str, ...]]] = field(default_factory=dict)
+    # view record id -> (its unit, the records whose signal files it shows)
 
 
-def discover(paths: Iterable[str], read_text: Callable[[str], str]) -> Discovery:
-    """`paths`: every file of the raw version. `read_text`: the text of one of them."""
+def discover(
+    paths: Iterable[str],
+    read_text: Callable[[str], str],
+    read_texts: Callable[[list[str]], dict[str, str]],
+) -> Discovery:
+    """`paths`: every file of the raw version. `read_text`: the text of one of them;
+    `read_texts`: the texts of many (the WFDB headers), read at the same time."""
     paths = set(paths)
     lists = sorted(p for p in paths if posixpath.basename(p) in LISTS)
     annotators = {
@@ -96,7 +108,37 @@ def discover(paths: Iterable[str], read_text: Callable[[str], str]) -> Discovery
         if unit.id in units:
             raise ValueError(f"two recordings would get the id {unit.id!r}: rename one source")
         units[unit.id] = unit
-    return Discovery(list(units.values()), lists, frozenset(annotators), problems)
+    views = _views(units, read_texts)
+    kept = [u for u in units.values() if u.id not in views]
+    return Discovery(kept, lists, frozenset(annotators), problems, views)
+
+
+def _views(
+    units: dict[str, Unit], read_texts: Callable[[list[str]], dict[str, str]]
+) -> dict[str, tuple[Unit, tuple[str, ...]]]:
+    wfdb = {u.path: u for u in units.values() if u.format == "wfdb"}
+    headers = read_texts([path + ".hea" for path in wfdb]) if wfdb else {}
+    files = {path: signal_files(headers[path + ".hea"], posixpath.dirname(path)) for path in wfdb}
+    # A signal file "belongs" to a record that uses it and no other file.
+    owner = {fs[0]: path for path, fs in files.items() if fs is not None and len(fs) == 1}
+    views = {}
+    for path, fs in files.items():
+        if fs is not None and len(fs) > 1 and all(f in owner and owner[f] != path for f in fs):
+            views[wfdb[path].id] = (wfdb[path], tuple(sorted(wfdb[owner[f]].id for f in fs)))
+    return views
+
+
+def signal_files(header: str, folder: str) -> list[str] | None:
+    """The distinct signal files a WFDB header names, in order; None for a multi-segment
+    record (its first line names segments, not files)."""
+    lines = [
+        ln.split() for ln in header.splitlines() if ln.strip() and not ln.lstrip().startswith("#")
+    ]
+    if not lines or "/" in lines[0][0]:
+        return None
+    n_sig = int(lines[0][1]) if len(lines[0]) > 1 else 0
+    found = [posixpath.join(folder, ln[0]) for ln in lines[1 : 1 + n_sig]]
+    return list(dict.fromkeys(found))
 
 
 def _files_by_stem(paths: set[str]) -> dict[str, set[str]]:

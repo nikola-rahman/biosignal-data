@@ -194,7 +194,7 @@ def test_a_failed_recording_keeps_the_others_and_runs_again(
 
 def test_discovery_without_lists_tries_unknown_extensions_as_annotations() -> None:
     paths = ["a/100.hea", "a/100.dat", "a/100.qrs", "a/100.txt", "b.edf", "b.edf.event"]
-    found = discover(paths, read_text=lambda p: "")
+    found = discover(paths, read_text=lambda p: "", read_texts=lambda ps: dict.fromkeys(ps, ""))
     by_id = {u.id: u for u in found.units}
     assert by_id["a/100"].annotations == ("a/100.qrs",)
     assert not by_id["a/100"].listed_annotators
@@ -393,3 +393,62 @@ def test_odd_annotation_sample_numbers_are_kept_if_listed_and_rejected_if_guesse
         "r.edf.st: 2 of 4 sample numbers are negative (kept as stored)",
         "r.edf.st: 1 sample numbers are lower than the one before (kept as stored)",
     ]
+
+
+def test_a_record_that_shows_other_records_files_side_by_side_is_a_view() -> None:
+    # apnea-ecg: a01er.hea shows a01.dat (record a01) and a01r.dat (record a01r).
+    headers = {
+        "a01.hea": "a01 1 100 10\na01.dat 16 200 12 0 0 0 0 ECG\n",
+        "a01r.hea": "a01r 2 100 10\na01r.dat 16 1 16 0 0 0 0 R1\na01r.dat 16 1 16 0 0 0 0 R2\n",
+        "a01er.hea": "a01er 3 100 10\na01.dat 16 200 12 0 0 0 0 ECG\n"
+        "a01r.dat 16 1 16 0 0 0 0 R1\na01r.dat 16 1 16 0 0 0 0 R2\n",
+        "x.hea": "x 2 100 10\nx1.dat 16 1 16 0 0 0 0 A\nx2.dat 16 1 16 0 0 0 0 B\n",
+    }
+    paths = [*headers, "a01.dat", "a01r.dat", "a01er.apn", "x1.dat", "x2.dat"]
+    found = discover(paths, lambda p: "", lambda ps: {p: headers[p] for p in ps})
+    assert sorted(u.id for u in found.units) == ["a01", "a01r", "x"]  # x: own two files
+    view, owners = found.views["a01er"]
+    assert owners == ("a01", "a01r") and view.annotations == ("a01er.apn",)
+
+
+def test_a_wfdb_record_shorter_than_its_header_is_read_as_far_as_it_goes(tmp_path: Path) -> None:
+    from biosignal_data.standard.sources import WfdbSource  # noqa: PLC0415
+
+    held = RNG.integers(-2000, 2000, (900, 2)).astype(np.int16)  # the header says 1,000
+    held.astype("<i2").tofile(tmp_path / "t.dat")
+    (tmp_path / "t.hea").write_text(
+        "t 2 100 1000\nt.dat 16 200 16 0 0 0 0 A\nt.dat 16 200 16 0 0 0 0 B\n"
+    )
+    source = WfdbSource("t", lambda p: tmp_path / p, lambda p: True)
+    assert source.groups[0].length == 900 and source.duration_s == 9.0
+    np.testing.assert_array_equal(source.read(0, 0, 900), held.T)
+    assert source.problems == [
+        "t: the header says 1,000 samples per signal, but t.dat holds 900; "
+        "read as far as the files go (900)"
+    ]
+
+
+def test_a_view_is_listed_with_its_records_not_stored_twice(
+    store: LocalStore, tmp_path: Path
+) -> None:
+    ecg = RNG.integers(-2000, 2000, 500).astype(np.int16)
+    resp = RNG.integers(-2000, 2000, (500, 2)).astype(np.int16)
+    files = {
+        "a01.hea": b"a01 1 100 500\na01.dat 16 200 16 0 0 0 0 ECG\n",
+        "a01.dat": ecg.astype("<i2").tobytes(),
+        "a01r.hea": b"a01r 2 100 500\na01r.dat 16 1 16 0 0 0 0 R1\na01r.dat 16 1 16 0 0 0 0 R2\n",
+        "a01r.dat": resp.astype("<i2").tobytes(),
+        "a01er.hea": b"a01er 3 100 500\na01.dat 16 200 16 0 0 0 0 ECG\n"
+        b"a01r.dat 16 1 16 0 0 0 0 R1\na01r.dat 16 1 16 0 0 0 0 R2\n",
+    }
+    dataset = make_dataset(id="physionet/apnea-ecg")
+    ingest(dataset, store, fetcher=FakeFetcher(dataset, files), workers=2)
+    plan = plan_standard(store, "physionet/apnea-ecg", "1.0.0")
+    assert sorted(u.id for u in plan.units) == ["a01", "a01r"]
+    report = convert(plan, store, workers=2, work_dir=tmp_path / "work")
+    assert report.complete and report.converted == 2
+    manifest = json.loads(
+        store.get_bytes("standard/physionet/apnea-ecg/1.0.0/_manifest.json") or b""
+    )
+    reasons = {n["path"]: n["reason"] for n in manifest["not_converted"]}
+    assert reasons["a01er.hea"].startswith("a view of a01, a01r: its header shows")
