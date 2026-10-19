@@ -33,6 +33,7 @@ from biosignal_data.storage.stores import S3Settings, S3Store, Store, open_store
 app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
+    rich_markup_mode=None,  # help texts are plain: "[/prefix]" is not markup
     help="Find public biosignal datasets and download them unchanged, to a folder or S3.",
 )
 dev = typer.Typer(no_args_is_help=True, help="Maintainer commands.")

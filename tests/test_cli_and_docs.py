@@ -100,3 +100,9 @@ def test_s3_destination_reads_the_config_file(
     assert "no config file" in runner.invoke(app, args).output
     config.write_text("s3:\n  endpoint: https://s3.example\n  region: r1\n")
     assert "addressing" in runner.invoke(app, args).output  # missing value: an error
+
+
+@pytest.mark.parametrize("command", ["list", "info", "download", "check", "dev"])
+def test_help_renders(command: str) -> None:
+    result = runner.invoke(app, [command, "--help"])
+    assert result.exit_code == 0, result.output
