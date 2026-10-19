@@ -255,10 +255,14 @@ def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -
             return
         try:
             events = list(source.events)
-            used, skipped = list(source.files), []
+            used, skipped, problems = list(source.files), [], list(source.problems)
             for path in unit.annotations:
                 try:
-                    events += wfdb_annotations(path, fetch, source.frame_rate)
+                    found, odd = wfdb_annotations(
+                        path, fetch, source.frame_rate, listed=unit.listed_annotators
+                    )
+                    events += found
+                    problems += odd
                     used.append(path)
                 except Exception as exc:
                     if unit.listed_annotators:
@@ -295,7 +299,7 @@ def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -
                 used=used,
                 not_converted=skipped,
                 parts=parts,
-                problems=source.problems,
+                problems=problems,
             )
         finally:
             source.close()

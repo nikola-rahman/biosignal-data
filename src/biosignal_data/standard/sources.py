@@ -182,19 +182,32 @@ class WfdbSource:
         pass
 
 
-def wfdb_annotations(path: str, fetch: Fetch, record_fs: float) -> list[Event]:
-    """A WFDB annotation file `<record>.<annotator>`. Sample numbers are counted at the
-    file's own rate where it stores one, else at the record's frame rate."""
+def wfdb_annotations(
+    path: str, fetch: Fetch, record_fs: float, *, listed: bool
+) -> tuple[list[Event], list[str]]:
+    """A WFDB annotation file `<record>.<annotator>`, and its problems. Sample numbers are
+    counted at the file's own rate where it stores one, else at the record's frame rate.
+
+    `listed`: the annotator is in the dataset's ANNOTATORS, so the file is an annotation
+    file: its events are kept as stored, and negative or out-of-order sample numbers are
+    reported as problems (capslpdb nfle10.edf.st has only negative ones). A file only
+    guessed to be one (`listed=False`) with such numbers is rejected instead."""
     import wfdb  # noqa: PLC0415
 
     local = fetch(path)
     annotator = path.rsplit(".", 1)[1]
     ann = wfdb.rdann(str(local.with_name(local.name[: -len(annotator) - 1])), annotator)
     samples = np.asarray(ann.sample)
-    if samples.size and (samples[0] < 0 or np.any(np.diff(samples) < 0)):
-        raise UnsupportedError("does not read as WFDB annotations (sample numbers out of order)")
+    oddities = []
+    if (negative := int((samples < 0).sum())) > 0:
+        oddities.append(f"{negative} of {len(samples)} sample numbers are negative")
+    if (back := int((np.diff(samples) < 0).sum())) > 0:
+        oddities.append(f"{back} sample numbers are lower than the one before")
+    if oddities and not listed:
+        raise UnsupportedError(f"does not read as WFDB annotations ({'; '.join(oddities)})")
+    problems = [f"{path}: {o} (kept as stored)" for o in oddities]
     fs = float(ann.fs or record_fs)
-    return [
+    events = [
         Event(
             file=path,
             annotator=annotator,
@@ -208,6 +221,7 @@ def wfdb_annotations(path: str, fetch: Fetch, record_fs: float) -> list[Event]:
             samples, ann.symbol, ann.aux_note, ann.subtype, ann.chan, ann.num, strict=True
         )
     ]
+    return events, problems
 
 
 def _wfdb_dtype(fmt: str) -> str:

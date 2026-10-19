@@ -364,3 +364,32 @@ def test_a_recording_fails_when_two_readers_of_its_file_disagree(
     assert not report.complete
     assert list(report.failed) == ["sub/s1"]
     assert "two readers of the file differ" in report.failed["sub/s1"]
+
+
+@pytest.mark.parametrize("listed", [True, False])
+def test_odd_annotation_sample_numbers_are_kept_if_listed_and_rejected_if_guessed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, listed: bool
+) -> None:
+    # capslpdb nfle10.edf.st: every sample number is negative (from -21,887,999).
+    import types  # noqa: PLC0415
+
+    from biosignal_data.standard import sources  # noqa: PLC0415
+
+    fake = types.SimpleNamespace(
+        sample=np.array([-512, -256, 100, 50]), symbol=['"'] * 4, aux_note=["S0"] * 4,
+        subtype=[0] * 4, chan=[0] * 4, num=[0] * 4, fs=256,
+    )  # fmt: skip
+    monkeypatch.setattr(wfdb, "rdann", lambda *_: fake)
+    (tmp_path / "r.edf.st").write_bytes(b"")
+    fetch = lambda p: tmp_path / p  # noqa: E731
+    if not listed:
+        with pytest.raises(sources.UnsupportedError, match="2 of 4 sample numbers are negative"):
+            sources.wfdb_annotations("r.edf.st", fetch, 256.0, listed=False)
+        return
+    events, problems = sources.wfdb_annotations("r.edf.st", fetch, 256.0, listed=True)
+    assert [e.sample for e in events] == [-512, -256, 100, 50]
+    assert [e.onset_s for e in events] == [-2.0, -1.0, 100 / 256, 50 / 256]
+    assert problems == [
+        "r.edf.st: 2 of 4 sample numbers are negative (kept as stored)",
+        "r.edf.st: 1 sample numbers are lower than the one before (kept as stored)",
+    ]
