@@ -452,3 +452,29 @@ def test_a_view_is_listed_with_its_records_not_stored_twice(
     )
     reasons = {n["path"]: n["reason"] for n in manifest["not_converted"]}
     assert reasons["a01er.hea"].startswith("a view of a01, a01r: its header shows")
+
+
+def test_parts_written_before_problems_were_recorded_still_finish(
+    store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
+) -> None:
+    # autonomic-aging-cardiovascular: 1,120 parts from earlier code had no "problems" key.
+    from biosignal_data.standard import convert as convert_module  # noqa: PLC0415
+
+    original = convert_module.EdfSource
+
+    def broken(*args: object) -> None:
+        raise OSError("simulated read failure")
+
+    convert_module.EdfSource = broken  # type: ignore[assignment,misc]
+    try:
+        convert(plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2,
+                work_dir=tmp_path / "work")  # fmt: skip
+    finally:
+        convert_module.EdfSource = original  # type: ignore[misc]
+    done_key = "standard/physionet/mitdb/1.0.0/_parts/r1/done.json"
+    done = json.loads(store.get_bytes(done_key) or b"")
+    del done["problems"]  # as the earlier code wrote it
+    store.put_bytes(done_key, json.dumps(done).encode())
+    report = convert(plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2,
+                     work_dir=tmp_path / "work")  # fmt: skip
+    assert report.complete

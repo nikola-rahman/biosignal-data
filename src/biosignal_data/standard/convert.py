@@ -401,7 +401,9 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
         channels=joined["channels"].num_rows,
         events=joined["events"].num_rows,
         files_used=len(used),
-        problems=plan.discovery.problems + [p for done, _ in loaded for p in done["problems"]],
+        # Parts from before problems were recorded (2026-10-19) have none to give.
+        problems=plan.discovery.problems
+        + [p for done, _ in loaded for p in done.get("problems", [])],
         not_converted=[NotConverted(path=p, reason=r) for p, r in sorted(skipped.items())],
     )
     store.put_bytes(location.manifest_key, manifest.model_dump_json(indent=2).encode())
