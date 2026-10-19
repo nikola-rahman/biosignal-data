@@ -10,7 +10,13 @@ from typing import BinaryIO
 import pytest
 
 from biosignal_data.catalog.models import Dataset, DatasetInfo
-from biosignal_data.fetchers.base import Fetcher, FetchOptions, RemoteFile, ResolvedVersion
+from biosignal_data.fetchers.base import (
+    Fetcher,
+    FetchOptions,
+    RemoteFile,
+    ResolvedVersion,
+    SourceFileMissingError,
+)
 from biosignal_data.storage.stores import LocalStore
 
 
@@ -49,6 +55,7 @@ class FakeFetcher(Fetcher):
         checksums: dict[str, str] | None = None,
         sizes: dict[str, int] | None = None,
         fail: set[str] | None = None,
+        missing: set[str] | None = None,
         options: FetchOptions | None = None,
     ) -> None:
         super().__init__(dataset, options)
@@ -57,6 +64,7 @@ class FakeFetcher(Fetcher):
         self.checksums = checksums or {}
         self.sizes = sizes or {}
         self.fail = fail or set()
+        self.missing = missing or set()  # listed, but the source answers 404
         self.opened: dict[str, int] = {}
         self.listed = 0
 
@@ -67,6 +75,8 @@ class FakeFetcher(Fetcher):
         self.opened[path] = self.opened.get(path, 0) + 1
         if path in self.fail:
             raise OSError(f"simulated failure for {path}")
+        if path in self.missing:
+            raise SourceFileMissingError(f"{path} answered 404 Not Found")
         return nullcontext(io.BytesIO(self.files[path]))
 
     def list_files(self) -> Iterator[RemoteFile]:

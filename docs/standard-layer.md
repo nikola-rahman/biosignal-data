@@ -28,7 +28,9 @@ arrays, metadata as Parquet tables. It is made from the raw layer only, never fr
         _parts/                progress of an unfinished run (removed on success)
         _SUCCESS               written last
 
-The `<raw version>` is the raw version the data was made from. The recording id is the
+The `<raw version>` is the raw version the data was made from. A record whose signals the
+source does not publish (only its annotations) is still a recording: it has no arrays, and
+its events are kept. The recording id is the
 path of its raw file without the extension (`100` for `100.hea`, `S001/S001R01` for
 `S001/S001R01.edf`).
 

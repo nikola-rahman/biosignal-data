@@ -249,8 +249,7 @@ def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -
                         raise
                     reason = f"tried as a WFDB annotation file: {type(exc).__name__}: {exc}"
                     skipped.append(NotConverted(path=path, reason=reason))
-            parts: dict[str, pa.Table] = {}
-            recording_id = unit.id if source.groups else None
+            signals = None
             if source.groups:
                 key = location.signals_key(unit.id)
                 attributes = {
@@ -260,11 +259,13 @@ def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -
                     "format": source.format,
                 }
                 arrays.write_signals(source, store.zarr_store(key, read_only=False), attributes)
-                files = {p: raw.entry(p).sha256 for p in used}
                 signals = key[len(location.prefix) + 1 :]
-                parts["recordings"] = tables.recording_table(unit.id, source, signals, files)
-                parts["channels"] = tables.channel_table(unit.id, source)
-            parts["events"] = tables.event_table(recording_id, events)
+            files = {p: raw.entry(p).sha256 for p in used}
+            parts = {
+                "recordings": tables.recording_table(unit.id, source, signals, files),
+                "channels": tables.channel_table(unit.id, source),
+                "events": tables.event_table(unit.id, events),
+            }
             _record(store, location, unit, used=used, not_converted=skipped, parts=parts)
         finally:
             source.close()

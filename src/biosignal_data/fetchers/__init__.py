@@ -20,6 +20,7 @@ from biosignal_data.fetchers.base import (
     MissingCredentialsError,
     RemoteFile,
     ResolvedVersion,
+    SourceFileMissingError,
     UnavailableError,
 )
 from biosignal_data.fetchers.openneuro_nemar import NemarFetcher, OpenNeuroFetcher
@@ -65,6 +66,7 @@ __all__ = [
     "MissingCredentialsError",
     "RemoteFile",
     "ResolvedVersion",
+    "SourceFileMissingError",
     "UnavailableError",
     "fetcher_for",
 ]

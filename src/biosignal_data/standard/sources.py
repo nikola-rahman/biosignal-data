@@ -72,7 +72,7 @@ class Source(Protocol):
     events: list[Event]  # stored in the signal file itself (EDF+)
     frame_rate: float  # the rate WFDB annotation files of this record count samples at
     start_time: datetime | None
-    duration_s: float
+    duration_s: float | None  # None: the header does not say
     header: str  # the source header, as written
 
     def read(self, group: int, start: int, stop: int) -> np.ndarray: ...
@@ -104,10 +104,9 @@ class WfdbSource:
         head = wfdb.rdheader(str(header_path.with_suffix("")))
         if getattr(head, "seg_name", None):
             raise UnsupportedError("multi-segment WFDB record (not converted yet)")
-        if not head.n_sig:
-            raise UnsupportedError("WFDB record without signals")
+        # A record without signals (only its annotations are published) has no groups.
         folder = posixpath.dirname(record)
-        signal_files = sorted({posixpath.join(folder, f) for f in head.file_name})
+        signal_files = sorted({posixpath.join(folder, f) for f in head.file_name or []})
         for path in signal_files:
             fetch(path)
         self.files = [record + ".hea", *signal_files]
@@ -117,10 +116,10 @@ class WfdbSource:
             if head.base_date is not None and head.base_time is not None
             else None
         )
-        self.duration_s = head.sig_len / head.fs
+        self.duration_s = head.sig_len / head.fs if head.sig_len is not None else None
         lines = _signal_lines(self.header, head.n_sig)
         by_rate: dict[int, list[int]] = {}
-        for i, spf in enumerate(head.samps_per_frame):
+        for i, spf in enumerate(head.samps_per_frame or []):
             by_rate.setdefault(spf, []).append(i)
         self.groups, self._indices = [], []
         for spf, indices in sorted(by_rate.items(), reverse=True):
@@ -245,7 +244,7 @@ class EdfSource:
         self._reader = reader = pyedflib.EdfReader(str(local))
         try:
             self.start_time: datetime | None = reader.getStartdatetime()
-            self.duration_s = reader.datarecords_in_file * reader.datarecord_duration
+            self.duration_s: float | None = reader.datarecords_in_file * reader.datarecord_duration
             dtype = np.dtype("int32" if self.format == "bdf" else "int16")
             by_rate: dict[float, list[int]] = {}
             for i in range(reader.signals_in_file):

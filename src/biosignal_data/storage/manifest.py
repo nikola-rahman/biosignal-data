@@ -27,6 +27,16 @@ class FileEntry(BaseModel):
     source_url: str | None = None
 
 
+class MissingFile(BaseModel):
+    """A file the source lists but does not serve: not in the version, kept on record."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    reason: str
+    source_url: str | None = None
+
+
 class Manifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -43,6 +53,11 @@ class Manifest(BaseModel):
     completed_at: datetime | None = None
     tool: str
     files: list[FileEntry] = Field(default_factory=list)
+    missing: list[MissingFile] = Field(
+        default_factory=list,
+        description="Files the source lists but answers do not exist; the version is "
+        "complete without them.",
+    )
 
     @property
     def total_bytes(self) -> int:

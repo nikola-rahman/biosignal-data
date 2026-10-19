@@ -26,7 +26,7 @@ def test_many_datasets_share_one_pool_and_report_each(
     monkeypatch.delenv("NSRR_TOKEN", raising=False)
     for i in range(3):
         responses.get(f"https://example.org/test/ok{i}/rec{i}.edf", body=b"x" * (i + 1))
-    responses.get("https://example.org/test/broken/rec.edf", status=404)
+    responses.get("https://example.org/test/broken/rec.edf", status=500)  # a real failure
     datasets = [
         *(make_dataset(**_http(f"test/ok{i}", f"rec{i}.edf")) for i in range(3)),
         make_dataset(**_http("test/broken", "rec.edf")),

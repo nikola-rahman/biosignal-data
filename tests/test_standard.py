@@ -75,7 +75,9 @@ def raw(store: LocalStore, tmp_path: Path) -> dict[str, np.ndarray]:
     files, ecg, x = wfdb_record(tmp_path)
     edf, eeg, slow = edf_file(tmp_path)
     files |= {
-        "RECORDS": b"r1\nm1\nsub/s1.edf\nmissing\n",
+        "RECORDS": b"r1\nr2\nm1\nsub/s1.edf\nmissing\n",
+        "r2.hea": b"r2 0 100 1000\n",  # signals not published, only annotations
+        "r2.atr": files["r1.atr"],
         "ANNOTATORS": b"atr\treference annotations\n",
         "sub/s1.edf": edf,
         "m1.hea": b"m1/2 1 100 200\nm1_1 100\nm1_2 100\n",
@@ -95,11 +97,11 @@ def test_standard_version_is_exact_and_accounts_for_every_file(
     store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
 ) -> None:
     plan = plan_standard(store, "physionet/mitdb", "1.0.0")
-    assert [u.id for u in plan.units] == ["m1", "r1", "sub/s1"]
+    assert [u.id for u in plan.units] == ["m1", "r1", "r2", "sub/s1"]
     assert plan.discovery.problems == ["missing: listed in RECORDS, but no such header or EDF file"]
 
     report = convert(plan, store, workers=2, work_dir=tmp_path / "work")
-    assert report.complete and not report.failed and report.converted == 3
+    assert report.complete and not report.failed and report.converted == 4
 
     prefix = "standard/physionet/mitdb/1.0.0"
     root = zarr.open_group(
@@ -118,8 +120,10 @@ def test_standard_version_is_exact_and_accounts_for_every_file(
     np.testing.assert_array_equal(edf["1Hz"][:], raw["slow"][None, :])
 
     recordings = pq.read_table(store._path(f"{prefix}/recordings.parquet")).to_pylist()
-    assert [r["recording_id"] for r in recordings] == ["r1", "sub/s1"]
-    r1 = recordings[0]
+    assert [r["recording_id"] for r in recordings] == ["r1", "r2", "sub/s1"]
+    r1, r2 = recordings[0], recordings[1]
+    assert (r2["n_channels"], r2["signals"], r2["arrays"]) == (0, None, [])
+    assert r2["source_files"] == ["r2.hea", "r2.atr"] and r2["duration_s"] == 10.0
     assert r1["source_files"] == ["r1.hea", "r1.dat", "r1.atr"]
     assert r1["start_time"].isoformat() == "2003-02-01T10:20:30"
     assert r1["source_header"].startswith("r1 2 100")
@@ -135,7 +139,8 @@ def test_standard_version_is_exact_and_accounts_for_every_file(
     assert fpz["scale"] == pytest.approx(0.1) and fpz["offset"] == pytest.approx(0.0, abs=0.06)
 
     events = pq.read_table(store._path(f"{prefix}/events.parquet")).to_pylist()
-    wfdb_events = [e for e in events if e["annotator"] == "atr"]
+    assert len([e for e in events if e["recording_id"] == "r2"]) == 2
+    wfdb_events = [e for e in events if e["annotator"] == "atr" and e["recording_id"] == "r1"]
     assert [(e["sample"], e["label"], e["text"]) for e in wfdb_events] == [
         (10, "N", None),
         (500, "+", "(AFIB"),
@@ -181,7 +186,7 @@ def test_a_failed_recording_keeps_the_others_and_runs_again(
     plan = plan_standard(store, "physionet/mitdb", "1.0.0")
     assert [u.id for u in plan.to_convert] == ["sub/s1"]
     report = convert(plan, store, workers=2, work_dir=tmp_path / "work")
-    assert report.complete and report.converted == 1 and report.skipped == 2
+    assert report.complete and report.converted == 1 and report.skipped == 3
 
 
 def test_discovery_without_lists_tries_unknown_extensions_as_annotations() -> None:
@@ -226,13 +231,13 @@ def test_cli_dry_run_then_convert_then_already(
     runner = CliRunner()
     dry = runner.invoke(app, [*args, "--dry-run"])
     assert dry.exit_code == 0, dry.output
-    assert "3 recordings (1 EDF, 2 WFDB), 1 annotation file; 3 to convert" in dry.output
+    assert "4 recordings (1 EDF, 3 WFDB), 2 annotation files; 4 to convert" in dry.output
     assert "newest complete raw version 1.0.0" in dry.output
     assert not store.exists("standard/physionet/mitdb/1.0.0/_SUCCESS")
 
     done = runner.invoke(app, args)
     assert done.exit_code == 0, done.output
-    assert "2 recordings, 4 channels, 3 events" in done.output
+    assert "3 recordings, 4 channels, 5 events" in done.output
     assert "not converted: 1 file: no reader for .csv files" in done.output
     assert "ZarrUserWarning" not in done.output
     assert "already complete" in runner.invoke(app, args).output
@@ -247,7 +252,7 @@ def test_reader_opens_tables_and_reads_windows_in_physical_units(
             work_dir=tmp_path / "work")  # fmt: skip
     ds = StandardDataset.open(store, "physionet/mitdb", "latest")
     assert ds.location.version == "1.0.0"
-    assert ds.recordings.num_rows == 2 and ds.manifest.recordings == 2
+    assert ds.recordings.num_rows == 3 and ds.manifest.recordings == 3
     stored = ds.window("r1", "200Hz", 1.0, 0.5, physical=False)
     np.testing.assert_array_equal(stored, raw["ecg"][None, 200:300])
     physical = ds.window("r1", "200Hz", 1.0, 0.5)

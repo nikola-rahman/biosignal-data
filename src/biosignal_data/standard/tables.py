@@ -23,7 +23,8 @@ RECORDINGS = pa.schema(
         ("duration_s", pa.float64()),
         ("arrays", pa.list_(pa.string())),  # array names in the Zarr group, e.g. "250Hz"
         ("n_channels", pa.int32()),
-        ("signals", pa.string()),  # the Zarr group, relative to the version folder
+        ("signals", pa.string()),  # the Zarr group, relative to the version folder; empty
+        # for a recording whose signals the source does not publish (only its annotations)
         ("source_files", pa.list_(pa.string())),  # raw files it was made from
         ("source_sha256", pa.list_(pa.string())),
         ("source_header", pa.string()),  # the header text, as written
@@ -63,7 +64,7 @@ SCHEMAS = {"recordings": RECORDINGS, "channels": CHANNELS, "events": EVENTS}
 
 
 def recording_table(
-    recording_id: str, source: Source, signals: str, files: dict[str, str]
+    recording_id: str, source: Source, signals: str | None, files: dict[str, str]
 ) -> pa.Table:
     """`files`: every raw file the recording was made from, with its SHA-256."""
     return pa.Table.from_pylist(
@@ -109,7 +110,7 @@ def channel_table(recording_id: str, source: Source) -> pa.Table:
     )
 
 
-def event_table(recording_id: str | None, events: list[Event]) -> pa.Table:
+def event_table(recording_id: str, events: list[Event]) -> pa.Table:
     return pa.Table.from_pylist(
         [
             {

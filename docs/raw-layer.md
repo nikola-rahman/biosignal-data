@@ -14,6 +14,10 @@ being able to prove where every byte came from.
    from where, under which license, when, and with which checksums.
 4. **Completeness is explicit.** `_SUCCESS` is written only after every file is copied and
    verified, and after the manifest. Readers ignore versions without it.
+5. **A file the source lists but does not have does not block a version.** When the source
+   answers 404 for a file in its own file list, the file is recorded under `missing` in the
+   manifest, with the answer, and the run warns. Every other error fails the file, and the
+   version stays incomplete until a run copies it.
 
 ## Keys
 

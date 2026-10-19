@@ -488,6 +488,11 @@ def _print_outcome(outcome: Outcome) -> None:
             text += f" · {r.skipped:,} already there"
         if r.failed:
             text += f" · {plural(len(r.failed), 'file')} failed (run again to retry)"
+        if r.missing:
+            text += (
+                f" · [yellow]{plural(len(r.missing), 'file')} listed by the source but "
+                "missing there (in the manifest)[/]"
+            )
         if outcome.message:
             text += f" · {outcome.message}"
     else:

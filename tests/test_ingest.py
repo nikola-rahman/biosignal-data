@@ -203,3 +203,18 @@ def test_a_copy_without_recordings_is_reported(store: LocalStore) -> None:
     assert report.complete and report.recording_files == 0  # copied faithfully, but flagged
     report = ingest(make_dataset(id="test/other"), store, fetcher=FakeFetcher(dataset, FILES))
     assert report.recording_files == 1  # sub-01/eeg/data.edf
+
+
+def test_a_file_the_source_lists_but_does_not_have_is_recorded_not_failed(
+    store: LocalStore,
+) -> None:
+    dataset = make_dataset()
+    fetcher = FakeFetcher(dataset, FILES, missing={"a/b/c.csv"})
+    report = ingest(dataset, store, fetcher=fetcher, workers=2)
+
+    assert report.complete and not report.failed and list(report.missing) == ["a/b/c.csv"]
+    manifest = Manifest.from_json(store.get_bytes("raw/test/example/1.0.0/_manifest.json") or b"")
+    assert [f.path for f in manifest.files] == ["README", "sub-01/eeg/data.edf"]
+    assert [m.path for m in manifest.missing] == ["a/b/c.csv"]
+    assert "404" in manifest.missing[0].reason
+    assert verify(store, "test/example", "1.0.0", "raw", deep=True) == {}

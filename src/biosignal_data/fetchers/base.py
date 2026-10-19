@@ -44,6 +44,10 @@ class UnavailableError(FetchError):
     """The dataset is known, but there is no way to get it (catalog source `unavailable`)."""
 
 
+class SourceFileMissingError(FetchError):
+    """The source lists this file, but answers that it does not exist (HTTP 404)."""
+
+
 class ManualDownloadError(FetchError):
     """The source has no programmatic download; a person downloads it, then `--from-dir`."""
 
@@ -182,6 +186,9 @@ class _ResponseStream(AbstractContextManager[BinaryIO]):
             raise MissingCredentialsError(
                 f"{self._url} answered {response.status_code}: check access and credentials"
             )
+        if response.status_code == 404:
+            response.close()
+            raise SourceFileMissingError(f"{self._url} answered 404 Not Found")
         response.raise_for_status()
         response.raw.decode_content = True
         self._response = response

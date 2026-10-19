@@ -32,11 +32,17 @@ from typing import Protocol
 from biosignal_data import __version__
 from biosignal_data.catalog.models import Dataset
 from biosignal_data.fetchers import FetchError, FetchOptions, RemoteFile, fetcher_for
-from biosignal_data.fetchers.base import Fetcher, ResolvedVersion
+from biosignal_data.fetchers.base import Fetcher, ResolvedVersion, SourceFileMissingError
 from biosignal_data.paths import holds_recordings
 from biosignal_data.read.raw import stored_versions
 from biosignal_data.storage.layout import VersionLocation
-from biosignal_data.storage.manifest import FileEntry, HashingReader, Manifest, utcnow
+from biosignal_data.storage.manifest import (
+    FileEntry,
+    HashingReader,
+    Manifest,
+    MissingFile,
+    utcnow,
+)
 from biosignal_data.storage.stores import Store
 from biosignal_data.text import plural
 
@@ -114,6 +120,7 @@ class IngestReport:
     skipped: int = 0  # already stored by an earlier run
     bytes_copied: int = 0
     failed: dict[str, str] = field(default_factory=dict)
+    missing: dict[str, str] = field(default_factory=dict)  # listed, but the source has not
     complete: bool = False
 
 
@@ -226,13 +233,33 @@ def apply(
         total = plan.total_bytes if not plan.unknown_sizes else None
         progress.start(plan.version.value, len(plan.files), plan.already_stored, total)
     checkpoint = _Checkpointer(store, location, plan.manifest, done, checkpoint_every)
+    missing: dict[str, MissingFile] = {}
     _copy_all(
-        plan.to_copy, store, location, done, report, checkpoint, workers, progress, executor, stop
+        plan.to_copy,
+        store,
+        location,
+        done,
+        missing,
+        report,
+        checkpoint,
+        workers,
+        progress,
+        executor,
+        stop,
     )
     if report.failed:
         log.error("%d files failed; re-run to retry them", len(report.failed))
         return report
+    if missing:
+        log.warning(
+            "%s %s: %s listed by the source but missing there; the version is complete "
+            "without them, and they are listed in the manifest",
+            plan.dataset.id,
+            plan.version.value,
+            plural(len(missing), "file"),
+        )
     plan.manifest.files = sorted(done.values(), key=lambda f: f.path)
+    plan.manifest.missing = sorted(missing.values(), key=lambda f: f.path)
     plan.manifest.completed_at = utcnow()
     store.put_bytes(location.manifest_key, plan.manifest.to_json())
     store.put_bytes(location.success_key, b"", content_type="text/plain")
@@ -313,6 +340,7 @@ def _copy_all(
     store: Store,
     location: VersionLocation,
     done: dict[str, FileEntry],
+    missing: dict[str, MissingFile],
     report: IngestReport,
     checkpoint: _Checkpointer,
     workers: int,
@@ -320,7 +348,7 @@ def _copy_all(
     executor: Executor | None,
     stop: threading.Event | None,
 ) -> None:
-    # Results are handled in this thread only, so `done` and `report` need no lock.
+    # Results are handled in this thread only, so `done`, `missing` and `report` need no lock.
     on_read = progress.advance if progress else None
 
     def copy(remote: RemoteFile) -> FileEntry:
@@ -335,6 +363,15 @@ def _copy_all(
             remote = futures[future]
             try:
                 entry = future.result()
+            except SourceFileMissingError as exc:
+                log.warning("%s: listed by the source, but missing there: %s", remote.path, exc)
+                missing[remote.path] = MissingFile(
+                    path=remote.path, reason=str(exc), source_url=remote.url
+                )
+                report.missing[remote.path] = str(exc)
+                if progress:
+                    progress.file_done(remote.path, ok=False)
+                continue
             except Exception as exc:  # noqa: BLE001 - recorded per file, reported at the end
                 log.error("%s: %s", remote.path, exc)
                 report.failed[remote.path] = str(exc)
