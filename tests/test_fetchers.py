@@ -318,7 +318,7 @@ def test_figshare_connects_over_ipv4_only() -> None:
     dataset = make_dataset(id="figshare/1", source={"type": "figshare", "article": 1})
     fetcher = fetcher_for(dataset)
     assert isinstance(fetcher, FigshareFetcher)
-    adapter = fetcher._session().get_adapter("https://api.figshare.com/")  # noqa: SLF001
+    adapter = fetcher._session().get_adapter("https://api.figshare.com/")
     default = http_session().get_adapter("https://example.org/")
     assert isinstance(adapter, HTTPAdapter) and isinstance(default, HTTPAdapter)
     ipv4_bind = ("0.0.0.0", 0)  # noqa: S104 - the bind address that forces IPv4
