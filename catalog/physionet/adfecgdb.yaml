@@ -1,0 +1,13 @@
+id: physionet/adfecgdb
+name: Abdominal and Direct Fetal ECG Database
+signals:
+- ecg
+source:
+  type: physionet
+  slug: adfecgdb
+  version: 1.0.0
+access:
+  tier: open
+homepage: https://physionet.org/content/adfecgdb/
+stats:
+  subjects: 5

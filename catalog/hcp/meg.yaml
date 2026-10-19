@@ -1,0 +1,13 @@
+id: hcp/meg
+name: Human Connectome Project MEG
+signals:
+- meg
+source:
+  type: manual
+access:
+  tier: registration
+  steps:
+  - Register on the provider's site and accept its license.
+  - Download all files into one folder, keeping the provider's folder structure.
+stats:
+  subjects: 95

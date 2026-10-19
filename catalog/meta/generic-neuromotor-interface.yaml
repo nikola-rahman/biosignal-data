@@ -1,0 +1,29 @@
+id: meta/generic-neuromotor-interface
+name: Generic neuromotor interface sEMG (gestures, handwriting, wrist)
+signals:
+- emg
+source:
+  type: http
+  files:
+  - url: https://fb-ctrl-oss.s3.amazonaws.com/neuromotor-data/data/discrete_gestures/full_data.tar
+    path: discrete_gestures/full_data.tar
+  - url: https://fb-ctrl-oss.s3.amazonaws.com/neuromotor-data/data/discrete_gestures/discrete_gestures_corpus.csv
+    path: discrete_gestures/discrete_gestures_corpus.csv
+  - url: https://fb-ctrl-oss.s3.amazonaws.com/neuromotor-data/data/handwriting/full_data.tar
+    path: handwriting/full_data.tar
+  - url: https://fb-ctrl-oss.s3.amazonaws.com/neuromotor-data/data/handwriting/handwriting_corpus.csv
+    path: handwriting/handwriting_corpus.csv
+  - url: https://fb-ctrl-oss.s3.amazonaws.com/neuromotor-data/data/wrist/full_data.tar
+    path: wrist/full_data.tar
+  - url: https://fb-ctrl-oss.s3.amazonaws.com/neuromotor-data/data/wrist/wrist_corpus.csv
+    path: wrist/wrist_corpus.csv
+access:
+  tier: open
+  license: CC BY-NC 4.0
+homepage: https://github.com/facebookresearch/generic-neuromotor-interface
+stats:
+  subjects: 300
+  hours: 282
+related:
+- nemar/nm000105
+- nemar/nm000106

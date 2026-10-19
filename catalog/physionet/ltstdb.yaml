@@ -1,0 +1,16 @@
+id: physionet/ltstdb
+name: Long-Term ST Database
+signals:
+- ecg
+source:
+  type: physionet
+  slug: ltstdb
+  version: 1.0.0
+access:
+  tier: open
+homepage: https://physionet.org/content/ltstdb/
+stats:
+  subjects: 80
+  recordings: 86
+  hours: 1940
+  hours_estimated: true

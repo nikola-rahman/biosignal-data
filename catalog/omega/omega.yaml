@@ -1,0 +1,16 @@
+id: omega/omega
+name: Open MEG Archive (OMEGA)
+signals:
+- meg
+source:
+  type: manual
+  url: https://www.mcgill.ca/bic/neuroinformatics/omega
+access:
+  tier: registration
+  steps:
+  - Register on the provider's site and accept its license.
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: https://www.mcgill.ca/bic/neuroinformatics/omega
+stats:
+  subjects: 644
+  hours: 150

@@ -1,0 +1,20 @@
+id: openneuro/ds003775
+name: SRM Resting-state EEG
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds003775
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds003775
+stats:
+  subjects: 111
+  recordings: 153
+  hours: 10.2
+  size_bytes: 4815795862
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds003775.v1.2.1

@@ -1,0 +1,17 @@
+id: ukbiobank/ecg
+name: UK Biobank resting 12-lead ECG
+signals:
+- ecg
+source:
+  type: manual
+  url: https://biobank.ndph.ox.ac.uk/ukb/field.cgi?id=20205
+access:
+  tier: application
+  steps:
+  - Apply for (paid) access at https://www.ukbiobank.ac.uk; download field 20205.
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: https://biobank.ndph.ox.ac.uk/ukb/field.cgi?id=20205
+stats:
+  subjects: 101621
+  hours: 340
+  hours_estimated: true

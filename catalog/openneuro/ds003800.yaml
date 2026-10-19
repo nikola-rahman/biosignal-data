@@ -1,0 +1,20 @@
+id: openneuro/ds003800
+name: Auditory Gamma Entrainment
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds003800
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds003800
+stats:
+  subjects: 13
+  recordings: 24
+  hours: 1.41
+  size_bytes: 198443567
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds003800.v1.0.0

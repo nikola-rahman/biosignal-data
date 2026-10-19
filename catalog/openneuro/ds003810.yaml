@@ -1,0 +1,19 @@
+id: openneuro/ds003810
+name: Motor Imagery vs Rest - Low-Cost EEG System
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds003810
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds003810
+stats:
+  subjects: 10
+  recordings: 50
+  size_bytes: 72366316
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds003810.v2.0.2

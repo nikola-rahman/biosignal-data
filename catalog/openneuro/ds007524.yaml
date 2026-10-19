@@ -1,0 +1,20 @@
+id: openneuro/ds007524
+name: LittlePrince_MEG_French_Read_Pallier2025
+signals:
+- meg
+source:
+  type: openneuro
+  accession: ds007524
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds007524
+stats:
+  subjects: 50
+  recordings: 500
+  hours: 63.99
+  size_bytes: 320573795930
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds007524.v1.0.1

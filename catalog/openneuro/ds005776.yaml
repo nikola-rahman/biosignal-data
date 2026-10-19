@@ -1,0 +1,19 @@
+id: openneuro/ds005776
+name: Electrical_Thermal_FingerTapping_2015
+signals:
+- fnirs
+source:
+  type: openneuro
+  accession: ds005776
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds005776
+stats:
+  subjects: 11
+  recordings: 46
+  size_bytes: 1286928698
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds005776.v1.0.1

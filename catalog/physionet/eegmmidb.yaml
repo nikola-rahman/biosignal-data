@@ -1,0 +1,13 @@
+id: physionet/eegmmidb
+name: EEG Motor Movement/Imagery Dataset
+signals:
+- eeg
+source:
+  type: physionet
+  slug: eegmmidb
+access:
+  tier: open
+homepage: https://physionet.org/content/eegmmidb/
+stats:
+  subjects: 109
+  hours: 47

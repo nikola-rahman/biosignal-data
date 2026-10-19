@@ -1,0 +1,21 @@
+id: openneuro/ds004520
+name: Changes in behavioral priority influence the accessibility of working memory content - Experiment
+  2
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds004520
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds004520
+stats:
+  subjects: 33
+  recordings: 33
+  hours: 0.06
+  size_bytes: 11175907697
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds004520.v1.0.1

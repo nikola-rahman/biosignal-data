@@ -1,0 +1,21 @@
+id: openneuro/ds006468
+name: MEG-SCANS - A comprehensive magnetoencephalography speech dataset with Stories, Chirps And Noisy
+  Sentences.
+signals:
+- meg
+source:
+  type: openneuro
+  accession: ds006468
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds006468
+stats:
+  subjects: 24
+  recordings: 189
+  hours: 21.74
+  size_bytes: 108674320301
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds006468.v1.1.2

@@ -1,0 +1,19 @@
+id: openneuro/ds004837
+name: Magnetoencephalographic (MEG) Pitch and Duration Mismatch Negativity (MMN) in First-Episode Psychosis
+signals:
+- meg
+source:
+  type: openneuro
+  accession: ds004837
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds004837
+stats:
+  subjects: 60
+  recordings: 106
+  size_bytes: 128779377455
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds004837.v1.0.2

@@ -1,0 +1,14 @@
+id: physionet/chbmit
+name: CHB-MIT Scalp EEG Database
+signals:
+- eeg
+source:
+  type: physionet
+  slug: chbmit
+  version: 1.0.0
+access:
+  tier: open
+homepage: https://physionet.org/content/chbmit/
+stats:
+  subjects: 22
+  hours: 983

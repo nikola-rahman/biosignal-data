@@ -1,0 +1,14 @@
+id: gigadb/openbmi
+name: 'OpenBMI (Lee 2019): MI, ERP and SSVEP'
+signals:
+- eeg
+- emg
+source:
+  type: manual
+access:
+  tier: open
+  steps:
+  - Download all files into one folder, keeping the provider's folder structure.
+stats:
+  subjects: 54
+  hours: 150

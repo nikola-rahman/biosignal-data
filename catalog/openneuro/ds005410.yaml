@@ -1,0 +1,20 @@
+id: openneuro/ds005410
+name: Semantic_conditioning
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds005410
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds005410
+stats:
+  subjects: 81
+  recordings: 81
+  hours: 22.98
+  size_bytes: 21213480734
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds005410.v1.0.1

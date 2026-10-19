@@ -1,0 +1,20 @@
+id: openneuro/ds003805
+name: Multisensory Gamma Entrainment
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds003805
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds003805
+stats:
+  subjects: 1
+  recordings: 1
+  hours: 0.03
+  size_bytes: 9223975
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds003805.v1.0.0

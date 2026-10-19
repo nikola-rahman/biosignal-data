@@ -1,0 +1,27 @@
+id: nsrr/nchsdb
+name: NCH Sleep DataBank (pediatric)
+signals:
+- eeg
+- eog
+- emg
+- ecg
+- resp
+- spo2
+source:
+  type: nsrr
+  slug: nchsdb
+access:
+  tier: application
+  steps:
+  - Create an account at https://sleepdata.org and submit a data access request for this dataset; wait
+    for approval.
+  - Copy your token from https://sleepdata.org/token and set NSRR_TOKEN.
+  - 'Install the official NSRR tool: `gem install nsrr --no-document` (needs Ruby).'
+  credentials:
+  - NSRR_TOKEN
+homepage: https://sleepdata.org/datasets/nchsdb
+stats:
+  subjects: 3673
+  recordings: 3980
+  hours: 32000
+  hours_estimated: true

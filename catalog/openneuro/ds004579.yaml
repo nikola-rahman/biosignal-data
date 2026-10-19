@@ -1,0 +1,20 @@
+id: openneuro/ds004579
+name: Interval Timing Task
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds004579
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds004579
+stats:
+  subjects: 139
+  recordings: 139
+  hours: 55.7
+  size_bytes: 25896737364
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds004579.v1.0.0

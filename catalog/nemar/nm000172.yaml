@@ -1,0 +1,18 @@
+id: nemar/nm000172
+name: High-gamma dataset described in Schirrmeister et al. 2017
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000172
+access:
+  tier: open
+  license: CC-BY-4.0
+homepage: https://nemar.org
+stats:
+  subjects: 14
+  recordings: 28
+  hours: 57.39
+  size_bytes: 19854087820
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).

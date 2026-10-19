@@ -1,0 +1,20 @@
+id: nemar/nm000144
+name: BNCI 2015-004 Mental tasks dataset
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000144
+access:
+  tier: open
+  license: CC-BY-NC-ND-4.0
+homepage: https://doi.org/10.82901/nemar.nm000144
+stats:
+  subjects: 9
+  recordings: 18
+  hours: 13.75
+  size_bytes: 1157300262
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.82901/nemar.nm000144

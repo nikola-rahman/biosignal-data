@@ -1,0 +1,18 @@
+id: nemar/nm000237
+name: 7-day motor imagery BCI EEG dataset from Zhou et al 2021
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000237
+access:
+  tier: open
+  license: CC-BY-4.0
+homepage: https://nemar.org
+stats:
+  subjects: 20
+  recordings: 833
+  hours: 90.07
+  size_bytes: 17139582972
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).

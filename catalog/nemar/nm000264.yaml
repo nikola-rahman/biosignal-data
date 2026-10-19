@@ -1,0 +1,21 @@
+id: nemar/nm000264
+name: Vaineau, Barachant & Andreev 2013 — Brain Invaders Adaptive versus Non-Adaptive P300 Brain-Computer
+  Interface dataset (BI2013a)
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000264
+access:
+  tier: open
+  license: CC-BY-1.0
+homepage: https://doi.org/10.5281/zenodo.1494163
+stats:
+  subjects: 24
+  recordings: 292
+  hours: 20.63
+  size_bytes: 1842010007
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.5281/zenodo.1494163

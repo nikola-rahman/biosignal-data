@@ -1,0 +1,21 @@
+id: nemar/nm000272
+name: 'Romani et al. 2025 — BrainForm: a Serious Game for BCI Training and Data Collection (P300 ERP,
+  University of Trento)'
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000272
+access:
+  tier: open
+  license: CC-BY-4.0
+homepage: https://doi.org/10.48550/arXiv.2510.10169
+stats:
+  subjects: 22
+  recordings: 120
+  hours: 6.28
+  size_bytes: 140847139
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.48550/arXiv.2510.10169

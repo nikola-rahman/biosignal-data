@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "biosignal-data"
+version = "0.1.0"
+description = "Catalog and raw-layer ingestion of public biosignal datasets (EEG, iEEG, ECG, EMG, PSG, PPG, MEG, ...) into object storage."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "boto3>=1.34",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+    "typer>=0.12",
+    # Official clients of the repositories we download from.
+    "dandi>=0.63", # DANDI Archive
+    "huggingface_hub>=0.24", # Hugging Face
+    "kaggle>=1.6", # Kaggle
+    "nemar-py>=0.3.3", # NEMAR
+    # Established readers for the native file formats (used as-is, nothing is converted).
+    "h5py>=3.10", # HDF5, MATLAB v7.3
+    "mne>=1.7", # EDF/BDF/GDF, BrainVision, EEGLAB, FIF, ...
+    "mne-bids>=0.15", # BIDS (OpenNeuro, NEMAR)
+    "pandas>=2.1", # CSV/TSV/Parquet tables
+    "pynwb>=2.8", # NWB (DANDI)
+    "scipy>=1.11", # MATLAB v4-v7
+    "wfdb>=4.1", # PhysioNet WFDB
+    "rich>=13",
+]
+
+[project.scripts]
+biosignal-data = "biosignal_data.cli:app"
+
+[dependency-groups]
+dev = [
+    "boto3-stubs[s3]>=1.34",
+    "moto[s3]>=5.0",
+    "mypy>=1.10",
+    "pre-commit>=3.7",
+    "pytest>=8.2",
+    "pytest-cov>=5.0",
+    "responses>=0.25",
+    "ruff>=0.5",
+    "types-PyYAML>=6.0",
+    "types-requests>=2.31",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/biosignal_data"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "BLE", "UP", "SIM", "RUF", "PTH", "N", "S", "C4", "PL"]
+ignore = [
+    "PLR0913",  # many keyword arguments are fine for CLI entry points
+    "PLR2004",  # magic numbers in tests and size constants
+    "PLR0911",  # suffix dispatch in read_any reads best as early returns
+    "PLR0917",  # typer commands take their options as parameters
+    "S603",     # subprocess calls use argument lists built from the catalog, never a shell
+    "S607",     # external tools (rsync, nsrr, kaggle) are resolved on PATH by design
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "PLR0915"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["nemar.*", "dandi.*", "huggingface_hub.*", "kaggle.*", "mne.*", "mne_bids.*", "wfdb.*", "pynwb.*", "h5py.*", "scipy.*", "pandas.*", "moto.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = ["network: talks to a real data source (skipped by default)"]

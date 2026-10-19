@@ -1,0 +1,16 @@
+id: physionet/butqdb
+name: Brno University of Technology ECG Quality Database
+signals:
+- ecg
+source:
+  type: physionet
+  slug: butqdb
+  version: 1.0.0
+access:
+  tier: open
+homepage: https://physionet.org/content/butqdb/
+stats:
+  subjects: 15
+  recordings: 18
+  hours: 430
+  hours_estimated: true

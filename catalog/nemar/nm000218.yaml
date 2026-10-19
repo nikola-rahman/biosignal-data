@@ -1,0 +1,18 @@
+id: nemar/nm000218
+name: BigP3BCI Study H — 9x8 checkerboard with gaze conditions (16 healthy subjects)
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000218
+access:
+  tier: open
+  license: CC-BY-4.0
+homepage: https://nemar.org
+stats:
+  subjects: 16
+  recordings: 372
+  hours: 7.43
+  size_bytes: 342380913
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).

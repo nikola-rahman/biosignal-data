@@ -1,0 +1,20 @@
+id: openneuro/ds005907
+name: 'EEG: RL Task (3-Armed Bandit) with alcohol cues in hazardous drinkers and ctls'
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds005907
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds005907
+stats:
+  subjects: 53
+  recordings: 53
+  hours: 14.17
+  size_bytes: 6062770483
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds005907.v1.0.0

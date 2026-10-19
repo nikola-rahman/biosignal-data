@@ -1,0 +1,18 @@
+id: nemar/nm000119
+name: Oikonomou2016 – SSVEP MAMEM 1 dataset
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000119
+access:
+  tier: open
+  license: ODC-By-1.0
+homepage: https://nemar.org
+stats:
+  subjects: 11
+  recordings: 47
+  hours: 6.22
+  size_bytes: 5751416681
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).

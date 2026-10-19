@@ -1,0 +1,20 @@
+id: openneuro/ds007169
+name: Multimodal Cognitive Workload n-back Task, 4 Difficulties
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds007169
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds007169
+stats:
+  subjects: 18
+  recordings: 18
+  hours: 5.09
+  size_bytes: 442139020
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds007169.v1.0.5

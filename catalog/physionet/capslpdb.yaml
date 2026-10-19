@@ -1,0 +1,20 @@
+id: physionet/capslpdb
+name: CAP Sleep Database
+signals:
+- eeg
+- eog
+- emg
+- ecg
+- resp
+- spo2
+source:
+  type: physionet
+  slug: capslpdb
+  version: 1.0.0
+access:
+  tier: open
+homepage: https://physionet.org/content/capslpdb/
+stats:
+  subjects: 108
+  hours: 950
+  hours_estimated: true

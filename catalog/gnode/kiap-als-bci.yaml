@@ -1,0 +1,16 @@
+id: gnode/kiap-als-bci
+name: Intracortical BCI in a completely locked-in ALS patient
+signals:
+- single-units
+source:
+  type: manual
+  url: https://doi.gin.g-node.org/10.12751/g-node.jdwmjd/
+access:
+  tier: open
+  steps:
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: https://doi.gin.g-node.org/10.12751/g-node.jdwmjd/
+stats:
+  subjects: 1
+  hours: 100
+  hours_estimated: true

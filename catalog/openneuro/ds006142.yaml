@@ -1,0 +1,20 @@
+id: openneuro/ds006142
+name: Essex EEG Movie Memory dataset
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds006142
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds006142
+stats:
+  subjects: 27
+  recordings: 27
+  hours: 26.3
+  size_bytes: 26073650133
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds006142.v1.0.2

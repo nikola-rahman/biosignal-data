@@ -1,0 +1,18 @@
+id: nemar/nm000124
+name: Han2024 – SSVEP fatigue dataset with two frequency paradigms
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000124
+access:
+  tier: open
+  license: CC BY 4.0
+homepage: https://nemar.org
+stats:
+  subjects: 24
+  recordings: 48
+  hours: 19.84
+  size_bytes: 18297653917
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).

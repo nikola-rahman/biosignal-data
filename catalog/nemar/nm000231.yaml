@@ -1,0 +1,18 @@
+id: nemar/nm000231
+name: P300 dataset from Hoffmann et al 2008
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000231
+access:
+  tier: open
+  license: Unknown
+homepage: https://nemar.org
+stats:
+  subjects: 8
+  recordings: 192
+  hours: 2.94
+  size_bytes: 2086580715
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).

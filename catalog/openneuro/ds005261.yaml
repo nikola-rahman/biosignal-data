@@ -1,0 +1,20 @@
+id: openneuro/ds005261
+name: Gloups_MEG
+signals:
+- meg
+source:
+  type: openneuro
+  accession: ds005261
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds005261
+stats:
+  subjects: 17
+  recordings: 128
+  hours: 3.04
+  size_bytes: 147368587261
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds005261.v3.0.0

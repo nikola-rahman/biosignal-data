@@ -1,0 +1,20 @@
+id: openneuro/ds004784
+name: Phantom EEG Dataset with Motion, Muscle, and Eye Artifacts and Example Scripts
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds004784
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds004784
+stats:
+  subjects: 1
+  recordings: 6
+  hours: 0.54
+  size_bytes: 1084178641
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds004784.v1.0.4

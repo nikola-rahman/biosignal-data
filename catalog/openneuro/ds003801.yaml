@@ -1,0 +1,20 @@
+id: openneuro/ds003801
+name: Neural Tracking to go
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds003801
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds003801
+stats:
+  subjects: 20
+  recordings: 20
+  hours: 13.69
+  size_bytes: 1233075132
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds003801.v1.0.0

@@ -1,0 +1,18 @@
+id: nemar/nm000129
+name: Liu2020 – BETA SSVEP benchmark dataset
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000129
+access:
+  tier: open
+  license: Non-commercial research use
+homepage: https://nemar.org
+stats:
+  subjects: 70
+  recordings: 70
+  hours: 13.02
+  size_bytes: 3012850650
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).

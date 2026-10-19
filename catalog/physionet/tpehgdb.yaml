@@ -1,0 +1,15 @@
+id: physionet/tpehgdb
+name: Term-Preterm ElectroHysteroGram Database
+signals:
+- ehg
+source:
+  type: physionet
+  slug: tpehgdb
+  version: 1.0.1
+access:
+  tier: open
+  license: ODC-By 1.0
+homepage: https://physionet.org/content/tpehgdb/
+stats:
+  recordings: 300
+  hours: 150

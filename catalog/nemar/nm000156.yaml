@@ -1,0 +1,18 @@
+id: nemar/nm000156
+name: Hybrid EEG-fNIRS MI dataset for ICH from Shi et al 2025
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000156
+access:
+  tier: open
+  license: CC-BY-NC-ND-4.0
+homepage: https://nemar.org
+stats:
+  subjects: 37
+  recordings: 98
+  hours: 31.22
+  size_bytes: 2783519322
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).

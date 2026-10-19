@@ -1,0 +1,18 @@
+id: nemar/nm000152
+name: Upper-limb elbow-centered motor imagery dataset (10 classes)
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000152
+access:
+  tier: open
+  license: CC BY 4.0
+homepage: https://nemar.org
+stats:
+  subjects: 12
+  recordings: 180
+  hours: 9.25
+  size_bytes: 1727306574
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).

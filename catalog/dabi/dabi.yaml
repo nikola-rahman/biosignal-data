@@ -1,0 +1,18 @@
+id: dabi/dabi
+name: Data Archive for the BRAIN Initiative (human iEEG, LFP, single units)
+signals:
+- ieeg
+- lfp
+- single-units
+source:
+  type: manual
+  url: https://dabi.loni.usc.edu
+access:
+  tier: application
+  steps:
+  - Request each dataset from its principal investigator via DABI.
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: https://dabi.loni.usc.edu
+stats:
+  hours: 500
+  hours_estimated: true

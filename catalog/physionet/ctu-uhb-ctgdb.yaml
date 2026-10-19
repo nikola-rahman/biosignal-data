@@ -1,0 +1,15 @@
+id: physionet/ctu-uhb-ctgdb
+name: CTU-UHB Intrapartum Cardiotocography Database
+signals:
+- ctg
+source:
+  type: physionet
+  slug: ctu-uhb-ctgdb
+  version: 1.0.0
+access:
+  tier: open
+homepage: https://physionet.org/content/ctu-uhb-ctgdb/
+stats:
+  recordings: 552
+  hours: 600
+  hours_estimated: true

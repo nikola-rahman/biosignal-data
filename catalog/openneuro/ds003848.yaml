@@ -1,0 +1,20 @@
+id: openneuro/ds003848
+name: Dataset Clinical Epilepsy iEEG to BIDS - RESPect_longterm_iEEG
+signals:
+- ieeg
+source:
+  type: openneuro
+  accession: ds003848
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds003848
+stats:
+  subjects: 6
+  recordings: 22
+  hours: 20.28
+  size_bytes: 69773848040
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds003848.v1.0.3

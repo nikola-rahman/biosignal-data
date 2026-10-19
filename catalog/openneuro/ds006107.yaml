@@ -1,0 +1,19 @@
+id: openneuro/ds006107
+name: iEEG_Neural_spatial_volatility
+signals:
+- ieeg
+source:
+  type: openneuro
+  accession: ds006107
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds006107
+stats:
+  subjects: 166
+  recordings: 167
+  size_bytes: 12778446176
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds006107.v1.0.0

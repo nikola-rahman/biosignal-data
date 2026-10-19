@@ -1,0 +1,18 @@
+id: epilepsyecosystem/neurovista
+name: NeuroVista chronic cohort (full)
+signals:
+- ieeg
+source:
+  type: manual
+  url: https://melbourne.figshare.com/articles/Seizure_Data/6939809
+access:
+  tier: application
+  steps:
+  - Request access through the provider's form and wait for approval.
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: https://melbourne.figshare.com/articles/Seizure_Data/6939809
+stats:
+  subjects: 15
+  hours: 100000
+  hours_estimated: true
+  note: 185-767 days per patient, 16 channels.

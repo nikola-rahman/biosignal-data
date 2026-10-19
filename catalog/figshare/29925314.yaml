@@ -1,0 +1,15 @@
+id: figshare/29925314
+name: ACS-ECG
+signals:
+- ecg
+source:
+  type: figshare
+  article: 29925314
+access:
+  tier: open
+homepage: https://doi.org/10.6084/m9.figshare.29925314
+stats:
+  subjects: 18909
+  recordings: 19955
+  hours: 55
+  hours_estimated: true

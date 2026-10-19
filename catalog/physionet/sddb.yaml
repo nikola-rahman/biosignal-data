@@ -1,0 +1,15 @@
+id: physionet/sddb
+name: Sudden Cardiac Death Holter Database
+signals:
+- ecg
+source:
+  type: physionet
+  slug: sddb
+  version: 1.0.0
+access:
+  tier: open
+homepage: https://physionet.org/content/sddb/
+stats:
+  subjects: 23
+  hours: 345
+  hours_estimated: true

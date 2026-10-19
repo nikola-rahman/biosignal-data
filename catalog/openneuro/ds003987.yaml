@@ -1,0 +1,20 @@
+id: openneuro/ds003987
+name: 'EEG: Amphetamine trials 5CCPT and Probabilistic Learning'
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds003987
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds003987
+stats:
+  subjects: 23
+  recordings: 69
+  hours: 52.08
+  size_bytes: 27451677701
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds003987.v1.0.0

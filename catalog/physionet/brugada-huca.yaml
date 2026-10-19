@@ -1,0 +1,13 @@
+id: physionet/brugada-huca
+name: 'Brugada-HUCA: 12-lead ECG recordings for Brugada syndrome'
+signals:
+- ecg
+source:
+  type: physionet
+  slug: brugada-huca
+  version: 1.0.0
+access:
+  tier: open
+homepage: https://physionet.org/content/brugada-huca/
+stats:
+  recordings: 363

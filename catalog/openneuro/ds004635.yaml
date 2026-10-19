@@ -1,0 +1,20 @@
+id: openneuro/ds004635
+name: Gaffrey Lab Infant Microstates Reliability
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds004635
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds004635
+stats:
+  subjects: 48
+  recordings: 48
+  hours: 16.85
+  size_bytes: 27971375388
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds004635.v3.1.0

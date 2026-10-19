@@ -1,0 +1,20 @@
+id: openneuro/ds007056
+name: PURSUE P300 Visual Oddball
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds007056
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds007056
+stats:
+  subjects: 286
+  recordings: 286
+  hours: 34.87
+  size_bytes: 8413923956
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds007056.v1.1.1

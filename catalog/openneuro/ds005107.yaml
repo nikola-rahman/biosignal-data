@@ -1,0 +1,20 @@
+id: openneuro/ds005107
+name: FACE-DEC
+signals:
+- meg
+source:
+  type: openneuro
+  accession: ds005107
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds005107
+stats:
+  subjects: 21
+  recordings: 350
+  hours: 31.63
+  size_bytes: 29613455000
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds005107.v2.0.0

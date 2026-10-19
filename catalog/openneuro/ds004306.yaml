@@ -1,0 +1,20 @@
+id: openneuro/ds004306
+name: EEG Semantic Imagination and Perception Dataset
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds004306
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds004306
+stats:
+  subjects: 12
+  recordings: 15
+  hours: 18.18
+  size_bytes: 686761341
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds004306.v1.0.2

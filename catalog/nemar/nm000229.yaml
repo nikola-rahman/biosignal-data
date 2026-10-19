@@ -1,0 +1,18 @@
+id: nemar/nm000229
+name: 'MEG-MASC: a high-quality magneto-encephalography dataset for evaluating natural speech processing
+  - NEMAR Dataset'
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000229
+access:
+  tier: open
+  license: null
+homepage: https://nemar.org
+stats:
+  subjects: 29
+  recordings: 1360
+  size_bytes: 0
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).

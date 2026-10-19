@@ -1,0 +1,19 @@
+id: openneuro/ds006394
+name: Electrophysiological markers of surprise-induced failures of visual and auditory awareness
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds006394
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds006394
+stats:
+  subjects: 33
+  recordings: 60
+  size_bytes: 560818153
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds006394.v1.0.3

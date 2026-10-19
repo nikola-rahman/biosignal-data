@@ -1,0 +1,21 @@
+id: qmul/deap
+name: 'DEAP: emotion analysis using physiological signals'
+signals:
+- eeg
+- eda
+- emg
+- eog
+- resp
+- ppg
+source:
+  type: manual
+  url: https://www.eecs.qmul.ac.uk/mmv/datasets/deap/
+access:
+  tier: registration
+  steps:
+  - Register on the provider's site and accept its license.
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: https://www.eecs.qmul.ac.uk/mmv/datasets/deap/
+stats:
+  subjects: 32
+  hours: 21

@@ -1,0 +1,14 @@
+id: dandi/000469
+name: Human single neurons during a Sternberg working memory task
+signals:
+- single-units
+- lfp
+source:
+  type: dandi
+  dandiset: 000469
+access:
+  tier: open
+homepage: https://dandiarchive.org/dandiset/000469
+stats:
+  subjects: 21
+  recordings: 41

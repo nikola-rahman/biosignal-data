@@ -1,0 +1,15 @@
+id: braintreebank/braintreebank
+name: 'Brain Treebank: sEEG during movie watching'
+signals:
+- ieeg
+source:
+  type: manual
+  url: https://arxiv.org/pdf/2411.08343
+access:
+  tier: open
+  steps:
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: https://arxiv.org/pdf/2411.08343
+stats:
+  subjects: 10
+  hours: 43.5

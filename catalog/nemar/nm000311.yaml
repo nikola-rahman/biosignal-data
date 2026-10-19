@@ -1,0 +1,20 @@
+id: nemar/nm000311
+name: Multimodal upper-limb MI/ME EEG (Jeong et al. 2020)
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000311
+access:
+  tier: open
+  license: CC0-1.0
+homepage: https://doi.org/10.82901/nemar.nm000311
+stats:
+  subjects: 25
+  recordings: 213
+  hours: 124.06
+  size_bytes: 95161259482
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.82901/nemar.nm000311

@@ -1,0 +1,20 @@
+id: openneuro/ds005555
+name: The Bitbrain Open Access Sleep (BOAS) dataset
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds005555
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds005555
+stats:
+  subjects: 128
+  recordings: 256
+  hours: 2002.59
+  size_bytes: 35921406226
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds005555.v1.1.1

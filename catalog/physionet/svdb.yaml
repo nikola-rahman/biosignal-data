@@ -1,0 +1,14 @@
+id: physionet/svdb
+name: MIT-BIH Supraventricular Arrhythmia Database
+signals:
+- ecg
+source:
+  type: physionet
+  slug: svdb
+  version: 1.0.0
+access:
+  tier: open
+homepage: https://physionet.org/content/svdb/
+stats:
+  recordings: 78
+  hours: 39

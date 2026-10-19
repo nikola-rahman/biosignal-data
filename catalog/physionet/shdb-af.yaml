@@ -1,0 +1,15 @@
+id: physionet/shdb-af
+name: 'SHDB-AF: Holter ECG database for atrial fibrillation'
+signals:
+- ecg
+source:
+  type: physionet
+  slug: shdb-af
+  version: 1.0.1
+access:
+  tier: open
+homepage: https://physionet.org/content/shdb-af/
+stats:
+  recordings: 128
+  hours: 3070
+  hours_estimated: true

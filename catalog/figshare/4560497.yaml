@@ -1,0 +1,15 @@
+id: figshare/4560497
+name: Chapman University - Shaoxing People's Hospital 12-lead ECG
+signals:
+- ecg
+source:
+  type: figshare
+  collection: 4560497
+access:
+  tier: open
+homepage: https://figshare.com/collections/ChapmanECG/4560497/2
+stats:
+  subjects: 34905
+  recordings: 45152
+  hours: 125
+  hours_estimated: true

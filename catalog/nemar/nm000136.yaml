@@ -1,0 +1,21 @@
+id: nemar/nm000136
+name: Guttmann-Flury et al. 2025 (P300) — Dataset combining EEG, eye-tracking, and high-speed video for
+  ocular activity analysis across BCI paradigms
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000136
+access:
+  tier: open
+  license: CC0
+homepage: https://doi.org/10.82901/nemar.nm000136
+stats:
+  subjects: 31
+  recordings: 63
+  hours: 11.22
+  size_bytes: 7887187627
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.82901/nemar.nm000136

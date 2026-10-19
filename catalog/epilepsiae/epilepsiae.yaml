@@ -1,0 +1,18 @@
+id: epilepsiae/epilepsiae
+name: EPILEPSIAE (intracranial part)
+signals:
+- ieeg
+- eeg
+source:
+  type: manual
+  url: https://www.epilepsy.uni-freiburg.de/database
+access:
+  tier: application
+  steps:
+  - Purchase or apply for access via the University of Freiburg.
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: https://www.epilepsy.uni-freiburg.de/database
+stats:
+  subjects: 50
+  hours: 7500
+  hours_estimated: true

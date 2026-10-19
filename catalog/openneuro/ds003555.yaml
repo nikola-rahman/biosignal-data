@@ -1,0 +1,19 @@
+id: openneuro/ds003555
+name: Dataset of EEG recordings of pediatric patients with epilepsy based on the 10-20 system
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds003555
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds003555
+stats:
+  subjects: 30
+  recordings: 30
+  size_bytes: 16177352613
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds003555.v1.0.1

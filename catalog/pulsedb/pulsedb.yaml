@@ -1,0 +1,22 @@
+id: pulsedb/pulsedb
+name: PulseDB (derived from MIMIC-III and VitalDB)
+signals:
+- ppg
+- ecg
+- abp
+source:
+  type: manual
+  url: https://www.frontiersin.org/articles/10.3389/fdgth.2022.1090854
+access:
+  tier: open
+  steps:
+  - Generate with the PulseDB code from MIMIC-III and VitalDB, then ingest the output.
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: https://www.frontiersin.org/articles/10.3389/fdgth.2022.1090854
+stats:
+  subjects: 5361
+  hours: 14500
+  hours_estimated: true
+related:
+- physionet/mimic3wdb
+- physionet/vitaldb

@@ -1,0 +1,20 @@
+id: openneuro/ds007666
+name: Grupos Pre and Post bids
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds007666
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds007666
+stats:
+  subjects: 55
+  recordings: 110
+  hours: 23.66
+  size_bytes: 656216929
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds007666.v1.0.0

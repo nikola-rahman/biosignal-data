@@ -1,0 +1,15 @@
+id: physionet/cebsdb
+name: Combined measurement of ECG, Breathing and Seismocardiograms
+signals:
+- ecg
+- resp
+source:
+  type: physionet
+  slug: cebsdb
+  version: 1.0.0
+access:
+  tier: open
+homepage: https://physionet.org/content/cebsdb/
+stats:
+  subjects: 20
+  recordings: 60

@@ -1,0 +1,18 @@
+id: nemar/nm000217
+name: P300 dataset BI2015b from a "Brain Invaders" experiment
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000217
+access:
+  tier: open
+  license: CC-BY-4.0
+homepage: https://nemar.org
+stats:
+  subjects: 44
+  recordings: 176
+  hours: 26.08
+  size_bytes: 4640665576
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).

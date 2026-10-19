@@ -1,0 +1,20 @@
+id: physionet/challenge-2018
+name: 'PhysioNet/CinC Challenge 2018: You Snooze, You Win'
+signals:
+- eeg
+- eog
+- emg
+- ecg
+- resp
+- spo2
+source:
+  type: physionet
+  slug: challenge-2018
+access:
+  tier: open
+homepage: https://physionet.org/content/challenge-2018/
+stats:
+  subjects: 1985
+  hours: 16000
+  hours_estimated: true
+  note: MGH polysomnograms; may overlap with bdsp/hsp.

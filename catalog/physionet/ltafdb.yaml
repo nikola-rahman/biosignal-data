@@ -1,0 +1,16 @@
+id: physionet/ltafdb
+name: Long Term AF Database
+signals:
+- ecg
+source:
+  type: physionet
+  slug: ltafdb
+  version: 1.0.0
+access:
+  tier: open
+  license: ODC-By 1.0
+homepage: https://physionet.org/content/ltafdb/
+stats:
+  recordings: 84
+  hours: 2060
+  hours_estimated: true

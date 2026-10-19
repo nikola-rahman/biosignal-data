@@ -1,0 +1,17 @@
+id: meta/emg2qwerty
+name: 'emg2qwerty: sEMG touch typing'
+signals:
+- emg
+source:
+  type: http
+  version: 2021-08
+  files:
+  - url: https://fb-ctrl-oss.s3.amazonaws.com/emg2qwerty/emg2qwerty-data-2021-08.tar.gz
+access:
+  tier: open
+homepage: https://github.com/facebookresearch/emg2qwerty
+stats:
+  subjects: 108
+  hours: 346
+related:
+- nemar/nm000104

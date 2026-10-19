@@ -1,0 +1,21 @@
+id: openneuro/ds006848
+name: 'AlphaDirection1: EEG, ECG, PPG in the resting state and working memory for sequentially and simultaneously
+  presented digits'
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds006848
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds006848
+stats:
+  subjects: 30
+  recordings: 52
+  hours: 47.41
+  size_bytes: 44416584256
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds006848.v1.0.0

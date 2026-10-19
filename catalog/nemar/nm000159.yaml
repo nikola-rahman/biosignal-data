@@ -1,0 +1,20 @@
+id: nemar/nm000159
+name: MUniverse Avrillon et al 2024
+signals:
+- emg
+source:
+  type: nemar
+  accession: nm000159
+access:
+  tier: open
+  license: CC0 BY 4.0
+homepage: https://doi.org/10.7910/DVN/L9OQY7
+stats:
+  subjects: 16
+  recordings: 124
+  hours: 1.55
+  size_bytes: 5917749171
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.7910/DVN/L9OQY7

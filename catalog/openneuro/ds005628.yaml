@@ -1,0 +1,20 @@
+id: openneuro/ds005628
+name: Dataset of Visual and Audiovisual Stimuli in Virtual Reality from the Edzna Archaeological Site
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds005628
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds005628
+stats:
+  subjects: 102
+  recordings: 306
+  hours: 20.95
+  size_bytes: 664444547
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds005628.v1.0.0

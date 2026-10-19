@@ -1,0 +1,22 @@
+id: bdsp/i-care
+name: I-CARE full cohort
+signals:
+- eeg
+- ecg
+source:
+  type: manual
+  url: https://bdsp.io
+access:
+  tier: credentialed
+  steps:
+  - Create an account at https://bdsp.io, upload a CITI human-subjects research certificate and sign the
+    BDSP data use agreement for this dataset.
+  - Download following BDSP's instructions, then ingest with --from-dir.
+homepage: https://bdsp.io
+stats:
+  subjects: 1020
+  hours: 56676
+related:
+- physionet/i-care
+notes:
+- BDSP project id not confirmed; look it up on bdsp.io.

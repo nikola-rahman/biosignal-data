@@ -1,0 +1,20 @@
+id: openneuro/ds005508
+name: Healthy Brain Network (HBN) EEG - Release 4
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds005508
+access:
+  tier: open
+  license: CC-BY-SA 4.0
+homepage: https://openneuro.org/datasets/ds005508
+stats:
+  subjects: 324
+  recordings: 3342
+  hours: 261.81
+  size_bytes: 246753616656
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds005508.v1.0.1

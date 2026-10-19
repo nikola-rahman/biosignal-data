@@ -1,0 +1,21 @@
+id: nemar/nm000338
+name: 'Lee et al. 2019 (Motor Imagery) — EEG dataset and OpenBMI toolbox for three BCI paradigms: an investigation
+  into BCI illiteracy'
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000338
+access:
+  tier: open
+  license: GPL-3.0
+homepage: https://doi.org/10.1093/gigascience/giz002
+stats:
+  subjects: 54
+  recordings: 216
+  hours: 91.54
+  size_bytes: 65269264274
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.1093/gigascience/giz002

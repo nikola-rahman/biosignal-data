@@ -1,0 +1,20 @@
+id: openneuro/ds004657
+name: Driving with Autonomous Aids
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds004657
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds004657
+stats:
+  subjects: 24
+  recordings: 119
+  hours: 27.21
+  size_bytes: 46237302253
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds004657.v1.0.3

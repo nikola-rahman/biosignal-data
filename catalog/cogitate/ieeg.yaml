@@ -1,0 +1,17 @@
+id: cogitate/ieeg
+name: Cogitate consortium iEEG
+signals:
+- ieeg
+source:
+  type: manual
+  url: https://arc-cogitate.com/data
+access:
+  tier: registration
+  steps:
+  - Register on the provider's site and accept its license.
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: https://arc-cogitate.com/data
+stats:
+  subjects: 38
+  hours: 55
+  hours_estimated: true

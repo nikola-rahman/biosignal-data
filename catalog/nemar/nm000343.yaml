@@ -1,0 +1,21 @@
+id: nemar/nm000343
+name: Hinss et al. 2021 — Open multi-session and multi-task EEG cognitive Dataset for passive brain-computer
+  Interface Applications
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000343
+access:
+  tier: open
+  license: CC-BY-SA-4.0
+homepage: https://doi.org/10.1038/s41597-022-01898-y
+stats:
+  subjects: 15
+  recordings: 30
+  hours: 3.97
+  size_bytes: 1310957074
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.1038/s41597-022-01898-y

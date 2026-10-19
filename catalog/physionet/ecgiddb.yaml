@@ -1,0 +1,14 @@
+id: physionet/ecgiddb
+name: ECG-ID Database
+signals:
+- ecg
+source:
+  type: physionet
+  slug: ecgiddb
+  version: 1.0.0
+access:
+  tier: open
+homepage: https://physionet.org/content/ecgiddb/
+stats:
+  subjects: 90
+  recordings: 310

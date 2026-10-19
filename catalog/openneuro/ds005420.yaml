@@ -1,0 +1,20 @@
+id: openneuro/ds005420
+name: Resting state EEG with closed eyes and open eyes in females from 60 to 80 years old
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds005420
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds005420
+stats:
+  subjects: 37
+  recordings: 72
+  hours: 5.41
+  size_bytes: 390188994
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds005420.v1.0.0

@@ -1,0 +1,19 @@
+id: openneuro/ds004551
+name: iEEG on children during slow wave sleep
+signals:
+- ieeg
+source:
+  type: openneuro
+  accession: ds004551
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds004551
+stats:
+  subjects: 114
+  recordings: 125
+  size_bytes: 74017379206
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds004551.v1.0.6

@@ -1,0 +1,19 @@
+id: openneuro/ds005189
+name: Search Superiority Recollection Familiarity
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds005189
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds005189
+stats:
+  subjects: 30
+  recordings: 30
+  size_bytes: 17255876906
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds005189.v1.0.1

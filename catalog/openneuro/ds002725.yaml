@@ -1,0 +1,19 @@
+id: openneuro/ds002725
+name: A dataset recording joint EEG-fMRI during affective music listening
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds002725
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds002725
+stats:
+  subjects: 21
+  recordings: 105
+  size_bytes: 16445696685
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds002725.v1.0.0

@@ -1,0 +1,18 @@
+id: nemar/nm000249
+name: BNCI 2022-001 EEG Correlates of Difficulty Level dataset
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000249
+access:
+  tier: open
+  license: CC-BY-4.0
+homepage: https://nemar.org
+stats:
+  subjects: 13
+  recordings: 13
+  hours: 16.19
+  size_bytes: 3203167296
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).

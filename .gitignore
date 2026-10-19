@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.env
+.DS_Store
+# local staging and caches
+staging/
+.cache/
+
+# local download destinations
+biosignal-lake/
+lake/

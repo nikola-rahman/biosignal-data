@@ -1,0 +1,21 @@
+id: openneuro/ds005873
+name: SeizeIT2
+signals:
+- eeg
+- emg
+source:
+  type: openneuro
+  accession: ds005873
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds005873
+stats:
+  subjects: 125
+  recordings: 5654
+  hours: 22897.17
+  size_bytes: 47635473156
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds005873.v1.1.0

@@ -1,0 +1,15 @@
+id: physionet/hd-semg
+name: 'Hyser: high-density surface EMG'
+signals:
+- emg
+source:
+  type: physionet
+  slug: hd-semg
+  version: 2.0.0
+access:
+  tier: open
+homepage: https://physionet.org/content/hd-semg/
+stats:
+  subjects: 20
+  hours: 40
+  hours_estimated: true

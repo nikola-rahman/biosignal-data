@@ -1,0 +1,19 @@
+id: nemar/nm000193
+name: Kojima et al. 2024 (Dataset A) — An auditory brain-computer interface based on selective attention
+  to multiple tone streams
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000193
+access:
+  tier: open
+  license: CC0-1.0
+homepage: https://nemar.org
+stats:
+  subjects: 11
+  recordings: 66
+  hours: 5.8
+  size_bytes: 4016730515
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).

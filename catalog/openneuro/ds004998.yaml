@@ -1,0 +1,21 @@
+id: openneuro/ds004998
+name: Exploring the electrophysiology of Parkinson's disease - magnetoencephalography combined with deep
+  brain recordings from the subthalamic nucleus.
+signals:
+- meg
+source:
+  type: openneuro
+  accession: ds004998
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds004998
+stats:
+  subjects: 20
+  recordings: 145
+  hours: 10.77
+  size_bytes: 173691728283
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds004998.v1.2.2

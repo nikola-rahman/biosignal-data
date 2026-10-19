@@ -1,0 +1,16 @@
+id: oxford/stn-lfp
+name: STN-LFP on/off medication and DBS (Oxford MRC BNDU)
+signals:
+- lfp
+source:
+  type: manual
+  url: https://data.mrc.ox.ac.uk/stn-lfp-on-off-and-dbs
+access:
+  tier: registration
+  steps:
+  - Register on the provider's site and accept its license.
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: https://data.mrc.ox.ac.uk/stn-lfp-on-off-and-dbs
+stats:
+  hours: 30
+  hours_estimated: true

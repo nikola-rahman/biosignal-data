@@ -1,0 +1,15 @@
+id: physionet/ptb-xl-plus
+name: 'PTB-XL+: feature and label extensions for PTB-XL'
+signals:
+- ecg
+source:
+  type: physionet
+  slug: ptb-xl-plus
+  version: 1.0.1
+access:
+  tier: open
+homepage: https://physionet.org/content/ptb-xl-plus/
+related:
+- physionet/ptb-xl
+notes:
+- Derived features and labels; the signals are PTB-XL.

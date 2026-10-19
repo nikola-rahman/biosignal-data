@@ -1,0 +1,20 @@
+id: physionet/mimic4wdb
+name: MIMIC-IV Waveform Database
+signals:
+- ecg
+- ppg
+- abp
+- resp
+source:
+  type: physionet
+  slug: mimic4wdb
+  version: 0.1.0
+access:
+  tier: open
+  license: ODbL 1.0
+homepage: https://physionet.org/content/mimic4wdb/
+stats:
+  subjects: 198
+  recordings: 200
+notes:
+- Version 0.1.0 has 200 records; PhysioNet announces a release of ~10,000 records.

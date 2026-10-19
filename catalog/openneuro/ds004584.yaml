@@ -1,0 +1,20 @@
+id: openneuro/ds004584
+name: Rest eyes open
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds004584
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds004584
+stats:
+  subjects: 149
+  recordings: 149
+  hours: 6.64
+  size_bytes: 3078216426
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds004584.v1.0.0

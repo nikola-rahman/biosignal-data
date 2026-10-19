@@ -1,0 +1,20 @@
+id: nemar/nm000107
+name: 'FRL Wrist Control: Wrist Movement Decoding from Surface Electromyography'
+signals:
+- emg
+source:
+  type: nemar
+  accession: nm000107
+access:
+  tier: open
+  license: CC-BY-NC 4.0
+homepage: https://doi.org/10.82901/nemar.nm000107
+stats:
+  subjects: 100
+  recordings: 182
+  hours: 77.18
+  size_bytes: 26685167982
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.82901/nemar.nm000107

@@ -1,0 +1,20 @@
+id: openneuro/ds004796
+name: A Polish Electroencephalography, Alzheimer’s Risk-genes, Lifestyle and Neuroimaging (PEARL-Neuro)
+  Database
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds004796
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds004796
+stats:
+  subjects: 79
+  recordings: 235
+  size_bytes: 257896989782
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds004796.v1.1.0

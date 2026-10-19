@@ -1,0 +1,15 @@
+id: brainwave/private-ieeg
+name: BrainWave private iEEG
+signals:
+- ieeg
+source:
+  type: manual
+  url: https://arxiv.org/html/2402.10251v7
+access:
+  tier: unavailable
+  steps:
+  - Not publicly released; listed for completeness.
+homepage: https://arxiv.org/html/2402.10251v7
+stats:
+  subjects: 17
+  hours: 5142

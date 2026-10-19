@@ -1,0 +1,20 @@
+id: openneuro/ds007427
+name: Comprehensive methodology for sample enrichment in EEG biomarker studies for Alzheimer’s risk classification
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds007427
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds007427
+stats:
+  subjects: 44
+  recordings: 44
+  hours: 3.91
+  size_bytes: 3379868887
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds007427.v1.0.1

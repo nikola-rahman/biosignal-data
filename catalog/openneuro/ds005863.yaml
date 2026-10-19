@@ -1,0 +1,19 @@
+id: openneuro/ds005863
+name: Cognitive Electrophysiology in Socioeconomic Context in Adulthood
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds005863
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds005863
+stats:
+  subjects: 127
+  recordings: 357
+  size_bytes: 11371789699
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds005863.v2.0.0

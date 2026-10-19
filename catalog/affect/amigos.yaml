@@ -1,0 +1,13 @@
+id: affect/amigos
+name: AMIGOS
+signals:
+- eeg
+- ecg
+- eda
+source:
+  type: manual
+access:
+  tier: registration
+  steps:
+  - Register on the provider's site and accept its license.
+  - Download all files into one folder, keeping the provider's folder structure.

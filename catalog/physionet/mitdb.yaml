@@ -1,0 +1,16 @@
+id: physionet/mitdb
+name: MIT-BIH Arrhythmia Database
+signals:
+- ecg
+source:
+  type: physionet
+  slug: mitdb
+  version: 1.0.0
+access:
+  tier: open
+homepage: https://physionet.org/content/mitdb/
+stats:
+  subjects: 47
+  recordings: 48
+  hours: 24
+download_verified: true

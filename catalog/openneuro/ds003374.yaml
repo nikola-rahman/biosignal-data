@@ -1,0 +1,20 @@
+id: openneuro/ds003374
+name: Dataset of neurons and intracranial EEG from human amygdala during aversive dynamic visual stimulation
+signals:
+- ieeg
+source:
+  type: openneuro
+  accession: ds003374
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds003374
+stats:
+  subjects: 9
+  recordings: 18
+  hours: 2.61
+  size_bytes: 175461388
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds003374.v1.1.1

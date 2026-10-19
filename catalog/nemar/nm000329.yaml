@@ -1,0 +1,20 @@
+id: nemar/nm000329
+name: 'Brandl et al. 2020 — Motor Imagery Under Distraction: An Open Access BCI Dataset'
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000329
+access:
+  tier: open
+  license: CC-BY-NC-ND-4.0
+homepage: https://doi.org/10.3389/fnins.2020.566147
+stats:
+  subjects: 16
+  recordings: 112
+  hours: 97.11
+  size_bytes: 66090664592
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.3389/fnins.2020.566147

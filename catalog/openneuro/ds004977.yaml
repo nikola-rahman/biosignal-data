@@ -1,0 +1,20 @@
+id: openneuro/ds004977
+name: 'CARLA: Adjusted common average referencing for cortico-cortical evoked potential data'
+signals:
+- ieeg
+source:
+  type: openneuro
+  accession: ds004977
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds004977
+stats:
+  subjects: 4
+  recordings: 6
+  hours: 0.88
+  size_bytes: 1604950022
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds004977.v1.2.0

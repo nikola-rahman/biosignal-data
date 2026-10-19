@@ -1,0 +1,21 @@
+id: dreem/dod
+name: Dreem Open Datasets (DOD-H, DOD-O)
+signals:
+- eeg
+- eog
+- emg
+- ecg
+- resp
+- spo2
+source:
+  type: manual
+  url: https://arxiv.org/pdf/1911.03221
+access:
+  tier: open
+  steps:
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: https://arxiv.org/pdf/1911.03221
+stats:
+  subjects: 80
+  hours: 640
+  hours_estimated: true

@@ -1,0 +1,20 @@
+id: nemar/nm000140
+name: BNCI 2015-001 Motor Imagery dataset
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000140
+access:
+  tier: open
+  license: CC-BY-NC-ND-4.0
+homepage: https://doi.org/10.82901/nemar.nm000140
+stats:
+  subjects: 12
+  recordings: 28
+  hours: 16.69
+  size_bytes: 1212938754
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.82901/nemar.nm000140

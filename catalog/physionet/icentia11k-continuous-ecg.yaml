@@ -1,0 +1,17 @@
+id: physionet/icentia11k-continuous-ecg
+name: Icentia11k Single Lead Continuous Raw ECG
+signals:
+- ecg
+source:
+  type: physionet
+  slug: icentia11k-continuous-ecg
+  version: '1.0'
+access:
+  tier: open
+  license: CC BY-NC-SA 4.0
+homepage: https://physionet.org/content/icentia11k-continuous-ecg/
+stats:
+  subjects: 11000
+  hours: 630000
+  hours_estimated: true
+  note: 'Estimate: 541,794 segments of ~70 min.'

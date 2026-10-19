@@ -1,0 +1,20 @@
+id: kaggle/seizure-prediction
+name: American Epilepsy Society Seizure Prediction Challenge
+signals:
+- ieeg
+source:
+  type: kaggle
+  kind: competition
+  ref: seizure-prediction
+access:
+  tier: registration
+  steps:
+  - Log in to Kaggle and accept the competition rules on its page.
+  - 'Authenticate the Kaggle CLI: `kaggle auth login` or set KAGGLE_API_TOKEN.'
+  credentials:
+  - KAGGLE_API_TOKEN
+homepage: https://www.kaggle.com/competitions/seizure-prediction
+stats:
+  subjects: 2
+  hours: 230
+  note: Human part; the rest are dogs.

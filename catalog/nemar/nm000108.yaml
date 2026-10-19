@@ -1,0 +1,19 @@
+id: nemar/nm000108
+name: 'HySER: High-Density Surface Electromyogram Recordings'
+signals:
+- emg
+source:
+  type: nemar
+  accession: nm000108
+access:
+  tier: open
+  license: ODC-By-1.0
+homepage: https://doi.org/10.82901/nemar.nm000108
+stats:
+  subjects: 20
+  recordings: 1514
+  size_bytes: 116163636943
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.82901/nemar.nm000108

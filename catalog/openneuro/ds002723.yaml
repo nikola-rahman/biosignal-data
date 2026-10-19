@@ -1,0 +1,19 @@
+id: openneuro/ds002723
+name: 'A dataset recorded during development of an affective brain-computer music interface: testing session'
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds002723
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds002723
+stats:
+  subjects: 8
+  recordings: 44
+  size_bytes: 2789434877
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds002723.v1.1.0

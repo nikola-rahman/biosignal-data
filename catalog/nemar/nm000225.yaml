@@ -1,0 +1,20 @@
+id: nemar/nm000225
+name: 'PhysioNet 2018 Challenge: Sleep Arousal Detection PSG (Training)'
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000225
+access:
+  tier: open
+  license: Open Data Commons Attribution License v1.0
+homepage: https://doi.org/10.13026/6phb-r450
+stats:
+  subjects: 1983
+  recordings: 1983
+  hours: 15261.23
+  size_bytes: 430724611756
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.13026/6phb-r450

@@ -1,0 +1,18 @@
+id: nemar/nm000196
+name: c-VEP dataset from Thielen et al. (2015)
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000196
+access:
+  tier: open
+  license: CC0-1.0
+homepage: https://nemar.org
+stats:
+  subjects: 12
+  recordings: 36
+  hours: 2.62
+  size_bytes: 3761962571
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).

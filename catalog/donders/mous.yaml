@@ -1,0 +1,15 @@
+id: donders/mous
+name: Mother Of Unification Studies (MOUS)
+signals:
+- meg
+source:
+  type: manual
+  url: https://www.nature.com/articles/s41597-019-0020-y
+access:
+  tier: application
+  steps:
+  - Request access through the provider's form and wait for approval.
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: https://www.nature.com/articles/s41597-019-0020-y
+stats:
+  subjects: 204

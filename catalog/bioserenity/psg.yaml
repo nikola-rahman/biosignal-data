@@ -1,0 +1,21 @@
+id: bioserenity/psg
+name: BioSerenity PSG (SleepFM pretraining)
+signals:
+- eeg
+- eog
+- emg
+- ecg
+- resp
+- spo2
+source:
+  type: manual
+  url: https://www.nature.com/articles/s41591-025-04133-4
+access:
+  tier: unavailable
+  steps:
+  - Not publicly released; listed for completeness.
+homepage: https://www.nature.com/articles/s41591-025-04133-4
+stats:
+  recordings: 18900
+  hours: 170000
+  hours_estimated: true

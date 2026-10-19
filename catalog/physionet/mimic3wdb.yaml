@@ -1,0 +1,20 @@
+id: physionet/mimic3wdb
+name: MIMIC-III Waveform Database
+signals:
+- ecg
+- ppg
+- abp
+- resp
+source:
+  type: physionet
+  slug: mimic3wdb
+  version: '1.0'
+access:
+  tier: open
+  license: ODbL 1.0
+homepage: https://physionet.org/content/mimic3wdb/
+stats:
+  subjects: 30000
+  recordings: 67830
+  hours: 3000000
+  note: '''Over three million hours'' per the PhysioNet page; ICU bedside monitors at 125 Hz.'

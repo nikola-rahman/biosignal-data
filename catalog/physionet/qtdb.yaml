@@ -1,0 +1,14 @@
+id: physionet/qtdb
+name: QT Database
+signals:
+- ecg
+source:
+  type: physionet
+  slug: qtdb
+  version: 1.0.0
+access:
+  tier: open
+homepage: https://physionet.org/content/qtdb/
+stats:
+  recordings: 105
+  hours: 26

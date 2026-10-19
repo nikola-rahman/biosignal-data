@@ -1,0 +1,20 @@
+id: nemar/nm000110
+name: CHB-MIT
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000110
+access:
+  tier: open
+  license: ODC-By-1.0
+homepage: https://doi.org/10.82901/nemar.nm000110
+stats:
+  subjects: 24
+  recordings: 686
+  hours: 982.93
+  size_bytes: 45759401177
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.82901/nemar.nm000110

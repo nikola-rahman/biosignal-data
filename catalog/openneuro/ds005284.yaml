@@ -1,0 +1,20 @@
+id: openneuro/ds005284
+name: 26 By Biosemi
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds005284
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds005284
+stats:
+  subjects: 26
+  recordings: 26
+  hours: 2.39
+  size_bytes: 1784094196
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds005284.v1.0.0

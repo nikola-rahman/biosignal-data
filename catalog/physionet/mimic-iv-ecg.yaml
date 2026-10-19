@@ -1,0 +1,17 @@
+id: physionet/mimic-iv-ecg
+name: 'MIMIC-IV-ECG: Diagnostic Electrocardiogram Matched Subset'
+signals:
+- ecg
+source:
+  type: physionet
+  slug: mimic-iv-ecg
+  version: '1.0'
+access:
+  tier: open
+homepage: https://physionet.org/content/mimic-iv-ecg/
+stats:
+  subjects: 160000
+  recordings: 800000
+  hours: 2200
+  hours_estimated: true
+  note: 10-second 12-lead ECGs.

@@ -1,0 +1,16 @@
+id: stanford/miller-ecog-library
+name: Library of human ECoG data (Miller)
+signals:
+- ieeg
+source:
+  type: manual
+  url: https://purl.stanford.edu/zk881ps0522
+access:
+  tier: open
+  steps:
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: https://purl.stanford.edu/zk881ps0522
+stats:
+  subjects: 34
+  hours: 30
+  hours_estimated: true

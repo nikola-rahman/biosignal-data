@@ -1,0 +1,20 @@
+id: openneuro/ds004844
+name: T22
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds004844
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds004844
+stats:
+  subjects: 17
+  recordings: 68
+  hours: 21.25
+  size_bytes: 23976121518
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds004844.v1.0.0

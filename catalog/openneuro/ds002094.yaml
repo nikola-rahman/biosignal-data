@@ -1,0 +1,18 @@
+id: openneuro/ds002094
+name: Single-pulse open-loop TMS-EEG dataset
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds002094
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds002094
+stats:
+  subjects: 20
+  recordings: 43
+  hours: 19.6
+  size_bytes: 42339775606
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).

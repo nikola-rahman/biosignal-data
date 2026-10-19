@@ -1,0 +1,21 @@
+id: openneuro/ds003838
+name: EEG, pupillometry, ECG and photoplethysmography, and behavioral data in the digit span task and
+  rest
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds003838
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds003838
+stats:
+  subjects: 65
+  recordings: 130
+  hours: 142.7
+  size_bytes: 107600042705
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds003838.v1.0.6

@@ -1,0 +1,20 @@
+id: openneuro/ds002718
+name: Face processing EEG dataset for EEGLAB
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds002718
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds002718
+stats:
+  subjects: 18
+  recordings: 18
+  hours: 14.84
+  size_bytes: 4623904945
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds002718.v1.1.0

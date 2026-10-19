@@ -1,0 +1,20 @@
+id: openneuro/ds003690
+name: 'EEG, ECG and pupil data from young and older adults: rest and auditory cued reaction time tasks'
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds003690
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds003690
+stats:
+  subjects: 75
+  recordings: 375
+  hours: 47.66
+  size_bytes: 23043388712
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds003690.v1.0.0

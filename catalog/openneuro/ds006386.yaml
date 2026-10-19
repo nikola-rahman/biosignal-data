@@ -1,0 +1,20 @@
+id: openneuro/ds006386
+name: PhysioMotion_Artifact
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds006386
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds006386
+stats:
+  subjects: 30
+  recordings: 180
+  hours: 58.0
+  size_bytes: 24666877908
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds006386.v1.0.1

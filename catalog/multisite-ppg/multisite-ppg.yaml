@@ -1,0 +1,16 @@
+id: multisite-ppg/multisite-ppg
+name: Multi-site PPG (earring, ring, watch, necklace)
+signals:
+- ppg
+- accelerometry
+source:
+  type: manual
+  url: https://arxiv.org/html/2605.17859v1
+access:
+  tier: open
+  steps:
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: https://arxiv.org/html/2605.17859v1
+stats:
+  subjects: 20
+  hours: 360

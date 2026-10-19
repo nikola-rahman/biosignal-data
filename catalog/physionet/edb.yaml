@@ -1,0 +1,14 @@
+id: physionet/edb
+name: European ST-T Database
+signals:
+- ecg
+source:
+  type: physionet
+  slug: edb
+  version: 1.0.0
+access:
+  tier: open
+homepage: https://physionet.org/content/edb/
+stats:
+  recordings: 90
+  hours: 180

@@ -1,0 +1,22 @@
+id: ceams/mass
+name: Montreal Archive of Sleep Studies
+signals:
+- eeg
+- eog
+- emg
+- ecg
+- resp
+- spo2
+source:
+  type: manual
+  url: http://ceams-carsm.ca/mass/
+access:
+  tier: registration
+  steps:
+  - Register on the provider's site and accept its license.
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: http://ceams-carsm.ca/mass/
+stats:
+  subjects: 200
+  hours: 1600
+  hours_estimated: true

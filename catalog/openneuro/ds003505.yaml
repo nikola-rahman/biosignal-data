@@ -1,0 +1,20 @@
+id: openneuro/ds003505
+name: 'VEPCON: Source imaging of high-density visual evoked potentials with multi-scale brain parcellations
+  and connectomes'
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds003505
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds003505
+stats:
+  subjects: 19
+  recordings: 37
+  size_bytes: 31105987628
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds003505.v1.1.1

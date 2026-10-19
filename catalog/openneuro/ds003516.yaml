@@ -1,0 +1,20 @@
+id: openneuro/ds003516
+name: 'EEG: Attended Speaker Paradigm (Own Name in Ignored Stream)'
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds003516
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds003516
+stats:
+  subjects: 25
+  recordings: 25
+  hours: 22.57
+  size_bytes: 8152002419
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds003516.v1.1.1

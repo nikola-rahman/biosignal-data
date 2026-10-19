@@ -1,0 +1,18 @@
+id: nemar/nm000234
+name: BNCI 2015-009 AMUSE (Auditory Multi-class Spatial ERP) dataset
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000234
+access:
+  tier: open
+  license: CC-BY-NC-ND-4.0
+homepage: https://nemar.org
+stats:
+  subjects: 21
+  recordings: 42
+  hours: 30.18
+  size_bytes: 4917017449
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).

@@ -1,0 +1,15 @@
+id: brant/pretraining
+name: Brant iEEG pretraining data
+signals:
+- ieeg
+source:
+  type: manual
+  url: https://papers.neurips.cc/paper_files/paper/2023/file/535915d26859036410b0533804cee788-Paper-Conference.pdf
+access:
+  tier: unavailable
+  steps:
+  - Not publicly released; listed for completeness.
+homepage: https://papers.neurips.cc/paper_files/paper/2023/file/535915d26859036410b0533804cee788-Paper-Conference.pdf
+stats:
+  subjects: 9
+  hours: 2528

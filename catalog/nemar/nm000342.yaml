@@ -1,0 +1,20 @@
+id: nemar/nm000342
+name: CastillosCVEP40
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000342
+access:
+  tier: open
+  license: CC-BY-4.0
+homepage: https://doi.org/10.1016/j.neuroimage.2023.120446
+stats:
+  subjects: 12
+  recordings: 12
+  hours: 0.85
+  size_bytes: 152363973
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.1016/j.neuroimage.2023.120446

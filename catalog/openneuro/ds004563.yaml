@@ -1,0 +1,19 @@
+id: openneuro/ds004563
+name: 'Vicarious touch: overlapping neural patterns between seeing and feeling touch'
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds004563
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds004563
+stats:
+  subjects: 40
+  recordings: 119
+  size_bytes: 108333359388
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds004563.v1.0.1

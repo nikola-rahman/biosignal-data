@@ -1,0 +1,20 @@
+id: nemar/nm000166
+name: 'M3CV: Multi-subject, Multi-session, Multi-task EEG Database'
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000166
+access:
+  tier: open
+  license: CC BY 4.0
+homepage: https://doi.org/10.1016/j.neuroimage.2022.119666
+stats:
+  subjects: 95
+  recordings: 2469
+  hours: 100.48
+  size_bytes: 23207094854
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.1016/j.neuroimage.2022.119666

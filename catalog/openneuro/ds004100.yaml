@@ -1,0 +1,20 @@
+id: openneuro/ds004100
+name: HUP iEEG Epilepsy Dataset
+signals:
+- ieeg
+source:
+  type: openneuro
+  accession: ds004100
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds004100
+stats:
+  subjects: 57
+  recordings: 319
+  hours: 25.72
+  size_bytes: 14196260504
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds004100.v1.1.3

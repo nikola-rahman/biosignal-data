@@ -1,0 +1,17 @@
+id: ninapro/ninapro
+name: NinaPro databases DB1-DB10
+signals:
+- emg
+source:
+  type: manual
+  url: http://ninaweb.hevs.ch/
+access:
+  tier: registration
+  steps:
+  - Register on the provider's site and accept its license.
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: http://ninaweb.hevs.ch/
+stats:
+  subjects: 180
+  hours: 300
+  hours_estimated: true

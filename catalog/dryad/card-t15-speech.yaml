@@ -1,0 +1,12 @@
+id: dryad/card-t15-speech
+name: Brain-to-text speech BCI, participant T15 (Card et al.)
+signals:
+- single-units
+source:
+  type: manual
+  url: https://datadryad.org/dataset/doi:10.5061/dryad.dncjsxm85
+access:
+  tier: open
+  steps:
+  - Download all files into one folder, keeping the provider's folder structure.
+homepage: https://datadryad.org/dataset/doi:10.5061/dryad.dncjsxm85

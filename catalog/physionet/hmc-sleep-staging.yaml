@@ -1,0 +1,17 @@
+id: physionet/hmc-sleep-staging
+name: Haaglanden Medisch Centrum sleep staging database
+signals:
+- eeg
+- eog
+- emg
+- ecg
+source:
+  type: physionet
+  slug: hmc-sleep-staging
+access:
+  tier: open
+homepage: https://physionet.org/content/hmc-sleep-staging/
+stats:
+  subjects: 151
+  hours: 1200
+  hours_estimated: true

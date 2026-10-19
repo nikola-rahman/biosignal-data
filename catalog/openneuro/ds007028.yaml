@@ -1,0 +1,19 @@
+id: openneuro/ds007028
+name: Auditory Cortex Macaque Monkey DISC Data
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds007028
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds007028
+stats:
+  subjects: 3
+  recordings: 3
+  size_bytes: 14882843764
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds007028.v1.0.0

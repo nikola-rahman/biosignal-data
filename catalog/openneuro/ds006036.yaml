@@ -1,0 +1,21 @@
+id: openneuro/ds006036
+name: 'A complementary dataset of open-eyes EEG recordings in a photo-stimulation setting from: Alzheimer''s
+  disease, Frontotemporal dementia and Healthy subjects'
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds006036
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds006036
+stats:
+  subjects: 88
+  recordings: 88
+  hours: 7.72
+  size_bytes: 1125336677
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds006036.v1.0.6

@@ -1,0 +1,20 @@
+id: nemar/nm000181
+name: 'NMT: Neurodiagnostic Montage Template Scalp EEG'
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000181
+access:
+  tier: open
+  license: CC BY-SA 4.0
+homepage: https://doi.org/10.5281/zenodo.10909103
+stats:
+  subjects: 2417
+  recordings: 2417
+  hours: 488.96
+  size_bytes: 14823367551
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.5281/zenodo.10909103

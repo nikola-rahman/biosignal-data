@@ -1,0 +1,20 @@
+id: openneuro/ds002578
+name: Visual Oddball Task (256 channels)
+signals:
+- eeg
+source:
+  type: openneuro
+  accession: ds002578
+access:
+  tier: open
+  license: CC0
+homepage: https://openneuro.org/datasets/ds002578
+stats:
+  subjects: 2
+  recordings: 2
+  hours: 1.46
+  size_bytes: 1429242343
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.18112/openneuro.ds002578.v1.1.0

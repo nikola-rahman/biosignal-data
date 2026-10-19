@@ -1,0 +1,20 @@
+id: nemar/nm000157
+name: Mainsah2025-B
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000157
+access:
+  tier: open
+  license: CC-BY-4.0
+homepage: https://doi.org/10.13026/0byy-ry86
+stats:
+  subjects: 19
+  recordings: 544
+  hours: 28.66
+  size_bytes: 1302468653
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.13026/0byy-ry86

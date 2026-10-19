@@ -1,0 +1,20 @@
+id: nemar/nm000228
+name: 'Nieuwland et al. 2018: Multi-site N400 Replication Study'
+signals:
+- eeg
+source:
+  type: nemar
+  accession: nm000228
+access:
+  tier: open
+  license: CC-BY 4.0
+homepage: https://doi.org/10.7554/eLife.33468
+stats:
+  subjects: 356
+  recordings: 397
+  hours: 232.4
+  size_bytes: 110280705492
+notes:
+- Generated from the EEGDash catalog (https://github.com/eegdash/EEGDash/blob/93df6e61b7230b4fb8a14b1fc7b7b0d349fe332d/eegdash/dataset/dataset_summary.csv).
+references:
+- https://doi.org/10.7554/eLife.33468
