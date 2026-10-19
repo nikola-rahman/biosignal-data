@@ -5,11 +5,13 @@ A store only knows keys and bytes. Layout lives in `layout.py`, integrity in `ma
 
 from __future__ import annotations
 
+import os
 import shutil
 import uuid
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO, Protocol
+from typing import TYPE_CHECKING, BinaryIO, ClassVar, Literal, Protocol
 from urllib.parse import urlparse
 
 import boto3
@@ -38,32 +40,69 @@ class Store(Protocol):
     def list(self, prefix: str) -> Iterator[str]: ...
 
 
+@dataclass(frozen=True)
+class S3Settings:
+    """Everything needed to reach an S3-compatible storage. Nothing has a default: every
+    provider differs (e.g. Hippius: endpoint https://s3.hippius.com, region
+    `decentralized`, path addressing)."""
+
+    endpoint: str
+    region: str
+    addressing: Literal["path", "virtual"]
+    access_key_id: str = field(repr=False)
+    secret_access_key: str = field(repr=False)
+
+    KEY_ID_VAR: ClassVar[str] = "BIOSIGNAL_ACCESS_KEY_ID"
+    SECRET_VAR: ClassVar[str] = "BIOSIGNAL_SECRET_ACCESS_KEY"  # noqa: S105 - a variable name
+
+    @classmethod
+    def from_env(
+        cls, endpoint: str, region: str, addressing: Literal["path", "virtual"]
+    ) -> S3Settings:
+        """Read the keys from BIOSIGNAL_ACCESS_KEY_ID / BIOSIGNAL_SECRET_ACCESS_KEY only."""
+        key_id = os.environ.get(cls.KEY_ID_VAR)
+        secret = os.environ.get(cls.SECRET_VAR)
+        if not key_id or not secret:
+            raise ValueError(f"set {cls.KEY_ID_VAR} and {cls.SECRET_VAR} for the S3 storage")
+        return cls(endpoint, region, addressing, key_id, secret)
+
+    def client(self) -> S3Client:
+        # An explicit endpoint, region and keys: nothing is read from AWS config files or
+        # AWS_* environment variables.
+        return boto3.session.Session().client(
+            "s3",
+            endpoint_url=self.endpoint,
+            region_name=self.region,
+            aws_access_key_id=self.access_key_id,
+            aws_secret_access_key=self.secret_access_key,
+            config=Config(
+                signature_version="s3v4",
+                s3={"addressing_style": self.addressing},
+                retries={"max_attempts": 10, "mode": "adaptive"},
+            ),
+        )
+
+
 class S3Store:
     def __init__(
         self,
         bucket: str,
         prefix: str = "",
         *,
+        settings: S3Settings | None = None,
         client: S3Client | None = None,
-        endpoint: str | None = None,
         multipart_chunksize: int = 64 * MiB,
         max_concurrency: int = 8,
     ) -> None:
-        """`endpoint`: the storage's URL for any S3-compatible service; None means AWS S3.
-        Endpoint settings from the environment are ignored: only `endpoint` counts."""
+        """Give `settings` (or, in tests, a ready `client`)."""
+        if client is None:
+            if settings is None:
+                raise ValueError("S3Store needs settings (endpoint, region, addressing, keys)")
+            client = settings.client()
         self.bucket = bucket
         self.prefix = prefix.strip("/")
-        session = boto3.Session()
-        credentials = session.get_credentials()
-        # Where the credentials came from ("env", "shared-credentials-file", ...): shown to
-        # the user, since they are picked up implicitly.
-        self.credentials_source = credentials.method if credentials else "none found"
-        self.client: S3Client = client or session.client(
-            "s3",
-            endpoint_url=endpoint,
-            config=Config(ignore_configured_endpoint_urls=True),  # type: ignore[call-arg]
-        )
-        self.endpoint = self.client.meta.endpoint_url
+        self.settings = settings
+        self.client: S3Client = client
         self.uri = f"s3://{bucket}/{self.prefix}".rstrip("/")
         self._transfer = TransferConfig(
             multipart_threshold=multipart_chunksize,
@@ -179,14 +218,15 @@ class LocalStore:
                 yield path.relative_to(self.root).as_posix()
 
 
-def open_store(uri: str, endpoint: str | None = None) -> Store:
-    """`s3://bucket/prefix` (on AWS S3, or on any S3-compatible storage at `endpoint`), or a
-    local path / `file://` URI."""
+def open_store(uri: str, s3: S3Settings | None = None) -> Store:
+    """`s3://bucket/prefix` with its `S3Settings`, or a local path / `file://` URI."""
     parsed = urlparse(uri)
     if parsed.scheme == "s3":
-        return S3Store(parsed.netloc, parsed.path, endpoint=endpoint)
-    if endpoint:
-        raise ValueError("--endpoint applies to s3:// destinations only")
+        if s3 is None:
+            raise ValueError("an s3:// destination needs --endpoint, --region and --addressing")
+        return S3Store(parsed.netloc, parsed.path, settings=s3)
+    if s3 is not None:
+        raise ValueError("--endpoint, --region and --addressing apply to s3:// only")
     if parsed.scheme in ("", "file"):
         return LocalStore(Path(parsed.path if parsed.scheme == "file" else uri))
     raise ValueError(f"unsupported store URI {uri!r}; use s3://bucket/prefix or a local path")

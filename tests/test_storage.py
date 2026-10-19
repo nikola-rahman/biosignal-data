@@ -85,13 +85,30 @@ def test_s3_store_roundtrip_including_multipart(s3_store: S3Store) -> None:
     assert not s3_store.exists("raw/x/1/data/big.bin")
 
 
-def test_endpoint_comes_only_from_the_option(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_s3_settings_are_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
     from biosignal_data.fetchers.s3 import s3_client  # noqa: PLC0415
-    from biosignal_data.storage.stores import S3Store  # noqa: PLC0415
+    from biosignal_data.storage.stores import S3Settings, open_store  # noqa: PLC0415
 
     monkeypatch.setenv("AWS_ENDPOINT_URL", "https://elsewhere.example")
-    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-    assert "elsewhere" not in S3Store("bucket").endpoint
-    assert S3Store("bucket", endpoint="https://mine.example").endpoint == "https://mine.example"
-    source = s3_client(anonymous=True, region="us-east-1")
-    assert source.meta.endpoint_url == "https://s3.amazonaws.com"
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "aws-key-not-to-be-used")
+    monkeypatch.delenv("BIOSIGNAL_ACCESS_KEY_ID", raising=False)
+    with pytest.raises(ValueError, match="BIOSIGNAL_ACCESS_KEY_ID"):
+        S3Settings.from_env("https://s3.hippius.com", "decentralized", "path")
+    with pytest.raises(ValueError, match="--endpoint"):
+        open_store("s3://bucket")
+
+    monkeypatch.setenv("BIOSIGNAL_ACCESS_KEY_ID", "hip_key")
+    monkeypatch.setenv("BIOSIGNAL_SECRET_ACCESS_KEY", "secret")
+    settings = S3Settings.from_env("https://s3.hippius.com", "decentralized", "path")
+    client = settings.client()
+    assert client.meta.endpoint_url == "https://s3.hippius.com"
+    assert client.meta.region_name == "decentralized"
+    assert client.meta.config.s3 == {"addressing_style": "path"}  # type: ignore[attr-defined]
+    credentials = client._request_signer._credentials  # type: ignore[attr-defined]
+    assert credentials.access_key == "hip_key"
+    assert "secret" not in repr(settings)
+
+    # Sources on AWS ignore endpoint settings meant for the destination.
+    assert s3_client(anonymous=True, region="us-east-1").meta.endpoint_url == (
+        "https://s3.amazonaws.com"
+    )

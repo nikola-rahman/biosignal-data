@@ -42,20 +42,10 @@ uv run biosignal-data check physionet/mitdb --dest ./lake
   [`docs/access.md`](docs/access.md) explains each repository's credentials.
 - **Warnings** show every choice the tool makes for you and everything it skips.
 
-## Running on another machine
+## Where the data flows
 
-The data passes through the machine that runs the command. To keep it off your computer,
-run the command on a server, for example one close to your storage:
-
-```bash
-docker build -t biosignal-data .
-docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -v /big/disk:/staging \
-    biosignal-data download --all --dest s3://bucket --endpoint https://<your storage> \
-    --staging-dir /staging
-```
-
-`/staging` is only needed for the sources whose tools must write to disk first (TUH,
-NSRR, Kaggle).
+The data passes through the machine that runs the command; every run prints this path at
+the start. To keep it off your computer, run the command on another machine.
 
 Reading back:
 

@@ -13,6 +13,7 @@ import json
 import os
 import socket
 import sys
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -27,7 +28,7 @@ from biosignal_data.read.raw import stored_versions
 from biosignal_data.selection import select
 from biosignal_data.storage.layout import VersionLocation
 from biosignal_data.storage.manifest import Manifest
-from biosignal_data.storage.stores import S3Store, Store, open_store
+from biosignal_data.storage.stores import S3Settings, S3Store, Store, open_store
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -36,6 +37,12 @@ app = typer.Typer(
 )
 dev = typer.Typer(no_args_is_help=True, help="Maintainer commands.")
 app.add_typer(dev, name="dev")
+
+
+class Addressing(StrEnum):
+    path = "path"
+    virtual = "virtual"
+
 
 CatalogOpt = Annotated[
     Path | None,
@@ -49,18 +56,31 @@ CatalogOpt = Annotated[
 DestOpt = Annotated[
     str | None,
     typer.Option(
-        "--dest",
-        "-d",
-        help="Where downloads go: a local folder or s3://bucket[/prefix]. "
-        "Default: $BIOSIGNAL_DEST.",
+        "--dest", "-d", help="Where downloads go: a local folder or s3://bucket[/prefix]."
     ),
 ]
 EndpointOpt = Annotated[
     str | None,
     typer.Option(
         "--endpoint",
-        help="URL of your S3-compatible storage, for s3:// destinations not on AWS S3. "
-        "Default: $BIOSIGNAL_ENDPOINT.",
+        help="s3:// only: URL of the S3 storage, e.g. https://s3.hippius.com.",
+        rich_help_panel="S3 storage (keys: $BIOSIGNAL_ACCESS_KEY_ID, $BIOSIGNAL_SECRET_ACCESS_KEY)",
+    ),
+]
+RegionOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--region",
+        help="s3:// only: region name the storage expects, e.g. decentralized (Hippius).",
+        rich_help_panel="S3 storage (keys: $BIOSIGNAL_ACCESS_KEY_ID, $BIOSIGNAL_SECRET_ACCESS_KEY)",
+    ),
+]
+AddressingOpt = Annotated[
+    Addressing | None,
+    typer.Option(
+        "--addressing",
+        help="s3:// only: path (https://host/bucket/key) or virtual (https://bucket.host/key).",
+        rich_help_panel="S3 storage (keys: $BIOSIGNAL_ACCESS_KEY_ID, $BIOSIGNAL_SECRET_ACCESS_KEY)",
     ),
 ]
 RootOpt = Annotated[
@@ -104,20 +124,27 @@ def _dataset(catalog: Catalog, dataset_id: str) -> Dataset:
         raise _fail(str(exc.args[0] if exc.args else exc)) from exc
 
 
-def _store(dest: str | None, endpoint: str | None) -> Store:
+def _store(
+    dest: str | None,
+    endpoint: str | None,
+    region: str | None,
+    addressing: Addressing | None,
+) -> Store:
+    """Open --dest. Nothing has a default: an s3:// destination needs all of --endpoint,
+    --region and --addressing, and its keys come only from BIOSIGNAL_* variables."""
     if not dest:
-        dest = os.environ.get("BIOSIGNAL_DEST")
-        if not dest:
-            raise _fail("missing --dest (a local folder or s3://bucket); or set BIOSIGNAL_DEST")
-        _warn(f"no --dest given; using BIOSIGNAL_DEST={dest}")
-    if dest.startswith("s3://") and not endpoint:
-        endpoint = os.environ.get("BIOSIGNAL_ENDPOINT")
-        if endpoint:
-            _warn(f"no --endpoint given; using BIOSIGNAL_ENDPOINT={endpoint}")
-        else:
-            _warn("no --endpoint given; using AWS S3")
+        raise _fail("missing --dest (a local folder or s3://bucket[/prefix])")
+    s3_options = {"--endpoint": endpoint, "--region": region, "--addressing": addressing}
     try:
-        return open_store(dest, endpoint)
+        if dest.startswith("s3://"):
+            if not (endpoint and region and addressing):
+                missing = [name for name, value in s3_options.items() if not value]
+                raise _fail(f"an s3:// destination needs {', '.join(missing)}")
+            return open_store(dest, S3Settings.from_env(endpoint, region, addressing.value))
+        given = [name for name, value in s3_options.items() if value]
+        if given:
+            raise _fail(f"{', '.join(given)} apply to s3:// destinations only")
+        return open_store(dest)
     except ValueError as exc:
         raise _fail(str(exc)) from exc
 
@@ -125,8 +152,12 @@ def _store(dest: str | None, endpoint: str | None) -> Store:
 def _data_path(store: Store) -> str:
     """Where the bytes go, said plainly: they pass through the machine running this."""
     machine = f"this machine ({socket.gethostname()})"
-    if isinstance(store, S3Store):
-        target = f"{store.uri} at {store.endpoint} (credentials: {store.credentials_source})"
+    if isinstance(store, S3Store) and store.settings:
+        s3 = store.settings
+        target = (
+            f"{store.uri} at {s3.endpoint} (region {s3.region}, {s3.addressing} addressing, "
+            f"key {S3Settings.KEY_ID_VAR})"
+        )
     else:
         target = store.uri
     return f"data flows: sources -> {machine} -> {target}"
@@ -182,6 +213,8 @@ def info(
     dataset_id: Annotated[str, typer.Argument(help="Catalog id, e.g. physionet/mitdb.")],
     dest: DestOpt = None,
     endpoint: EndpointOpt = None,
+    region: RegionOpt = None,
+    addressing: AddressingOpt = None,
     as_json: Annotated[bool, typer.Option("--json", help="The catalog entry as JSON.")] = False,
     root: RootOpt = "raw",
     catalog: CatalogOpt = None,
@@ -206,7 +239,7 @@ def info(
         for note in d.notes:
             typer.echo(f"    - {note.strip()}")
     if dest:
-        _print_downloads(_store(dest, endpoint), d.id, root, dest)
+        _print_downloads(_store(dest, endpoint, region, addressing), d.id, root, dest)
 
 
 def _info_rows(d: Dataset) -> list[tuple[str, str]]:
@@ -252,6 +285,8 @@ def download(
     ] = None,
     dest: DestOpt = None,
     endpoint: EndpointOpt = None,
+    region: RegionOpt = None,
+    addressing: AddressingOpt = None,
     all_: Annotated[bool, typer.Option("--all", help="Every dataset in the catalog.")] = False,
     signal: Annotated[
         list[str], typer.Option("--signal", "-s", help="Datasets with this signal. Repeatable.")
@@ -325,7 +360,7 @@ def download(
             _preview(dataset, options, include, limit)
         return
 
-    store = _store(dest, endpoint)
+    store = _store(dest, endpoint, region, addressing)
     console.print(f"[bold]{len(datasets)} datasets[/] -> {store.uri}/{root}", highlight=False)
     console.print(f"[yellow]{_data_path(store)}[/]", highlight=False, soft_wrap=True)
     with download_progress() as progress:
@@ -493,9 +528,12 @@ def check(
     dataset_id: Annotated[str, typer.Argument(help="Catalog id.")],
     dest: DestOpt = None,
     endpoint: EndpointOpt = None,
-    version: Annotated[
-        str | None, typer.Option(help="Version to check (default: the latest downloaded).")
-    ] = None,
+    region: RegionOpt = None,
+    addressing: AddressingOpt = None,
+    version: Annotated[str | None, typer.Option(help="The version to check.")] = None,
+    latest: Annotated[
+        bool, typer.Option("--latest", help="Check the newest downloaded version.")
+    ] = False,
     checksums: Annotated[
         bool,
         typer.Option(
@@ -505,15 +543,16 @@ def check(
     root: RootOpt = "raw",
 ) -> None:
     """Check that the downloaded files are all there, with the right size (and checksum)."""
-    store = _store(dest, endpoint)
+    if (version is None) == (not latest):
+        raise _fail("give either --version <version> or --latest")
+    store = _store(dest, endpoint, region, addressing)
     versions = stored_versions(store, dataset_id, root)
     if version is None:
         if not versions:
             raise _fail(f"{dataset_id} is not downloaded to {dest}")
-        complete = [v for v, done in versions.items() if done]
-        version = complete[-1] if complete else list(versions)[-1]
-        kind = "latest complete" if complete else "latest (incomplete)"
-        _warn(f"no --version given; checking the {kind} version {version}")
+        version = list(versions)[-1]
+        complete = "complete" if versions[version] else "incomplete"
+        console.print(f"--latest: checking version {version} ({complete})", highlight=False)
     problems = verify(store, dataset_id, version, root, deep=checksums)
     for path, problem in sorted(problems.items()):
         typer.secho(f"  {path}: {problem}", fg="red")

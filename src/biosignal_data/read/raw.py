@@ -17,7 +17,7 @@ from pathlib import Path
 
 from biosignal_data.storage.layout import SUCCESS, VersionLocation, dataset_prefix
 from biosignal_data.storage.manifest import FileEntry, Manifest
-from biosignal_data.storage.stores import Store, open_store
+from biosignal_data.storage.stores import S3Settings, Store, open_store
 
 
 def default_cache_dir() -> Path:
@@ -66,11 +66,11 @@ class RawDataset:
         *,
         root: str = "raw",
         cache_dir: Path | None = None,
-        endpoint: str | None = None,
+        s3: S3Settings | None = None,
     ) -> RawDataset:
-        """`endpoint`: URL of an S3-compatible storage, if `store` is an s3:// URI that is not
-        on AWS S3."""
-        store = open_store(store, endpoint) if isinstance(store, str) else store
+        """`store`: a Store, a local folder, or an s3:// URI together with `s3` (its
+        endpoint, region, addressing and keys, e.g. `S3Settings.from_env(...)`)."""
+        store = open_store(store, s3) if isinstance(store, str) else store
         if version is None:
             versions = complete_versions(store, dataset_id, root)
             if not versions:
