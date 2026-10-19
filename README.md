@@ -19,23 +19,43 @@ source, which later layers can build on.
 
 ```bash
 uv sync                                    # Python 3.11+, installs everything
-uv run biosignal-data list --signal ecg --tier open
+uv run biosignal-data list --signal ecg
 uv run biosignal-data info physionet/mitdb
-uv run biosignal-data download physionet/mitdb --dest s3://my-bucket
-uv run biosignal-data download physionet/mitdb --dest ./lake --limit 5    # 5 recordings, for tests
-uv run biosignal-data download physionet/mitdb --limit 5 --dry-run       # what that would download
+uv run biosignal-data download physionet/mitdb --dest ./lake --limit 5   # 5 recordings, for tests
+uv run biosignal-data download physionet/mitdb --limit 5 --dry-run      # what that would download
+uv run biosignal-data download --all --dest s3://bucket --endpoint https://<your storage>
 uv run biosignal-data check physionet/mitdb --dest ./lake
 ```
 
-`--dest` takes `s3://bucket[/prefix]` or a local folder. For tests, `--limit N` copies only
-the first N recordings (each with its companion files and the dataset metadata it needs), and
-`--include <glob>` (repeatable) only matching paths. A subset run does not mark the version complete; a
-later run without these options continues from it.
+- **Which datasets:** ids, `--ids-file`, `--signal`, `--repository` or `--all`. Many
+  datasets download at the same time, sharing `--workers` parallel file downloads.
+- **Where to:** `--dest` takes a local folder or `s3://bucket[/prefix]`. For S3-compatible
+  storage that is not AWS S3, add `--endpoint <url>`. Storage credentials come from the
+  usual S3 places (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, `~/.aws/credentials`); the
+  run prints which one it used.
+- **Test subsets:** `--limit N` copies the first N recordings (each with its companion files
+  and the metadata it needs); `--include <glob>` only matching paths. The version stays
+  incomplete; a later run without them continues from it.
+- **Datasets that need you first** (credentials, download by hand) are skipped with a
+  warning and listed at the end. Each dataset's page in
+  [`docs/datasets/`](docs/datasets/README.md) lists the steps, and
+  [`docs/access.md`](docs/access.md) explains each repository's credentials.
+- **Warnings** show every choice the tool makes for you and everything it skips.
 
-AWS credentials for the destination bucket come from the usual places (environment, profile,
-instance role). Gated datasets need an account or approval first: each dataset's page in
-[`docs/datasets/`](docs/datasets/README.md) lists the steps, and
-[`docs/access.md`](docs/access.md) explains each repository's credentials.
+## Running on another machine
+
+The data passes through the machine that runs the command. To keep it off your computer,
+run the command on a server, for example one close to your storage:
+
+```bash
+docker build -t biosignal-data .
+docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -v /big/disk:/staging \
+    biosignal-data download --all --dest s3://bucket --endpoint https://<your storage> \
+    --staging-dir /staging
+```
+
+`/staging` is only needed for the sources whose tools must write to disk first (TUH,
+NSRR, Kaggle).
 
 Reading back:
 

@@ -1,0 +1,9 @@
+.git
+.venv
+.mypy_cache
+.ruff_cache
+.pytest_cache
+biosignal-lake
+lake
+staging
+**/__pycache__
