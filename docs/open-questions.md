@@ -11,7 +11,7 @@ Things that are not settled yet, in rough order of how much they matter.
 3. **OpenNeuro older snapshots.** OpenNeuro's S3 bucket only serves the latest snapshot. Older
    ones need DataLad; download them that way, then run `biosignal-data import <id> <folder> --version <tag>`.
 4. **BDSP key prefixes.** The credentialed access point holds several datasets; the prefix of
-   each is shared by BDSP after approval and written into the catalog entry (`source.prefix`).
+   each is shared by BDSP after approval and written into the dataset's entry in catalog.yaml (`source.prefix`).
 5. **Overlap between datasets.** Some catalog entries contain others (TUH subcorpora inside
    TUEG, PhysioNet Challenge 2021 inside several 12-lead sets, NEMAR copies of Meta's EMG
    data). The raw layer keeps them as separate datasets; deduplication belongs to a later

@@ -1,4 +1,10 @@
-"""Copy one dataset version from its source into the raw layer.
+"""Copy one dataset version from its source into the raw layer, in two explicit steps.
+
+    with planned(dataset, store, options=...) as plan:   # access, version, file list, once
+        plan.files, plan.to_copy, plan.total_bytes          # all known before any byte moves
+        report = apply(plan, store, workers=16)            # copies exactly plan.to_copy
+
+`ingest()` does both for callers that do not need to look at the plan in between.
 
 Guarantees:
 - Bytes are copied unchanged, to `data/<path as published>`.
@@ -17,23 +23,18 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator
 from concurrent.futures import Executor, ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Protocol
 
 from biosignal_data import __version__
 from biosignal_data.catalog.models import Dataset
-from biosignal_data.fetchers import (
-    FetchError,
-    FetchOptions,
-    NoRecordingsError,
-    RemoteFile,
-    fetcher_for,
-)
+from biosignal_data.fetchers import FetchError, FetchOptions, RemoteFile, fetcher_for
 from biosignal_data.fetchers.base import Fetcher, ResolvedVersion
+from biosignal_data.paths import holds_recordings
 from biosignal_data.read.raw import stored_versions
-from biosignal_data.selection import Selection, select
 from biosignal_data.storage.layout import VersionLocation
 from biosignal_data.storage.manifest import FileEntry, HashingReader, Manifest, utcnow
 from biosignal_data.storage.stores import Store
@@ -46,13 +47,18 @@ class IntegrityError(RuntimeError):
     pass
 
 
+class AlreadyComplete(RuntimeError):  # noqa: N818 - reads naturally at the call site
+    pass
+
+
 class IngestProgress(Protocol):
-    """Receives the progress of one ingest. `file_started` and `advance` are called from
+    """Receives the progress of one copy. `file_started` and `advance` are called from
     worker threads; the others from the calling thread."""
 
-    def start(self, version: str, recordings: int, done: int, total_bytes: int | None) -> None:
-        """The work is known: `recordings` in total, of which `done` are already stored from an
-        earlier run. `total_bytes` (still to copy) is None if the source omits sizes."""
+    def start(self, version: str, files: int, done: int, total_bytes: int | None) -> None:
+        """The work is known: `files` in the version, of which `done` are already stored
+        from an earlier run. `total_bytes` (still to copy) is None if the source omits
+        sizes."""
 
     def file_started(self, path: str) -> None:
         """A file starts to download."""
@@ -63,36 +69,38 @@ class IngestProgress(Protocol):
     def file_done(self, path: str, ok: bool) -> None:
         """One file is finished, with or without success."""
 
-    def recording_done(self) -> None:
-        """All files of one more recording are stored."""
 
+@dataclass
+class Plan:
+    """What a copy of one dataset version will do, decided before any byte moves."""
 
-class _RecordingTracker:
-    """Turns finished files into finished recordings for the progress display."""
+    dataset: Dataset
+    version: ResolvedVersion
+    location: VersionLocation
+    files: list[RemoteFile]  # every file of the version, as the source lists it
+    to_copy: list[RemoteFile]  # those not stored yet by an earlier run
+    manifest: Manifest  # new, or the partial one of an earlier run
+    fetcher: Fetcher = field(repr=False)
+    complete: bool = False  # set by apply() when the version is complete
 
-    def __init__(
-        self, recordings: list[list[str]], todo: list[RemoteFile], progress: IngestProgress
-    ) -> None:
-        self.progress = progress
-        self.recording_of = {p: i for i, files in enumerate(recordings) for p in files}
-        self.remaining: dict[int, int] = {}
-        for remote in todo:
-            index = self.recording_of.get(remote.path)
-            if index is not None:
-                self.remaining[index] = self.remaining.get(index, 0) + 1
-        self.already_done = len(recordings) - len(self.remaining)
+    @property
+    def already_stored(self) -> int:
+        return len(self.files) - len(self.to_copy)
 
-    def file_done(self, path: str, ok: bool) -> None:
-        self.progress.file_done(path, ok)
-        index = self.recording_of.get(path)
-        if ok and index is not None:
-            self.remaining[index] -= 1
-            if self.remaining[index] == 0:
-                self.progress.recording_done()
+    @property
+    def recording_files(self) -> int:
+        """Files that can hold recorded signals (see paths.holds_recordings); 0 means the
+        source holds no recordings this tool recognizes (e.g. only BIDS sidecars)."""
+        return sum(1 for f in self.files if holds_recordings(f.path))
 
+    @property
+    def unknown_sizes(self) -> int:
+        return sum(1 for f in self.to_copy if f.size is None)
 
-class AlreadyComplete(RuntimeError):  # noqa: N818 - reads naturally at the call site
-    pass
+    @property
+    def total_bytes(self) -> int:
+        """Bytes still to copy, as far as the source reports sizes (see unknown_sizes)."""
+        return sum(f.size for f in self.to_copy if f.size is not None)
 
 
 @dataclass
@@ -100,13 +108,140 @@ class IngestReport:
     dataset_id: str
     version: str
     location: str
+    files: int = 0  # files in the version
+    recording_files: int = 0  # of them, files that can hold recordings (paths.py)
     copied: int = 0
-    skipped: int = 0
+    skipped: int = 0  # already stored by an earlier run
     bytes_copied: int = 0
     failed: dict[str, str] = field(default_factory=dict)
     complete: bool = False
-    subset: bool = False  # only part of the version was selected; it stays incomplete
-    recordings: int = 0  # recordings among the selected files
+
+
+@contextmanager
+def planned(
+    dataset: Dataset,
+    store: Store,
+    *,
+    options: FetchOptions | None = None,
+    fetcher: Fetcher | None = None,
+    root: str = "raw",
+) -> Iterator[Plan]:
+    """Check access, prepare the source, and plan the copy. On exit, the source cleans up
+    what it prepared; staged files are removed only if `apply` completed the version."""
+    fetcher = fetcher or fetcher_for(dataset, options)
+    fetcher.check_access()
+    fetcher.prepare()
+    plan: Plan | None = None
+    try:
+        plan = _plan(dataset, store, fetcher, root)
+        yield plan
+    finally:
+        fetcher.cleanup(plan.complete if plan else False)
+
+
+def ingest(
+    dataset: Dataset,
+    store: Store,
+    *,
+    options: FetchOptions | None = None,
+    fetcher: Fetcher | None = None,
+    root: str = "raw",
+    workers: int = 8,
+    checkpoint_every: float = 30.0,
+    progress: IngestProgress | None = None,
+    executor: Executor | None = None,
+    stop: threading.Event | None = None,
+) -> IngestReport:
+    """Plan and copy `dataset` into `store`. Files are copied by `workers` threads, or by
+    `executor` if given (a pool shared by several datasets copying at the same time)."""
+    with planned(dataset, store, options=options, fetcher=fetcher, root=root) as plan:
+        return apply(
+            plan,
+            store,
+            workers=workers,
+            checkpoint_every=checkpoint_every,
+            progress=progress,
+            executor=executor,
+            stop=stop,
+        )
+
+
+def _plan(dataset: Dataset, store: Store, fetcher: Fetcher, root: str) -> Plan:
+    version = fetcher.resolve_version()
+    version = _continue_dated_version(dataset, store, root, version)
+    location = VersionLocation(dataset.id, version.value, root)
+    if store.exists(location.success_key):
+        raise AlreadyComplete(
+            f"{store.uri}/{location.prefix} is already complete; versions are immutable"
+        )
+    manifest = _start_manifest(dataset, store, location, version)
+    files = list(fetcher.list_files())
+    if not files:
+        raise FetchError(f"{dataset.id} {version.value}: the source lists no files")
+    if len({f.path for f in files}) != len(files):
+        raise FetchError(f"{dataset.id} {version.value}: the source listed a path twice")
+    done = {f.path: f for f in manifest.files}
+    stored = store.sizes(location.data_prefix) if done else {}
+    to_copy = []
+    for remote in files:
+        prior = done.get(remote.path)
+        if not (prior and stored.get(location.data_key(remote.path)) == prior.size):
+            done.pop(remote.path, None)
+            to_copy.append(remote)
+    manifest.files = sorted(done.values(), key=lambda f: f.path)
+    plan = Plan(dataset, version, location, files, to_copy, manifest, fetcher)
+    log.info(
+        "%s %s: %s, %s to copy",
+        dataset.id,
+        version.value,
+        plural(len(files), "file"),
+        plural(len(to_copy), "file"),
+    )
+    _warn_implicit(plan)
+    return plan
+
+
+def apply(
+    plan: Plan,
+    store: Store,
+    *,
+    workers: int = 8,
+    checkpoint_every: float = 30.0,
+    progress: IngestProgress | None = None,
+    executor: Executor | None = None,
+    stop: threading.Event | None = None,
+) -> IngestReport:
+    """Copy exactly `plan.to_copy`; complete the version when every file is stored."""
+    location = plan.location
+    report = IngestReport(
+        plan.dataset.id,
+        plan.version.value,
+        f"{store.uri}/{location.prefix}",
+        files=len(plan.files),
+        recording_files=plan.recording_files,
+        skipped=plan.already_stored,
+    )
+    done = {f.path: f for f in plan.manifest.files}
+    if progress:
+        total = plan.total_bytes if not plan.unknown_sizes else None
+        progress.start(plan.version.value, len(plan.files), plan.already_stored, total)
+    checkpoint = _Checkpointer(store, location, plan.manifest, done, checkpoint_every)
+    _copy_all(
+        plan.to_copy, store, location, done, report, checkpoint, workers, progress, executor, stop
+    )
+    if report.failed:
+        log.error("%d files failed; re-run to retry them", len(report.failed))
+        return report
+    plan.manifest.files = sorted(done.values(), key=lambda f: f.path)
+    plan.manifest.completed_at = utcnow()
+    store.put_bytes(location.manifest_key, plan.manifest.to_json())
+    store.put_bytes(location.success_key, b"", content_type="text/plain")
+    store.delete(location.partial_manifest_key)
+    report.complete = plan.complete = True
+    return report
+
+
+# --- copying -------------------------------------------------------------------------------
 
 
 def _check(remote: RemoteFile, reader: HashingReader) -> None:
@@ -153,94 +288,6 @@ def copy_file(
     )
 
 
-def ingest(
-    dataset: Dataset,
-    store: Store,
-    *,
-    options: FetchOptions | None = None,
-    root: str = "raw",
-    workers: int = 8,
-    checkpoint_every: float = 30.0,
-    dry_run: bool = False,
-    fetcher: Fetcher | None = None,
-    include: Sequence[str] = (),
-    limit: int | None = None,
-    progress: IngestProgress | None = None,
-    executor: Executor | None = None,
-    stop: threading.Event | None = None,
-) -> IngestReport:
-    """Copy `dataset` into `store`.
-
-    Files are copied by `workers` threads, or by `executor` if given (a pool shared by
-    several datasets downloading at the same time).
-
-    `include` (glob patterns; `*` also matches `/`) and `limit` (first N recordings in path
-    order, with their metadata; see `selection`) select a subset, for tests. A subset is
-    copied and checkpointed, but the version is not marked complete; a later run without
-    them continues from it.
-    """
-    fetcher = fetcher or fetcher_for(dataset, options)
-    fetcher.check_access()
-    fetcher.prepare()
-    complete = False
-    try:
-        report = _ingest(
-            dataset,
-            store,
-            fetcher,
-            root=root,
-            workers=workers,
-            checkpoint_every=checkpoint_every,
-            dry_run=dry_run,
-            include=include,
-            limit=limit,
-            progress=progress,
-            executor=executor,
-            stop=stop,
-        )
-        complete = report.complete
-        return report
-    finally:
-        fetcher.cleanup(complete)
-
-
-def _start_manifest(
-    dataset: Dataset, store: Store, location: VersionLocation, version: ResolvedVersion
-) -> Manifest:
-    """Resume from `_manifest.partial.json` if a previous run left one, else start fresh."""
-    previous = store.get_bytes(location.partial_manifest_key)
-    if previous:
-        manifest = Manifest.from_json(previous)
-        if manifest.version != version.value:
-            raise RuntimeError(f"partial manifest at {location.prefix} is for another version")
-        return manifest
-    return Manifest(
-        dataset_id=dataset.id,
-        version=version.value,
-        version_origin=version.origin,
-        source=dataset.source.model_dump(mode="json"),
-        license=dataset.access.license,
-        retrieved_at=utcnow(),
-        tool=f"biosignal-data {__version__}",
-    )
-
-
-def _plan(
-    files: list[RemoteFile], done: dict[str, FileEntry], store: Store, location: VersionLocation
-) -> tuple[list[RemoteFile], int]:
-    """Files still to copy, and how many are already stored from an earlier run."""
-    todo: list[RemoteFile] = []
-    skipped = 0
-    for remote in files:
-        prior = done.get(remote.path)
-        if prior and store.size(location.data_key(remote.path)) == prior.size:
-            skipped += 1
-        else:
-            done.pop(remote.path, None)
-            todo.append(remote)
-    return todo, skipped
-
-
 class _Checkpointer:
     def __init__(
         self,
@@ -270,7 +317,6 @@ def _copy_all(
     checkpoint: _Checkpointer,
     workers: int,
     progress: IngestProgress | None,
-    tracker: _RecordingTracker | None,
     executor: Executor | None,
     stop: threading.Event | None,
 ) -> None:
@@ -292,19 +338,43 @@ def _copy_all(
             except Exception as exc:  # noqa: BLE001 - recorded per file, reported at the end
                 log.error("%s: %s", remote.path, exc)
                 report.failed[remote.path] = str(exc)
-                if tracker:
-                    tracker.file_done(remote.path, ok=False)
+                if progress:
+                    progress.file_done(remote.path, ok=False)
                 continue
             done[entry.path] = entry
             report.copied += 1
             report.bytes_copied += entry.size
             checkpoint()
-            if tracker:
-                tracker.file_done(remote.path, ok=True)
+            if progress:
+                progress.file_done(remote.path, ok=True)
     finally:
         if pool is not executor:
             pool.shutdown(cancel_futures=True)
     checkpoint(force=True)
+
+
+# --- planning helpers ----------------------------------------------------------------------
+
+
+def _start_manifest(
+    dataset: Dataset, store: Store, location: VersionLocation, version: ResolvedVersion
+) -> Manifest:
+    """Resume from `_manifest.partial.json` if a previous run left one, else start fresh."""
+    previous = store.get_bytes(location.partial_manifest_key)
+    if previous:
+        manifest = Manifest.from_json(previous)
+        if manifest.version != version.value:
+            raise RuntimeError(f"partial manifest at {location.prefix} is for another version")
+        return manifest
+    return Manifest(
+        dataset_id=dataset.id,
+        version=version.value,
+        version_origin=version.origin,
+        source=dataset.source.model_dump(mode="json"),
+        license=dataset.license,
+        retrieved_at=utcnow(),
+        tool=f"biosignal-data {__version__}",
+    )
 
 
 def _continue_dated_version(
@@ -329,166 +399,91 @@ def _continue_dated_version(
     return ResolvedVersion(unfinished[-1], "retrieval-date")
 
 
-def _warn_implicit(
-    dataset: Dataset,
-    version: ResolvedVersion,
-    selection: Selection,
-    report: IngestReport,
-    todo: list[RemoteFile],
-) -> None:
-    """Say every choice made without the user asking for it, and everything skipped."""
-    d = dataset.id
+def _warn_implicit(plan: Plan) -> None:
+    """Say every choice made without the user asking for it, everything skipped, and what
+    makes a copy less useful than it looks."""
+    d, version = plan.dataset, plan.version
     if version.origin == "retrieval-date":
         log.warning(
             "%s: the source has no versions; labelling this download with today's date %s",
-            d,
+            d.id,
             version.value,
         )
-    elif version.origin == "source" and not dataset.pinned_version:
+    elif version.origin == "source" and not d.pinned_version:
         log.warning(
-            "%s: no version pinned in the catalog; using the latest, %s",
-            d,
+            "%s: no version pinned in the catalog; using the latest, %s", d.id, version.value
+        )
+    if plan.fetcher.version_is_label and d.pinned_version and version.origin != "user":
+        log.warning(
+            "%s: version %s is only the catalog's label: this source cannot be asked for a "
+            "version, so the files are what it serves now",
+            d.id,
             version.value,
         )
-    if report.skipped:
+    if plan.already_stored:
         log.warning(
             "%s: %s already stored by an earlier run; not copied again",
-            d,
-            plural(report.skipped, "file"),
+            d.id,
+            plural(plan.already_stored, "file"),
         )
-    if report.subset:
+    if not plan.recording_files:
         log.warning(
-            "%s: subset only (%s%s); version %s stays incomplete",
-            d,
-            plural(len(selection.recordings), "recording"),
-            f" + {selection.metadata_added} metadata files they need"
-            if selection.metadata_added
-            else "",
-            version.value,
+            "%s: none of its %s can hold recordings (no signal format, no archive); the "
+            "copy holds only metadata",
+            d.id,
+            plural(len(plan.files), "file"),
         )
-    if not selection.signal_files_found:
-        log.warning(
-            "%s: no file has a known signal format; each data file counts as one recording", d
-        )
-    unchecked = sum(1 for f in todo if f.checksum is None)
+    unchecked = sum(1 for f in plan.to_copy if f.checksum is None)
     if unchecked:
         log.warning(
             "%s: %s without a published checksum; hashed, but cannot be verified",
-            d,
+            d.id,
             plural(unchecked, "file"),
         )
 
 
-def _ingest(
-    dataset: Dataset,
-    store: Store,
-    fetcher: Fetcher,
-    *,
-    root: str,
-    workers: int,
-    checkpoint_every: float,
-    dry_run: bool,
-    include: Sequence[str],
-    limit: int | None,
-    progress: IngestProgress | None,
-    executor: Executor | None,
-    stop: threading.Event | None,
-) -> IngestReport:
-    version = fetcher.resolve_version()
-    version = _continue_dated_version(dataset, store, root, version)
-    location = VersionLocation(dataset.id, version.value, root)
-    report = IngestReport(dataset.id, version.value, f"{store.uri}/{location.prefix}")
-    if store.exists(location.success_key):
-        raise AlreadyComplete(f"{report.location} is already complete; versions are immutable")
-
-    manifest = _start_manifest(dataset, store, location, version)
-    done = {f.path: f for f in manifest.files}
-    files = list(fetcher.list_files())
-    if not files:
-        raise FetchError(f"{dataset.id} {version.value}: the source lists no files")
-    if len({f.path for f in files}) != len(files):
-        raise RuntimeError("the source listed the same path twice")
-    by_path = {f.path: f for f in files}
-    selection = select(list(by_path), include, limit)
-    selected = [by_path[p] for p in selection.paths]
-    report.subset = len(selected) < len(files)
-    report.recordings = len(selection.recordings)
-    if (include or limit is not None) and not selection.recordings:
-        raise NoRecordingsError(
-            f"{dataset.id} {version.value}: the source holds no recordings among its "
-            f"{plural(len(files), 'file')} (only metadata), so there is no subset to copy"
-        )
-    todo, report.skipped = _plan(selected, done, store, location)
-    log.info(
-        "%s %s: %s (%s) selected of %s; %s to copy",
-        dataset.id,
-        version.value,
-        plural(len(selection.recordings), "recording"),
-        plural(len(selected), "file"),
-        plural(len(files), "file"),
-        plural(len(todo), "file"),
-    )
-    _warn_implicit(dataset, version, selection, report, todo)
-    if fetcher.version_is_label and dataset.pinned_version and version.origin != "user":
-        log.warning(
-            "%s: version %s is only the catalog's label: this source cannot be asked for a "
-            "version, so the files are what it serves now",
-            dataset.id,
-            version.value,
-        )
-    if dry_run:
-        return report
-
-    tracker = None
-    if progress:
-        tracker = _RecordingTracker(selection.recordings, todo, progress)
-        sizes = [f.size for f in todo]
-        total = sum(s for s in sizes if s is not None) if None not in sizes else None
-        progress.start(version.value, len(selection.recordings), tracker.already_done, total)
-    checkpoint = _Checkpointer(store, location, manifest, done, checkpoint_every)
-    _copy_all(
-        todo, store, location, done, report, checkpoint, workers, progress, tracker, executor, stop
-    )
-    if report.failed:
-        log.error("%d files failed; re-run to retry them", len(report.failed))
-        return report
-    if report.subset:
-        return report  # checkpointed; a run without include/limit completes the version
-
-    manifest.files = sorted(done.values(), key=lambda f: f.path)
-    manifest.completed_at = utcnow()
-    store.put_bytes(location.manifest_key, manifest.to_json())
-    store.put_bytes(location.success_key, b"", content_type="text/plain")
-    store.delete(location.partial_manifest_key)
-    report.complete = True
-    return report
+# --- checking ------------------------------------------------------------------------------
 
 
 def verify(
-    store: Store, dataset_id: str, version: str, root: str = "raw", deep: bool = False
+    store: Store,
+    dataset_id: str,
+    version: str,
+    root: str = "raw",
+    deep: bool = False,
+    workers: int = 8,
 ) -> dict[str, str]:
     """Check stored objects against the manifest. Returns {path: problem}.
 
-    An incomplete version (a subset or an interrupted run) is checked against its partial
-    manifest, i.e. the files copied so far.
-    `deep` re-reads every object and recomputes SHA-256 (slow, reads all bytes)."""
+    An incomplete version (an interrupted run) is checked against its partial manifest,
+    i.e. the files copied so far. Sizes come from one listing of the version. `deep` also
+    re-reads every object, `workers` at a time, and recomputes its SHA-256."""
     location = VersionLocation(dataset_id, version, root)
     data = store.get_bytes(location.manifest_key) or store.get_bytes(location.partial_manifest_key)
     if data is None:
         return {"_manifest.json": "missing"}
+    entries = Manifest.from_json(data).files
+    stored = store.sizes(location.data_prefix)
     problems: dict[str, str] = {}
-    for entry in Manifest.from_json(data).files:
-        key = location.data_key(entry.path)
-        size = store.size(key)
+    to_read: list[FileEntry] = []
+    for entry in entries:
+        size = stored.get(location.data_key(entry.path))
         if size is None:
             problems[entry.path] = "missing"
         elif size != entry.size:
             problems[entry.path] = f"size {size} != manifest {entry.size}"
         elif deep:
-            with store.open(key) as stream:
-                reader = HashingReader(stream)
-                while reader.read(8 * 1024 * 1024):
-                    pass
-            if reader.sha256 != entry.sha256:
+            to_read.append(entry)
+
+    def sha256_of(entry: FileEntry) -> str:
+        with store.open(location.data_key(entry.path)) as stream:
+            reader = HashingReader(stream)
+            while reader.read(8 * 1024 * 1024):
+                pass
+        return reader.sha256
+
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        for entry, digest in zip(to_read, pool.map(sha256_of, to_read), strict=True):
+            if digest != entry.sha256:
                 problems[entry.path] = "sha256 mismatch"
     return problems

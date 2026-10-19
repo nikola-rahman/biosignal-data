@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import posixpath
+import re
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-from biosignal_data.catalog import Catalog
+from biosignal_data.catalog import Catalog, Infos
 from biosignal_data.cli import app
-from biosignal_data.docsgen import render
+from biosignal_data.docsgen import existing_pages, render, write_docs
 
 runner = CliRunner()
 
@@ -20,7 +22,8 @@ def test_list_filters() -> None:
 
 def test_info_and_validate() -> None:
     assert "MIT-BIH" in runner.invoke(app, ["info", "physionet/mitdb"]).stdout
-    assert '"slug": "mitdb"' in runner.invoke(app, ["info", "physionet/mitdb", "--json"]).stdout
+    as_json = runner.invoke(app, ["info", "physionet/mitdb", "--json"]).stdout
+    assert '"slug": "mitdb"' in as_json and '"name": "MIT-BIH' in as_json
     assert runner.invoke(app, ["info", "nope/nope"]).exit_code == 1
     assert runner.invoke(app, ["dev", "validate"]).exit_code == 0
 
@@ -37,7 +40,7 @@ def test_import_status_check(tmp_path: Path) -> None:
     config.write_text(CONFIG)
     src = tmp_path / "download"
     src.mkdir()
-    (src / "x.txt").write_text("x")
+    (src / "x.edf").write_text("x")
     dest = str(tmp_path / "lake")
     args = ["import", "mni/open-ieeg-atlas", str(src), "--dest", dest, "--config", str(config)]
     assert runner.invoke(app, args).exit_code == 2  # --version is required
@@ -81,12 +84,35 @@ def test_config_values_have_no_defaults(tmp_path: Path) -> None:
 
 def test_generated_docs_are_up_to_date() -> None:
     out = Path(__file__).resolve().parents[1] / "docs" / "datasets"
-    pages = render(Catalog.load())
+    pages = render(Catalog.load(), Infos.load())
     for name, text in pages.items():
         assert (out / name).read_text(encoding="utf-8") == text, (
             f"docs/datasets/{name} is stale; run `biosignal-data dev docs`"
         )
-    assert {p.name for p in out.glob("*.md")} == set(pages)
+    assert existing_pages(out) == set(pages), "docs/datasets/ has stale or missing pages"
+
+
+def test_generated_docs_links_resolve() -> None:
+    catalog, infos = Catalog.load(), Infos.load()
+    pages = render(catalog, infos)
+    assert all(f"{d.id}.md" in pages for d in catalog)
+    assert [d.id for d in infos if not d.homepage and not d.references] == []
+    for name, text in pages.items():
+        for target in re.findall(r"\]\(([^)<>]+\.md)\)", text):
+            resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
+            assert resolved in pages, f"{name} links to missing page {target}"
+
+
+def test_write_docs_removes_stale_pages(tmp_path: Path) -> None:
+    catalog, infos = Catalog.load(), Infos.load()
+    out = tmp_path / "datasets"
+    write_docs(catalog, infos, out)
+    (out / "old" / "deep").mkdir(parents=True)
+    (out / "old" / "deep" / "gone.md").write_text("x")
+    assert write_docs(catalog, infos, out, check=True) == ["old/deep/gone.md"]
+    write_docs(catalog, infos, out)
+    assert existing_pages(out) == set(render(catalog, infos))
+    assert not (out / "old").exists()
 
 
 def test_eegdash_import_maps_rows() -> None:
@@ -108,11 +134,15 @@ def test_eegdash_import_maps_rows() -> None:
         "license": "CC0",
         "doi": "doi:10.1/x",
     }
-    path, data = module.entry(row, "abc")
-    assert path.name == "ds000001.yaml"
-    assert data["signals"] == ["eeg", "emg"]
-    assert data["stats"] == {"subjects": 3, "hours": 1.23, "size_bytes": 10}
-    assert data["references"] == ["https://doi.org/10.1/x"]
+    catalog_entry, info = module.entry(row, "abc")
+    assert catalog_entry == {
+        "id": "openneuro/ds000001",
+        "source": {"type": "openneuro", "accession": "ds000001"},
+        "license": "CC0",
+    }
+    assert info["signals"] == ["eeg", "emg"]
+    assert info["stats"] == {"subjects": 3, "hours": 1.23, "size_bytes": 10}
+    assert info["references"] == ["https://doi.org/10.1/x"]
     assert module.entry({**row, "dataset": "EEG2025r1"}, "abc") is None
 
 

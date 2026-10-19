@@ -18,14 +18,14 @@ from biosignal_data.fetchers.base import (
     LocalDirFetcher,
     ManualDownloadError,
     MissingCredentialsError,
-    NoRecordingsError,
     RemoteFile,
     ResolvedVersion,
+    UnavailableError,
 )
 from biosignal_data.fetchers.openneuro_nemar import NemarFetcher, OpenNeuroFetcher
 from biosignal_data.fetchers.physionet import PhysioNetFetcher
 from biosignal_data.fetchers.s3 import S3Fetcher
-from biosignal_data.fetchers.staged import ManualFetcher, RsyncFetcher
+from biosignal_data.fetchers.staged import ManualFetcher, RsyncFetcher, UnavailableFetcher
 from biosignal_data.fetchers.web_apis import KaggleFetcher, NsrrFetcher
 
 FETCHERS: dict[str, type[Fetcher]] = {
@@ -42,6 +42,7 @@ FETCHERS: dict[str, type[Fetcher]] = {
     "nsrr": NsrrFetcher,
     "rsync": RsyncFetcher,
     "manual": ManualFetcher,
+    "unavailable": UnavailableFetcher,
 }
 
 
@@ -62,8 +63,8 @@ __all__ = [
     "Fetcher",
     "ManualDownloadError",
     "MissingCredentialsError",
-    "NoRecordingsError",
     "RemoteFile",
     "ResolvedVersion",
+    "UnavailableError",
     "fetcher_for",
 ]

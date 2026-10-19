@@ -31,11 +31,10 @@ def test_many_datasets_share_one_pool_and_report_each(
         *(make_dataset(**_http(f"test/ok{i}", f"rec{i}.edf")) for i in range(3)),
         make_dataset(**_http("test/broken", "rec.edf")),
         make_dataset(id="test/byhand"),
-        make_dataset(id="test/gone", access={"tier": "unavailable"}),
+        make_dataset(id="test/gone", source={"type": "unavailable"}),
         make_dataset(
             id="test/sleep",
             source={"type": "nsrr", "slug": "x"},
-            access={"tier": "application"},
         ),
     ]
     finished: list[str] = []

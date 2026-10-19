@@ -17,31 +17,30 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Literal
 
-from biosignal_data.catalog import AccessTier, Dataset
+from biosignal_data.catalog import Dataset
 from biosignal_data.fetchers import (
     AccessRestrictedError,
     FetchError,
     FetchOptions,
     ManualDownloadError,
     MissingCredentialsError,
-    NoRecordingsError,
+    UnavailableError,
 )
 from biosignal_data.ingest import AlreadyComplete, IngestProgress, IngestReport, ingest
 from biosignal_data.storage.stores import Store
 
 Status = Literal[
     "complete",  # every file copied; the version is final
-    "subset",  # the selected subset is copied (--limit / --include)
     "already",  # the version was already complete
     "incomplete",  # some files failed; running again retries them
     "credentials",  # needs credentials that are not set
     "restricted",  # the source holds the files back (embargo, request needed)
     "manual",  # must be downloaded by hand, then --from-dir
     "unavailable",  # the catalog says there is no way to get it
-    "no-recordings",  # a subset was asked for, but the source holds no recordings
+    "no-recordings",  # copied completely, but no file can hold recordings (metadata only)
     "failed",  # an error before copying (listing, network, ...)
 ]
-DONE: frozenset[Status] = frozenset({"complete", "subset", "already"})
+DONE: frozenset[Status] = frozenset({"complete", "already"})
 NEEDS_ACTION: frozenset[Status] = frozenset({"credentials", "restricted", "manual", "unavailable"})
 
 
@@ -61,8 +60,6 @@ def download_many(
     root: str = "raw",
     workers: int,
     parallel_datasets: int,
-    include: Sequence[str] = (),
-    limit: int | None = None,
     progress_for: Callable[[Dataset], IngestProgress | None] | None = None,
     on_done: Callable[[Outcome], None] | None = None,
 ) -> list[Outcome]:
@@ -77,8 +74,6 @@ def download_many(
     stop = threading.Event()
 
     def one(dataset: Dataset) -> Outcome:
-        if dataset.access.tier is AccessTier.UNAVAILABLE:
-            return Outcome(dataset, "unavailable", message="no way to get it (see notes)")
         progress = progress_for(dataset) if progress_for else None
         try:
             report = ingest(
@@ -86,8 +81,6 @@ def download_many(
                 store,
                 options=options,
                 root=root,
-                include=include,
-                limit=limit,
                 progress=progress,
                 executor=files,
                 stop=stop,
@@ -96,21 +89,24 @@ def download_many(
             return Outcome(dataset, "already", message=str(exc))
         except MissingCredentialsError as exc:
             return Outcome(dataset, "credentials", message=str(exc))
+        except UnavailableError as exc:
+            return Outcome(dataset, "unavailable", message=str(exc))
         except AccessRestrictedError as exc:
             return Outcome(dataset, "restricted", message=str(exc))
-        except NoRecordingsError as exc:
-            return Outcome(dataset, "no-recordings", message=str(exc))
         except ManualDownloadError as exc:
             return Outcome(dataset, "manual", message=str(exc))
         except (FetchError, OSError, RuntimeError, ValueError) as exc:
             return Outcome(dataset, "failed", message=f"{type(exc).__name__}: {exc}")
-        if report.complete:
-            status: Status = "complete"
-        elif report.failed:
-            status = "incomplete"
-        else:
-            status = "subset"
-        return Outcome(dataset, status, report=report)
+        if report.failed:
+            return Outcome(dataset, "incomplete", report=report)
+        if not report.recording_files:
+            return Outcome(
+                dataset,
+                "no-recordings",
+                report=report,
+                message="no file can hold recordings: the source holds only metadata",
+            )
+        return Outcome(dataset, "complete", report=report)
 
     try:
         futures = [runner.submit(one, d) for d in datasets]

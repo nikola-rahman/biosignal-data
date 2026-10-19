@@ -1,0 +1,4315 @@
+# The datasets this tool can copy: per dataset only what a download needs.
+# Descriptions (name, signals, access, links, sizes, notes) are in docs/datasets.yaml.
+datasets:
+- id: affect/amigos
+  source:
+    type: manual
+- id: affect/case
+  source:
+    type: manual
+- id: affect/dreamer
+  source:
+    type: manual
+- id: affect/k-emocon
+  source:
+    type: manual
+- id: affect/mahnob-hci
+  source:
+    type: manual
+- id: apple/heart-and-movement
+  source:
+    type: unavailable
+    url: https://arxiv.org/pdf/2312.05409
+- id: bdsp/harvard-eeg-db
+  source:
+    type: s3
+    bucket: arn:aws:s3:us-east-1:184438910517:accesspoint/bdsp-credentialed-access-point
+    region: us-east-1
+    anonymous: false
+    key_id_env: BIOSIGNAL_BDSP_ACCESS_KEY_ID
+    secret_env: BIOSIGNAL_BDSP_SECRET_ACCESS_KEY
+    version: '4.1'
+  license: BDSP Restricted Health Data License 1.0.0
+- id: bdsp/heedb
+  source:
+    type: s3
+    bucket: arn:aws:s3:us-east-1:184438910517:accesspoint/bdsp-credentialed-access-point
+    region: us-east-1
+    anonymous: false
+    key_id_env: BIOSIGNAL_BDSP_ACCESS_KEY_ID
+    secret_env: BIOSIGNAL_BDSP_SECRET_ACCESS_KEY
+    version: '5.0'
+  license: BDSP Restricted Health Data License 1.0.0
+- id: bdsp/hsp
+  source:
+    type: s3
+    bucket: arn:aws:s3:us-east-1:184438910517:accesspoint/bdsp-psg-access-point
+    prefix: PSG/
+    region: us-east-1
+    anonymous: false
+    key_id_env: BIOSIGNAL_BDSP_ACCESS_KEY_ID
+    secret_env: BIOSIGNAL_BDSP_SECRET_ACCESS_KEY
+    version: '3.0'
+  license: BDSP Credentialed Health Data License 1.5.0
+- id: bdsp/i-care
+  source:
+    type: manual
+    url: https://bdsp.io/
+- id: bdsp/nf89816gtxbon11kbr9a
+  source:
+    type: s3
+    bucket: arn:aws:s3:us-east-1:184438910517:accesspoint/bdsp-credentialed-access-point
+    region: us-east-1
+    anonymous: false
+    key_id_env: BIOSIGNAL_BDSP_ACCESS_KEY_ID
+    secret_env: BIOSIGNAL_BDSP_SECRET_ACCESS_KEY
+- id: bdsp/stanford-sleep-bench
+  source:
+    type: manual
+    url: https://arxiv.org/html/2512.09591
+- id: bioserenity/psg
+  source:
+    type: unavailable
+    url: https://www.nature.com/articles/s41591-025-04133-4
+- id: brainclinics/tdbrain
+  source:
+    type: manual
+    url: https://brainclinics.com/resources/
+- id: braintreebank/braintreebank
+  source:
+    type: manual
+    url: https://arxiv.org/pdf/2411.08343
+- id: brainwave/private-ieeg
+  source:
+    type: unavailable
+    url: https://arxiv.org/html/2402.10251v7
+- id: brant/pretraining
+  source:
+    type: unavailable
+    url: https://papers.neurips.cc/paper_files/paper/2023/file/535915d26859036410b0533804cee788-Paper-Conference.pdf
+- id: camcan/meg
+  source:
+    type: manual
+    url: https://arxiv.org/html/2609.04461
+- id: caueeg/caueeg
+  source:
+    type: manual
+    url: https://arxiv.org/pdf/2509.24222
+- id: ceams/mass
+  source:
+    type: manual
+    url: http://ceams-carsm.ca/mass/
+- id: code/code-ii
+  source:
+    type: manual
+    url: https://arxiv.org/pdf/2511.15632
+- id: cogitate/ieeg
+  source:
+    type: manual
+    url: https://arc-cogitate.com/data
+- id: dabi/dabi
+  source:
+    type: manual
+    url: https://dabi.loni.usc.edu/
+- id: dandi/000055
+  source:
+    type: dandi
+    dandiset: '000055'
+- id: dandi/000147
+  source:
+    type: dandi
+    dandiset: '000147'
+- id: dandi/000469
+  source:
+    type: dandi
+    dandiset: 000469
+- id: dandi/000623
+  source:
+    type: dandi
+    dandiset: '000623'
+- id: decaf/decaf
+  source:
+    type: manual
+    url: https://github.com/thecocolab/meg-fm-resources/blob/main/datasets.md
+- id: diver/private-ieeg
+  source:
+    type: unavailable
+    url: https://arxiv.org/html/2512.19097v1
+- id: donders/mous
+  source:
+    type: manual
+    url: https://www.nature.com/articles/s41597-019-0020-y
+- id: dreams/dreams
+  source:
+    type: manual
+- id: dreem/dod
+  source:
+    type: manual
+    url: https://arxiv.org/pdf/1911.03221
+- id: dryad/card-t15-speech
+  source:
+    type: manual
+    url: https://datadryad.org/dataset/doi:10.5061/dryad.dncjsxm85
+- id: dryad/willett-handwriting
+  source:
+    type: manual
+    url: https://datadryad.org/dataset/doi:10.5061/dryad.wh70rxwmv
+- id: ebrains/mayo-memory-ieeg
+  source:
+    type: manual
+    url: https://doi.org/10.25493/GKNT-T3X
+- id: epilepsiae/epilepsiae
+  source:
+    type: manual
+    url: https://www.epilepsy.uni-freiburg.de/database
+- id: epilepsyecosystem/neurovista
+  source:
+    type: manual
+    url: https://melbourne.figshare.com/articles/Seizure_Data/6939809
+- id: epn/emg-epn612
+  source:
+    type: manual
+    url: https://laboratorio-ia.epn.edu.ec/en/resources/dataset/2020_emg_dataset_612
+- id: figshare/29925314
+  source:
+    type: figshare
+    article: 29925314
+- id: figshare/4560497
+  source:
+    type: figshare
+    collection: 4560497
+- id: figshare/6939809
+  source:
+    type: figshare
+    article: 6939809
+  license: CC (non-commercial)
+- id: galaxyppg/galaxyppg
+  source:
+    type: manual
+- id: gigadb/openbmi
+  source:
+    type: manual
+- id: gnode/kiap-als-bci
+  source:
+    type: manual
+    url: https://doi.gin.g-node.org/10.12751/g-node.jdwmjd/
+- id: hcp/meg
+  source:
+    type: manual
+- id: huggingface/NeuroTec/SWEC_iEEG_Dataset
+  source:
+    type: huggingface
+    repo_id: NeuroTec/SWEC_iEEG_Dataset
+  license: CDLA-Permissive-2.0
+- id: ieeg-org/portal
+  source:
+    type: manual
+    url: https://main.ieeg.org/
+- id: isip/tuh_eeg
+  source:
+    type: rsync
+    remote: nedc-tuh-eeg@www.isip.piconepress.com:data/tuh_eeg/tuh_eeg/v2.0.2
+    version: v2.0.2
+    ssh_identity_env: BIOSIGNAL_TUH_SSH_KEY
+- id: isip/tuh_eeg_abnormal
+  source:
+    type: rsync
+    remote: nedc-tuh-eeg@www.isip.piconepress.com:data/tuh_eeg/tuh_eeg_abnormal/v3.0.1
+    version: v3.0.1
+    ssh_identity_env: BIOSIGNAL_TUH_SSH_KEY
+- id: isip/tuh_eeg_artifact
+  source:
+    type: rsync
+    remote: nedc-tuh-eeg@www.isip.piconepress.com:data/tuh_eeg/tuh_eeg_artifact/v3.0.1
+    version: v3.0.1
+    ssh_identity_env: BIOSIGNAL_TUH_SSH_KEY
+- id: isip/tuh_eeg_epilepsy
+  source:
+    type: rsync
+    remote: nedc-tuh-eeg@www.isip.piconepress.com:data/tuh_eeg/tuh_eeg_epilepsy/v3.1.0
+    version: v3.1.0
+    ssh_identity_env: BIOSIGNAL_TUH_SSH_KEY
+- id: isip/tuh_eeg_events
+  source:
+    type: rsync
+    remote: nedc-tuh-eeg@www.isip.piconepress.com:data/tuh_eeg/tuh_eeg_events/v2.0.1
+    version: v2.0.1
+    ssh_identity_env: BIOSIGNAL_TUH_SSH_KEY
+- id: isip/tuh_eeg_seizure
+  source:
+    type: rsync
+    remote: nedc-tuh-eeg@www.isip.piconepress.com:data/tuh_eeg/tuh_eeg_seizure/v2.0.6
+    version: v2.0.6
+    ssh_identity_env: BIOSIGNAL_TUH_SSH_KEY
+- id: isip/tuh_eeg_slowing
+  source:
+    type: rsync
+    remote: nedc-tuh-eeg@www.isip.piconepress.com:data/tuh_eeg/tuh_eeg_slowing/v2.0.1
+    version: v2.0.1
+    ssh_identity_env: BIOSIGNAL_TUH_SSH_KEY
+- id: isr-uc/isruc-sleep
+  source:
+    type: manual
+    url: https://sleeptight.isr.uc.pt/
+- id: kaggle/grasp-and-lift-eeg-detection
+  source:
+    type: kaggle
+    kind: competition
+    ref: grasp-and-lift-eeg-detection
+- id: kaggle/hms-harmful-brain-activity-classification
+  source:
+    type: kaggle
+    kind: competition
+    ref: hms-harmful-brain-activity-classification
+- id: kaggle/inria-bci-challenge
+  source:
+    type: kaggle
+    kind: competition
+    ref: inria-bci-challenge
+- id: kaggle/melbourne-university-seizure-prediction
+  source:
+    type: kaggle
+    kind: competition
+    ref: melbourne-university-seizure-prediction
+- id: kaggle/seizure-detection
+  source:
+    type: kaggle
+    kind: competition
+    ref: seizure-detection
+- id: kaggle/seizure-prediction
+  source:
+    type: kaggle
+    kind: competition
+    ref: seizure-prediction
+- id: kuleuven/seizeit1
+  source:
+    type: manual
+- id: mayo-fnusa/multicenter-ieeg
+  source:
+    type: manual
+    url: https://pmc.ncbi.nlm.nih.gov/articles/PMC7297990
+- id: meta/emg2pose
+  source:
+    type: http
+    files:
+    - url: https://fb-ctrl-oss.s3.amazonaws.com/emg2pose/emg2pose_dataset.tar
+    - url: https://fb-ctrl-oss.s3.amazonaws.com/emg2pose/emg2pose_metadata.csv
+- id: meta/emg2qwerty
+  source:
+    type: http
+    files:
+    - url: https://fb-ctrl-oss.s3.amazonaws.com/emg2qwerty/emg2qwerty-data-2021-08.tar.gz
+    version: 2021-08
+- id: meta/generic-neuromotor-interface
+  source:
+    type: http
+    files:
+    - url: https://fb-ctrl-oss.s3.amazonaws.com/neuromotor-data/data/discrete_gestures/full_data.tar
+      path: discrete_gestures/full_data.tar
+    - url: https://fb-ctrl-oss.s3.amazonaws.com/neuromotor-data/data/discrete_gestures/discrete_gestures_corpus.csv
+      path: discrete_gestures/discrete_gestures_corpus.csv
+    - url: https://fb-ctrl-oss.s3.amazonaws.com/neuromotor-data/data/handwriting/full_data.tar
+      path: handwriting/full_data.tar
+    - url: https://fb-ctrl-oss.s3.amazonaws.com/neuromotor-data/data/handwriting/handwriting_corpus.csv
+      path: handwriting/handwriting_corpus.csv
+    - url: https://fb-ctrl-oss.s3.amazonaws.com/neuromotor-data/data/wrist/full_data.tar
+      path: wrist/full_data.tar
+    - url: https://fb-ctrl-oss.s3.amazonaws.com/neuromotor-data/data/wrist/wrist_corpus.csv
+      path: wrist/wrist_corpus.csv
+  license: CC BY-NC 4.0
+- id: meta/reality-labs-semg
+  source:
+    type: unavailable
+    url: https://www.biorxiv.org/content/10.1101/2024.07.11.603119v2.full.pdf
+- id: mindbigdata/mindbigdata-2022
+  source:
+    type: manual
+    url: https://arxiv.org/pdf/2212.14746
+- id: mni/open-ieeg-atlas
+  source:
+    type: manual
+- id: multisite-ppg/multisite-ppg
+  source:
+    type: manual
+    url: https://arxiv.org/html/2605.17859v1
+- id: nemar/nm000103
+  source:
+    type: nemar
+    accession: nm000103
+  license: CC-BY-NC-SA 4.0
+- id: nemar/nm000104
+  source:
+    type: nemar
+    accession: nm000104
+  license: CC-BY-NC-SA-4.0
+- id: nemar/nm000105
+  source:
+    type: nemar
+    accession: nm000105
+  license: CC-BY-NC 4.0
+- id: nemar/nm000106
+  source:
+    type: nemar
+    accession: nm000106
+  license: CC-BY-NC 4.0
+- id: nemar/nm000107
+  source:
+    type: nemar
+    accession: nm000107
+  license: CC-BY-NC 4.0
+- id: nemar/nm000108
+  source:
+    type: nemar
+    accession: nm000108
+  license: ODC-By-1.0
+- id: nemar/nm000109
+  source:
+    type: nemar
+    accession: nm000109
+  license: ODC-By-1.0
+- id: nemar/nm000110
+  source:
+    type: nemar
+    accession: nm000110
+  license: ODC-By-1.0
+- id: nemar/nm000112
+  source:
+    type: nemar
+    accession: nm000112
+  license: CC-BY-4.0
+- id: nemar/nm000113
+  source:
+    type: nemar
+    accession: nm000113
+  license: CC-BY-4.0
+- id: nemar/nm000114
+  source:
+    type: nemar
+    accession: nm000114
+  license: CC-BY-4.0
+- id: nemar/nm000115
+  source:
+    type: nemar
+    accession: nm000115
+  license: CC-BY-4.0
+- id: nemar/nm000118
+  source:
+    type: nemar
+    accession: nm000118
+  license: Unknown
+- id: nemar/nm000119
+  source:
+    type: nemar
+    accession: nm000119
+  license: ODC-By-1.0
+- id: nemar/nm000120
+  source:
+    type: nemar
+    accession: nm000120
+  license: ODC-By-1.0
+- id: nemar/nm000121
+  source:
+    type: nemar
+    accession: nm000121
+  license: ODC-By-1.0
+- id: nemar/nm000122
+  source:
+    type: nemar
+    accession: nm000122
+  license: CC BY 4.0
+- id: nemar/nm000123
+  source:
+    type: nemar
+    accession: nm000123
+  license: CC-BY-4.0
+- id: nemar/nm000124
+  source:
+    type: nemar
+    accession: nm000124
+  license: CC BY 4.0
+- id: nemar/nm000125
+  source:
+    type: nemar
+    accession: nm000125
+  license: CC BY 4.0
+- id: nemar/nm000126
+  source:
+    type: nemar
+    accession: nm000126
+  license: CC-BY-4.0
+- id: nemar/nm000127
+  source:
+    type: nemar
+    accession: nm000127
+  license: CC BY 4.0
+- id: nemar/nm000128
+  source:
+    type: nemar
+    accession: nm000128
+  license: CC BY-NC 4.0
+- id: nemar/nm000129
+  source:
+    type: nemar
+    accession: nm000129
+  license: Non-commercial research use
+- id: nemar/nm000130
+  source:
+    type: nemar
+    accession: nm000130
+  license: CC BY 4.0
+- id: nemar/nm000131
+  source:
+    type: nemar
+    accession: nm000131
+  license: CC BY 4.0
+- id: nemar/nm000132
+  source:
+    type: nemar
+    accession: nm000132
+  license: CC-BY-4.0
+- id: nemar/nm000133
+  source:
+    type: nemar
+    accession: nm000133
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000134
+  source:
+    type: nemar
+    accession: nm000134
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000135
+  source:
+    type: nemar
+    accession: nm000135
+  license: CC-BY-ND-4.0
+- id: nemar/nm000136
+  source:
+    type: nemar
+    accession: nm000136
+  license: CC0
+- id: nemar/nm000137
+  source:
+    type: nemar
+    accession: nm000137
+  license: CC-BY-4.0
+- id: nemar/nm000138
+  source:
+    type: nemar
+    accession: nm000138
+  license: CC-BY-SA-4.0
+- id: nemar/nm000139
+  source:
+    type: nemar
+    accession: nm000139
+  license: CC-BY-ND-4.0
+- id: nemar/nm000140
+  source:
+    type: nemar
+    accession: nm000140
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000141
+  source:
+    type: nemar
+    accession: nm000141
+  license: CC-BY-4.0
+- id: nemar/nm000142
+  source:
+    type: nemar
+    accession: nm000142
+  license: CC-BY-4.0
+- id: nemar/nm000143
+  source:
+    type: nemar
+    accession: nm000143
+  license: CC-BY-4.0
+- id: nemar/nm000144
+  source:
+    type: nemar
+    accession: nm000144
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000145
+  source:
+    type: nemar
+    accession: nm000145
+  license: CC-BY-4.0
+- id: nemar/nm000146
+  source:
+    type: nemar
+    accession: nm000146
+  license: CC0-1.0
+- id: nemar/nm000147
+  source:
+    type: nemar
+    accession: nm000147
+- id: nemar/nm000148
+  source:
+    type: nemar
+    accession: nm000148
+  license: CC0 1.0
+- id: nemar/nm000149
+  source:
+    type: nemar
+    accession: nm000149
+  license: CC-BY-4.0
+- id: nemar/nm000151
+  source:
+    type: nemar
+    accession: nm000151
+  license: CC0-1.0
+- id: nemar/nm000152
+  source:
+    type: nemar
+    accession: nm000152
+  license: CC BY 4.0
+- id: nemar/nm000155
+  source:
+    type: nemar
+    accession: nm000155
+  license: CC0 BY 4.0
+- id: nemar/nm000156
+  source:
+    type: nemar
+    accession: nm000156
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000157
+  source:
+    type: nemar
+    accession: nm000157
+  license: CC-BY-4.0
+- id: nemar/nm000158
+  source:
+    type: nemar
+    accession: nm000158
+  license: CC-BY-4.0
+- id: nemar/nm000159
+  source:
+    type: nemar
+    accession: nm000159
+  license: CC0 BY 4.0
+- id: nemar/nm000160
+  source:
+    type: nemar
+    accession: nm000160
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000161
+  source:
+    type: nemar
+    accession: nm000161
+  license: CC-BY-4.0
+- id: nemar/nm000162
+  source:
+    type: nemar
+    accession: nm000162
+  license: CC-BY-4.0
+- id: nemar/nm000163
+  source:
+    type: nemar
+    accession: nm000163
+  license: CC-BY-4.0
+- id: nemar/nm000165
+  source:
+    type: nemar
+    accession: nm000165
+  license: CC0 BY 4.0
+- id: nemar/nm000166
+  source:
+    type: nemar
+    accession: nm000166
+  license: CC BY 4.0
+- id: nemar/nm000167
+  source:
+    type: nemar
+    accession: nm000167
+  license: CC-BY-4.0
+- id: nemar/nm000168
+  source:
+    type: nemar
+    accession: nm000168
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000169
+  source:
+    type: nemar
+    accession: nm000169
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000170
+  source:
+    type: nemar
+    accession: nm000170
+  license: CC-BY-4.0
+- id: nemar/nm000171
+  source:
+    type: nemar
+    accession: nm000171
+  license: CC-BY-ND-4.0
+- id: nemar/nm000172
+  source:
+    type: nemar
+    accession: nm000172
+  license: CC-BY-4.0
+- id: nemar/nm000173
+  source:
+    type: nemar
+    accession: nm000173
+  license: CC-BY-4.0
+- id: nemar/nm000175
+  source:
+    type: nemar
+    accession: nm000175
+  license: CC0
+- id: nemar/nm000176
+  source:
+    type: nemar
+    accession: nm000176
+  license: CC-BY-4.0
+- id: nemar/nm000179
+  source:
+    type: nemar
+    accession: nm000179
+  license: CC BY 4.0
+- id: nemar/nm000180
+  source:
+    type: nemar
+    accession: nm000180
+  license: CC BY 4.0
+- id: nemar/nm000181
+  source:
+    type: nemar
+    accession: nm000181
+  license: CC BY-SA 4.0
+- id: nemar/nm000185
+  source:
+    type: nemar
+    accession: nm000185
+  license: ODbL v1.0
+- id: nemar/nm000186
+  source:
+    type: nemar
+    accession: nm000186
+  license: CC-BY-4.0
+- id: nemar/nm000187
+  source:
+    type: nemar
+    accession: nm000187
+  license: CC-BY-4.0
+- id: nemar/nm000188
+  source:
+    type: nemar
+    accession: nm000188
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000189
+  source:
+    type: nemar
+    accession: nm000189
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000190
+  source:
+    type: nemar
+    accession: nm000190
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000191
+  source:
+    type: nemar
+    accession: nm000191
+  license: CC-BY-4.0
+- id: nemar/nm000192
+  source:
+    type: nemar
+    accession: nm000192
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000193
+  source:
+    type: nemar
+    accession: nm000193
+  license: CC0-1.0
+- id: nemar/nm000194
+  source:
+    type: nemar
+    accession: nm000194
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000195
+  source:
+    type: nemar
+    accession: nm000195
+  license: CC-BY-4.0
+- id: nemar/nm000196
+  source:
+    type: nemar
+    accession: nm000196
+  license: CC0-1.0
+- id: nemar/nm000197
+  source:
+    type: nemar
+    accession: nm000197
+  license: CC-BY-4.0
+- id: nemar/nm000198
+  source:
+    type: nemar
+    accession: nm000198
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000199
+  source:
+    type: nemar
+    accession: nm000199
+  license: CC-BY-4.0
+- id: nemar/nm000200
+  source:
+    type: nemar
+    accession: nm000200
+  license: CC-BY-4.0
+- id: nemar/nm000201
+  source:
+    type: nemar
+    accession: nm000201
+  license: CC BY 4.0
+- id: nemar/nm000202
+  source:
+    type: nemar
+    accession: nm000202
+  license: CC-BY-4.0
+- id: nemar/nm000204
+  source:
+    type: nemar
+    accession: nm000204
+  license: CC-BY-4.0
+- id: nemar/nm000205
+  source:
+    type: nemar
+    accession: nm000205
+  license: CC-BY-4.0
+- id: nemar/nm000206
+  source:
+    type: nemar
+    accession: nm000206
+  license: CC-BY-SA-4.0
+- id: nemar/nm000207
+  source:
+    type: nemar
+    accession: nm000207
+  license: CC0-1.0
+- id: nemar/nm000208
+  source:
+    type: nemar
+    accession: nm000208
+  license: CC-BY-4.0
+- id: nemar/nm000209
+  source:
+    type: nemar
+    accession: nm000209
+  license: CC-BY-4.0
+- id: nemar/nm000210
+  source:
+    type: nemar
+    accession: nm000210
+  license: CC-BY-4.0
+- id: nemar/nm000211
+  source:
+    type: nemar
+    accession: nm000211
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000212
+  source:
+    type: nemar
+    accession: nm000212
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000213
+  source:
+    type: nemar
+    accession: nm000213
+  license: CC-BY-4.0
+- id: nemar/nm000214
+  source:
+    type: nemar
+    accession: nm000214
+  license: CC0-1.0
+- id: nemar/nm000215
+  source:
+    type: nemar
+    accession: nm000215
+  license: CC-BY-4.0
+- id: nemar/nm000216
+  source:
+    type: nemar
+    accession: nm000216
+  license: CC-BY-4.0
+- id: nemar/nm000217
+  source:
+    type: nemar
+    accession: nm000217
+  license: CC-BY-4.0
+- id: nemar/nm000218
+  source:
+    type: nemar
+    accession: nm000218
+  license: CC-BY-4.0
+- id: nemar/nm000219
+  source:
+    type: nemar
+    accession: nm000219
+  license: CC-BY-4.0
+- id: nemar/nm000221
+  source:
+    type: nemar
+    accession: nm000221
+  license: CC-BY-4.0
+- id: nemar/nm000222
+  source:
+    type: nemar
+    accession: nm000222
+  license: CC-BY-4.0
+- id: nemar/nm000223
+  source:
+    type: nemar
+    accession: nm000223
+  license: CC-BY-4.0
+- id: nemar/nm000225
+  source:
+    type: nemar
+    accession: nm000225
+  license: Open Data Commons Attribution License v1.0
+- id: nemar/nm000226
+  source:
+    type: nemar
+    accession: nm000226
+  license: CC-BY-4.0
+- id: nemar/nm000227
+  source:
+    type: nemar
+    accession: nm000227
+  license: CC0
+- id: nemar/nm000228
+  source:
+    type: nemar
+    accession: nm000228
+  license: CC-BY 4.0
+- id: nemar/nm000229
+  source:
+    type: nemar
+    accession: nm000229
+- id: nemar/nm000230
+  source:
+    type: nemar
+    accession: nm000230
+  license: CC-BY-4.0
+- id: nemar/nm000231
+  source:
+    type: nemar
+    accession: nm000231
+  license: Unknown
+- id: nemar/nm000232
+  source:
+    type: nemar
+    accession: nm000232
+  license: CC-BY 4.0
+- id: nemar/nm000234
+  source:
+    type: nemar
+    accession: nm000234
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000235
+  source:
+    type: nemar
+    accession: nm000235
+  license: CC0
+- id: nemar/nm000236
+  source:
+    type: nemar
+    accession: nm000236
+  license: CC-BY-4.0
+- id: nemar/nm000237
+  source:
+    type: nemar
+    accession: nm000237
+  license: CC-BY-4.0
+- id: nemar/nm000238
+  source:
+    type: nemar
+    accession: nm000238
+  license: Attribution-NonCommercial 4.0 International License (CC BY-NC 4.0) for the EEG data. Stimuli
+    can only be used for non-commercial purposes.
+- id: nemar/nm000239
+  source:
+    type: nemar
+    accession: nm000239
+  license: CC-BY-NC-SA-4.0
+- id: nemar/nm000240
+  source:
+    type: nemar
+    accession: nm000240
+  license: CC-BY-NC-SA-4.0
+- id: nemar/nm000241
+  source:
+    type: nemar
+    accession: nm000241
+  license: CC BY 4.0
+- id: nemar/nm000242
+  source:
+    type: nemar
+    accession: nm000242
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000243
+  source:
+    type: nemar
+    accession: nm000243
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000244
+  source:
+    type: nemar
+    accession: nm000244
+  license: CC-BY-4.0
+- id: nemar/nm000245
+  source:
+    type: nemar
+    accession: nm000245
+  license: CC-BY-4.0
+- id: nemar/nm000246
+  source:
+    type: nemar
+    accession: nm000246
+  license: CC-BY-4.0
+- id: nemar/nm000247
+  source:
+    type: nemar
+    accession: nm000247
+  license: CC-BY-4.0
+- id: nemar/nm000248
+  source:
+    type: nemar
+    accession: nm000248
+  license: CC-BY-4.0
+- id: nemar/nm000249
+  source:
+    type: nemar
+    accession: nm000249
+  license: CC-BY-4.0
+- id: nemar/nm000250
+  source:
+    type: nemar
+    accession: nm000250
+  license: CC-BY-4.0
+- id: nemar/nm000251
+  source:
+    type: nemar
+    accession: nm000251
+  license: CC BY 4.0
+- id: nemar/nm000253
+  source:
+    type: nemar
+    accession: nm000253
+  license: CC BY 4.0
+- id: nemar/nm000254
+  source:
+    type: nemar
+    accession: nm000254
+- id: nemar/nm000255
+  source:
+    type: nemar
+    accession: nm000255
+  license: CC BY 4.0
+- id: nemar/nm000256
+  source:
+    type: nemar
+    accession: nm000256
+  license: CC BY 4.0
+- id: nemar/nm000259
+  source:
+    type: nemar
+    accession: nm000259
+  license: CC0
+- id: nemar/nm000260
+  source:
+    type: nemar
+    accession: nm000260
+  license: CC-BY-4.0
+- id: nemar/nm000264
+  source:
+    type: nemar
+    accession: nm000264
+  license: CC-BY-1.0
+- id: nemar/nm000265
+  source:
+    type: nemar
+    accession: nm000265
+  license: CC0
+- id: nemar/nm000266
+  source:
+    type: nemar
+    accession: nm000266
+  license: CC-BY-SA-4.0
+- id: nemar/nm000267
+  source:
+    type: nemar
+    accession: nm000267
+  license: GPL-3.0
+- id: nemar/nm000268
+  source:
+    type: nemar
+    accession: nm000268
+  license: GPL-3.0
+- id: nemar/nm000270
+  source:
+    type: nemar
+    accession: nm000270
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000271
+  source:
+    type: nemar
+    accession: nm000271
+  license: CC-BY-4.0
+- id: nemar/nm000272
+  source:
+    type: nemar
+    accession: nm000272
+  license: CC-BY-4.0
+- id: nemar/nm000277
+  source:
+    type: nemar
+    accession: nm000277
+  license: CC-BY-4.0
+- id: nemar/nm000301
+  source:
+    type: nemar
+    accession: nm000301
+  license: CC-BY-4.0
+- id: nemar/nm000303
+  source:
+    type: nemar
+    accession: nm000303
+  license: CC-BY-4.0
+- id: nemar/nm000310
+  source:
+    type: nemar
+    accession: nm000310
+  license: CC0
+- id: nemar/nm000311
+  source:
+    type: nemar
+    accession: nm000311
+  license: CC0-1.0
+- id: nemar/nm000313
+  source:
+    type: nemar
+    accession: nm000313
+  license: CC-BY-4.0
+- id: nemar/nm000321
+  source:
+    type: nemar
+    accession: nm000321
+  license: CC-BY-4.0
+- id: nemar/nm000323
+  source:
+    type: nemar
+    accession: nm000323
+  license: GPL-3.0
+- id: nemar/nm000326
+  source:
+    type: nemar
+    accession: nm000326
+  license: CC-BY-4.0
+- id: nemar/nm000329
+  source:
+    type: nemar
+    accession: nm000329
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000336
+  source:
+    type: nemar
+    accession: nm000336
+  license: CC-BY-4.0
+- id: nemar/nm000338
+  source:
+    type: nemar
+    accession: nm000338
+  license: GPL-3.0
+- id: nemar/nm000339
+  source:
+    type: nemar
+    accession: nm000339
+  license: CC-BY-NC-4.0
+- id: nemar/nm000340
+  source:
+    type: nemar
+    accession: nm000340
+  license: CC-BY-4.0
+- id: nemar/nm000341
+  source:
+    type: nemar
+    accession: nm000341
+  license: CC-BY-4.0
+- id: nemar/nm000342
+  source:
+    type: nemar
+    accession: nm000342
+  license: CC-BY-4.0
+- id: nemar/nm000343
+  source:
+    type: nemar
+    accession: nm000343
+  license: CC-BY-SA-4.0
+- id: nemar/nm000344
+  source:
+    type: nemar
+    accession: nm000344
+  license: CC-BY-4.0
+- id: nemar/nm000345
+  source:
+    type: nemar
+    accession: nm000345
+  license: CC-BY-4.0
+- id: nemar/nm000346
+  source:
+    type: nemar
+    accession: nm000346
+  license: CC-BY-4.0
+- id: nemar/nm000347
+  source:
+    type: nemar
+    accession: nm000347
+  license: CC-BY-NC-ND-4.0
+- id: nemar/nm000348
+  source:
+    type: nemar
+    accession: nm000348
+  license: CC-BY-4.0
+- id: nemar/nm000351
+  source:
+    type: nemar
+    accession: nm000351
+  license: CC-BY-4.0
+- id: ninapro/ninapro
+  source:
+    type: manual
+    url: http://ninaweb.hevs.ch/
+- id: nmt/nmt-scalp-eeg
+  source:
+    type: manual
+    url: https://www.frontiersin.org/articles/10.3389/fnins.2021.755817/text
+- id: nsrr/abc
+  source:
+    type: nsrr
+    slug: abc
+- id: nsrr/apples
+  source:
+    type: nsrr
+    slug: apples
+- id: nsrr/bestair
+  source:
+    type: nsrr
+    slug: bestair
+- id: nsrr/ccshs
+  source:
+    type: nsrr
+    slug: ccshs
+- id: nsrr/cfs
+  source:
+    type: nsrr
+    slug: cfs
+- id: nsrr/chat
+  source:
+    type: nsrr
+    slug: chat
+- id: nsrr/hchs
+  source:
+    type: nsrr
+    slug: hchs
+- id: nsrr/homepap
+  source:
+    type: nsrr
+    slug: homepap
+- id: nsrr/mesa
+  source:
+    type: nsrr
+    slug: mesa
+- id: nsrr/mros
+  source:
+    type: nsrr
+    slug: mros
+- id: nsrr/nchsdb
+  source:
+    type: nsrr
+    slug: nchsdb
+- id: nsrr/shhs
+  source:
+    type: nsrr
+    slug: shhs
+- id: nsrr/sof
+  source:
+    type: nsrr
+    slug: sof
+- id: nsrr/stages
+  source:
+    type: nsrr
+    slug: stages
+- id: nsrr/wsc
+  source:
+    type: nsrr
+    slug: wsc
+- id: omega/omega
+  source:
+    type: manual
+    url: https://www.mcgill.ca/bic/neuroinformatics/omega
+- id: openneuro/ds000117
+  source:
+    type: openneuro
+    accession: ds000117
+  license: CC0
+- id: openneuro/ds000246
+  source:
+    type: openneuro
+    accession: ds000246
+  license: CC0
+- id: openneuro/ds000247
+  source:
+    type: openneuro
+    accession: ds000247
+  license: CC0
+- id: openneuro/ds000248
+  source:
+    type: openneuro
+    accession: ds000248
+  license: CC0
+- id: openneuro/ds001785
+  source:
+    type: openneuro
+    accession: ds001785
+  license: CC0
+- id: openneuro/ds001787
+  source:
+    type: openneuro
+    accession: ds001787
+  license: CC0
+- id: openneuro/ds001810
+  source:
+    type: openneuro
+    accession: ds001810
+  license: CC0
+- id: openneuro/ds001849
+  source:
+    type: openneuro
+    accession: ds001849
+  license: CC0
+- id: openneuro/ds001971
+  source:
+    type: openneuro
+    accession: ds001971
+  license: Creative commons
+- id: openneuro/ds002001
+  source:
+    type: openneuro
+    accession: ds002001
+  license: PD
+- id: openneuro/ds002034
+  source:
+    type: openneuro
+    accession: ds002034
+  license: CC0
+- id: openneuro/ds002094
+  source:
+    type: openneuro
+    accession: ds002094
+  license: CC0
+- id: openneuro/ds002158
+  source:
+    type: openneuro
+    accession: ds002158
+  license: CC0
+- id: openneuro/ds002181
+  source:
+    type: openneuro
+    accession: ds002181
+  license: CC0
+- id: openneuro/ds002218
+  source:
+    type: openneuro
+    accession: ds002218
+  license: CC0
+- id: openneuro/ds002312
+  source:
+    type: openneuro
+    accession: ds002312
+  license: CC0
+- id: openneuro/ds002336
+  source:
+    type: openneuro
+    accession: ds002336
+  license: CC0
+- id: openneuro/ds002338
+  source:
+    type: openneuro
+    accession: ds002338
+  license: CC0
+- id: openneuro/ds002550
+  source:
+    type: openneuro
+    accession: ds002550
+  license: CC0
+- id: openneuro/ds002578
+  source:
+    type: openneuro
+    accession: ds002578
+  license: CC0
+- id: openneuro/ds002680
+  source:
+    type: openneuro
+    accession: ds002680
+  license: CC0
+- id: openneuro/ds002691
+  source:
+    type: openneuro
+    accession: ds002691
+  license: CC0
+- id: openneuro/ds002712
+  source:
+    type: openneuro
+    accession: ds002712
+  license: CC0
+- id: openneuro/ds002718
+  source:
+    type: openneuro
+    accession: ds002718
+  license: CC0
+- id: openneuro/ds002720
+  source:
+    type: openneuro
+    accession: ds002720
+  license: CC0
+- id: openneuro/ds002721
+  source:
+    type: openneuro
+    accession: ds002721
+  license: CC0
+- id: openneuro/ds002722
+  source:
+    type: openneuro
+    accession: ds002722
+  license: CC0
+- id: openneuro/ds002723
+  source:
+    type: openneuro
+    accession: ds002723
+  license: CC0
+- id: openneuro/ds002724
+  source:
+    type: openneuro
+    accession: ds002724
+  license: CC0
+- id: openneuro/ds002725
+  source:
+    type: openneuro
+    accession: ds002725
+  license: CC0
+- id: openneuro/ds002761
+  source:
+    type: openneuro
+    accession: ds002761
+  license: CC0
+- id: openneuro/ds002778
+  source:
+    type: openneuro
+    accession: ds002778
+  license: CC0
+- id: openneuro/ds002791
+  source:
+    type: openneuro
+    accession: ds002791
+  license: CC0
+- id: openneuro/ds002814
+  source:
+    type: openneuro
+    accession: ds002814
+  license: CC0
+- id: openneuro/ds002833
+  source:
+    type: openneuro
+    accession: ds002833
+  license: CC0
+- id: openneuro/ds002885
+  source:
+    type: openneuro
+    accession: ds002885
+  license: CC0
+- id: openneuro/ds002893
+  source:
+    type: openneuro
+    accession: ds002893
+  license: CC0
+- id: openneuro/ds002908
+  source:
+    type: openneuro
+    accession: ds002908
+  license: CC0
+- id: openneuro/ds003004
+  source:
+    type: openneuro
+    accession: ds003004
+  license: CC0
+- id: openneuro/ds003029
+  source:
+    type: openneuro
+    accession: ds003029
+  license: CC0
+- id: openneuro/ds003039
+  source:
+    type: openneuro
+    accession: ds003039
+  license: CC0
+- id: openneuro/ds003061
+  source:
+    type: openneuro
+    accession: ds003061
+  license: CC0
+- id: openneuro/ds003078
+  source:
+    type: openneuro
+    accession: ds003078
+  license: CC0
+- id: openneuro/ds003082
+  source:
+    type: openneuro
+    accession: ds003082
+  license: CC0
+- id: openneuro/ds003104
+  source:
+    type: openneuro
+    accession: ds003104
+  license: CC0
+- id: openneuro/ds003190
+  source:
+    type: openneuro
+    accession: ds003190
+  license: CC0
+- id: openneuro/ds003194
+  source:
+    type: openneuro
+    accession: ds003194
+  license: CC0
+- id: openneuro/ds003195
+  source:
+    type: openneuro
+    accession: ds003195
+  license: CC0
+- id: openneuro/ds003343
+  source:
+    type: openneuro
+    accession: ds003343
+  license: CC0
+- id: openneuro/ds003352
+  source:
+    type: openneuro
+    accession: ds003352
+  license: CC0
+- id: openneuro/ds003374
+  source:
+    type: openneuro
+    accession: ds003374
+  license: CC0
+- id: openneuro/ds003380
+  source:
+    type: openneuro
+    accession: ds003380
+  license: CC0
+- id: openneuro/ds003392
+  source:
+    type: openneuro
+    accession: ds003392
+  license: CC0
+- id: openneuro/ds003420
+  source:
+    type: openneuro
+    accession: ds003420
+  license: CC0
+- id: openneuro/ds003421
+  source:
+    type: openneuro
+    accession: ds003421
+  license: CC0
+- id: openneuro/ds003458
+  source:
+    type: openneuro
+    accession: ds003458
+  license: CC0
+- id: openneuro/ds003474
+  source:
+    type: openneuro
+    accession: ds003474
+  license: CC0
+- id: openneuro/ds003478
+  source:
+    type: openneuro
+    accession: ds003478
+  license: CC0
+- id: openneuro/ds003483
+  source:
+    type: openneuro
+    accession: ds003483
+  license: CC0
+- id: openneuro/ds003490
+  source:
+    type: openneuro
+    accession: ds003490
+  license: CC0
+- id: openneuro/ds003498
+  source:
+    type: openneuro
+    accession: ds003498
+  license: CC0
+- id: openneuro/ds003505
+  source:
+    type: openneuro
+    accession: ds003505
+  license: CC0
+- id: openneuro/ds003506
+  source:
+    type: openneuro
+    accession: ds003506
+  license: CC0
+- id: openneuro/ds003509
+  source:
+    type: openneuro
+    accession: ds003509
+  license: CC0
+- id: openneuro/ds003516
+  source:
+    type: openneuro
+    accession: ds003516
+  license: CC0
+- id: openneuro/ds003517
+  source:
+    type: openneuro
+    accession: ds003517
+  license: CC0
+- id: openneuro/ds003518
+  source:
+    type: openneuro
+    accession: ds003518
+  license: CC0
+- id: openneuro/ds003519
+  source:
+    type: openneuro
+    accession: ds003519
+  license: CC0
+- id: openneuro/ds003522
+  source:
+    type: openneuro
+    accession: ds003522
+  license: CC0
+- id: openneuro/ds003523
+  source:
+    type: openneuro
+    accession: ds003523
+  license: CC0
+- id: openneuro/ds003555
+  source:
+    type: openneuro
+    accession: ds003555
+  license: CC0
+- id: openneuro/ds003568
+  source:
+    type: openneuro
+    accession: ds003568
+  license: CC0
+- id: openneuro/ds003570
+  source:
+    type: openneuro
+    accession: ds003570
+  license: CC0
+- id: openneuro/ds003574
+  source:
+    type: openneuro
+    accession: ds003574
+  license: CC0
+- id: openneuro/ds003602
+  source:
+    type: openneuro
+    accession: ds003602
+  license: CC0
+- id: openneuro/ds003620
+  source:
+    type: openneuro
+    accession: ds003620
+  license: CC0
+- id: openneuro/ds003626
+  source:
+    type: openneuro
+    accession: ds003626
+  license: CC0
+- id: openneuro/ds003633
+  source:
+    type: openneuro
+    accession: ds003633
+  license: CC0
+- id: openneuro/ds003638
+  source:
+    type: openneuro
+    accession: ds003638
+  license: CC0
+- id: openneuro/ds003645
+  source:
+    type: openneuro
+    accession: ds003645
+  license: CC0
+- id: openneuro/ds003655
+  source:
+    type: openneuro
+    accession: ds003655
+  license: CC0
+- id: openneuro/ds003670
+  source:
+    type: openneuro
+    accession: ds003670
+  license: CC0
+- id: openneuro/ds003682
+  source:
+    type: openneuro
+    accession: ds003682
+  license: CC0
+- id: openneuro/ds003688
+  source:
+    type: openneuro
+    accession: ds003688
+  license: CC0
+- id: openneuro/ds003690
+  source:
+    type: openneuro
+    accession: ds003690
+  license: CC0
+- id: openneuro/ds003694
+  source:
+    type: openneuro
+    accession: ds003694
+  license: CC0
+- id: openneuro/ds003702
+  source:
+    type: openneuro
+    accession: ds003702
+  license: CC0
+- id: openneuro/ds003703
+  source:
+    type: openneuro
+    accession: ds003703
+  license: CC0
+- id: openneuro/ds003708
+  source:
+    type: openneuro
+    accession: ds003708
+  license: CC0
+- id: openneuro/ds003710
+  source:
+    type: openneuro
+    accession: ds003710
+  license: CC0
+- id: openneuro/ds003739
+  source:
+    type: openneuro
+    accession: ds003739
+  license: CC0
+- id: openneuro/ds003751
+  source:
+    type: openneuro
+    accession: ds003751
+  license: CC0
+- id: openneuro/ds003753
+  source:
+    type: openneuro
+    accession: ds003753
+  license: CC0
+- id: openneuro/ds003766
+  source:
+    type: openneuro
+    accession: ds003766
+  license: CC0
+- id: openneuro/ds003768
+  source:
+    type: openneuro
+    accession: ds003768
+  license: CC0
+- id: openneuro/ds003774
+  source:
+    type: openneuro
+    accession: ds003774
+  license: CC0
+- id: openneuro/ds003775
+  source:
+    type: openneuro
+    accession: ds003775
+  license: CC0
+- id: openneuro/ds003800
+  source:
+    type: openneuro
+    accession: ds003800
+  license: CC0
+- id: openneuro/ds003801
+  source:
+    type: openneuro
+    accession: ds003801
+  license: CC0
+- id: openneuro/ds003805
+  source:
+    type: openneuro
+    accession: ds003805
+  license: CC0
+- id: openneuro/ds003810
+  source:
+    type: openneuro
+    accession: ds003810
+  license: CC0
+- id: openneuro/ds003816
+  source:
+    type: openneuro
+    accession: ds003816
+  license: CC0
+- id: openneuro/ds003822
+  source:
+    type: openneuro
+    accession: ds003822
+  license: CC0
+- id: openneuro/ds003825
+  source:
+    type: openneuro
+    accession: ds003825
+  license: CC0
+- id: openneuro/ds003838
+  source:
+    type: openneuro
+    accession: ds003838
+  license: CC0
+- id: openneuro/ds003844
+  source:
+    type: openneuro
+    accession: ds003844
+  license: CC0
+- id: openneuro/ds003846
+  source:
+    type: openneuro
+    accession: ds003846
+  license: CC0
+- id: openneuro/ds003848
+  source:
+    type: openneuro
+    accession: ds003848
+  license: CC0
+- id: openneuro/ds003876
+  source:
+    type: openneuro
+    accession: ds003876
+  license: CC0
+- id: openneuro/ds003885
+  source:
+    type: openneuro
+    accession: ds003885
+  license: CC0
+- id: openneuro/ds003887
+  source:
+    type: openneuro
+    accession: ds003887
+  license: CC0
+- id: openneuro/ds003922
+  source:
+    type: openneuro
+    accession: ds003922
+  license: CC0
+- id: openneuro/ds003944
+  source:
+    type: openneuro
+    accession: ds003944
+  license: CC0
+- id: openneuro/ds003947
+  source:
+    type: openneuro
+    accession: ds003947
+  license: CC0
+- id: openneuro/ds003969
+  source:
+    type: openneuro
+    accession: ds003969
+  license: CC0
+- id: openneuro/ds003987
+  source:
+    type: openneuro
+    accession: ds003987
+  license: CC0
+- id: openneuro/ds004000
+  source:
+    type: openneuro
+    accession: ds004000
+  license: CC0
+- id: openneuro/ds004010
+  source:
+    type: openneuro
+    accession: ds004010
+  license: CC0
+- id: openneuro/ds004011
+  source:
+    type: openneuro
+    accession: ds004011
+  license: CC0
+- id: openneuro/ds004012
+  source:
+    type: openneuro
+    accession: ds004012
+  license: CC0
+- id: openneuro/ds004015
+  source:
+    type: openneuro
+    accession: ds004015
+  license: CC0
+- id: openneuro/ds004017
+  source:
+    type: openneuro
+    accession: ds004017
+  license: CC0
+- id: openneuro/ds004018
+  source:
+    type: openneuro
+    accession: ds004018
+  license: CC0
+- id: openneuro/ds004019
+  source:
+    type: openneuro
+    accession: ds004019
+  license: CC0
+- id: openneuro/ds004022
+  source:
+    type: openneuro
+    accession: ds004022
+  license: CC0
+- id: openneuro/ds004024
+  source:
+    type: openneuro
+    accession: ds004024
+  license: CC0
+- id: openneuro/ds004033
+  source:
+    type: openneuro
+    accession: ds004033
+  license: CC0
+- id: openneuro/ds004040
+  source:
+    type: openneuro
+    accession: ds004040
+  license: CC0
+- id: openneuro/ds004043
+  source:
+    type: openneuro
+    accession: ds004043
+  license: CC0
+- id: openneuro/ds004067
+  source:
+    type: openneuro
+    accession: ds004067
+  license: CC0
+- id: openneuro/ds004075
+  source:
+    type: openneuro
+    accession: ds004075
+  license: CC0
+- id: openneuro/ds004078
+  source:
+    type: openneuro
+    accession: ds004078
+  license: CC0
+- id: openneuro/ds004080
+  source:
+    type: openneuro
+    accession: ds004080
+  license: CC0
+- id: openneuro/ds004100
+  source:
+    type: openneuro
+    accession: ds004100
+  license: CC0
+- id: openneuro/ds004105
+  source:
+    type: openneuro
+    accession: ds004105
+  license: CC0
+- id: openneuro/ds004106
+  source:
+    type: openneuro
+    accession: ds004106
+  license: CC0
+- id: openneuro/ds004107
+  source:
+    type: openneuro
+    accession: ds004107
+  license: CC0
+- id: openneuro/ds004117
+  source:
+    type: openneuro
+    accession: ds004117
+  license: CC0
+- id: openneuro/ds004118
+  source:
+    type: openneuro
+    accession: ds004118
+  license: CC0
+- id: openneuro/ds004119
+  source:
+    type: openneuro
+    accession: ds004119
+  license: CC0
+- id: openneuro/ds004120
+  source:
+    type: openneuro
+    accession: ds004120
+  license: CC0
+- id: openneuro/ds004121
+  source:
+    type: openneuro
+    accession: ds004121
+  license: CC0
+- id: openneuro/ds004122
+  source:
+    type: openneuro
+    accession: ds004122
+  license: CC0
+- id: openneuro/ds004123
+  source:
+    type: openneuro
+    accession: ds004123
+  license: CC0
+- id: openneuro/ds004127
+  source:
+    type: openneuro
+    accession: ds004127
+  license: CC0
+- id: openneuro/ds004147
+  source:
+    type: openneuro
+    accession: ds004147
+  license: CC0
+- id: openneuro/ds004148
+  source:
+    type: openneuro
+    accession: ds004148
+  license: CC0
+- id: openneuro/ds004151
+  source:
+    type: openneuro
+    accession: ds004151
+  license: CC0
+- id: openneuro/ds004152
+  source:
+    type: openneuro
+    accession: ds004152
+  license: CC0
+- id: openneuro/ds004166
+  source:
+    type: openneuro
+    accession: ds004166
+  license: CC0
+- id: openneuro/ds004194
+  source:
+    type: openneuro
+    accession: ds004194
+  license: CC0
+- id: openneuro/ds004196
+  source:
+    type: openneuro
+    accession: ds004196
+  license: CC0
+- id: openneuro/ds004200
+  source:
+    type: openneuro
+    accession: ds004200
+  license: CC0
+- id: openneuro/ds004212
+  source:
+    type: openneuro
+    accession: ds004212
+  license: CC0
+- id: openneuro/ds004229
+  source:
+    type: openneuro
+    accession: ds004229
+  license: CC0
+- id: openneuro/ds004252
+  source:
+    type: openneuro
+    accession: ds004252
+  license: CC0
+- id: openneuro/ds004256
+  source:
+    type: openneuro
+    accession: ds004256
+  license: CC0
+- id: openneuro/ds004262
+  source:
+    type: openneuro
+    accession: ds004262
+  license: CC0
+- id: openneuro/ds004264
+  source:
+    type: openneuro
+    accession: ds004264
+  license: CC0
+- id: openneuro/ds004276
+  source:
+    type: openneuro
+    accession: ds004276
+  license: CC0
+- id: openneuro/ds004278
+  source:
+    type: openneuro
+    accession: ds004278
+  license: CC0
+- id: openneuro/ds004279
+  source:
+    type: openneuro
+    accession: ds004279
+  license: CC0
+- id: openneuro/ds004284
+  source:
+    type: openneuro
+    accession: ds004284
+  license: CC0
+- id: openneuro/ds004295
+  source:
+    type: openneuro
+    accession: ds004295
+  license: CC0
+- id: openneuro/ds004306
+  source:
+    type: openneuro
+    accession: ds004306
+  license: CC0
+- id: openneuro/ds004315
+  source:
+    type: openneuro
+    accession: ds004315
+  license: CC0
+- id: openneuro/ds004317
+  source:
+    type: openneuro
+    accession: ds004317
+  license: CC0
+- id: openneuro/ds004324
+  source:
+    type: openneuro
+    accession: ds004324
+  license: CC0
+- id: openneuro/ds004330
+  source:
+    type: openneuro
+    accession: ds004330
+  license: CC0
+- id: openneuro/ds004346
+  source:
+    type: openneuro
+    accession: ds004346
+  license: CC0
+- id: openneuro/ds004347
+  source:
+    type: openneuro
+    accession: ds004347
+  license: CC0
+- id: openneuro/ds004348
+  source:
+    type: openneuro
+    accession: ds004348
+  license: CC0
+- id: openneuro/ds004350
+  source:
+    type: openneuro
+    accession: ds004350
+  license: CC0
+- id: openneuro/ds004356
+  source:
+    type: openneuro
+    accession: ds004356
+  license: CC0
+- id: openneuro/ds004357
+  source:
+    type: openneuro
+    accession: ds004357
+  license: CC0
+- id: openneuro/ds004362
+  source:
+    type: openneuro
+    accession: ds004362
+  license: CC0
+- id: openneuro/ds004367
+  source:
+    type: openneuro
+    accession: ds004367
+  license: CC0
+- id: openneuro/ds004368
+  source:
+    type: openneuro
+    accession: ds004368
+  license: CC0
+- id: openneuro/ds004369
+  source:
+    type: openneuro
+    accession: ds004369
+  license: CC0
+- id: openneuro/ds004370
+  source:
+    type: openneuro
+    accession: ds004370
+  license: CC0
+- id: openneuro/ds004381
+  source:
+    type: openneuro
+    accession: ds004381
+  license: CC0
+- id: openneuro/ds004388
+  source:
+    type: openneuro
+    accession: ds004388
+  license: CC0
+- id: openneuro/ds004389
+  source:
+    type: openneuro
+    accession: ds004389
+  license: CC0
+- id: openneuro/ds004395
+  source:
+    type: openneuro
+    accession: ds004395
+  license: CC0
+- id: openneuro/ds004398
+  source:
+    type: openneuro
+    accession: ds004398
+  license: CC0
+- id: openneuro/ds004408
+  source:
+    type: openneuro
+    accession: ds004408
+  license: CC0
+- id: openneuro/ds004444
+  source:
+    type: openneuro
+    accession: ds004444
+  license: CC0
+- id: openneuro/ds004446
+  source:
+    type: openneuro
+    accession: ds004446
+  license: CC0
+- id: openneuro/ds004447
+  source:
+    type: openneuro
+    accession: ds004447
+  license: CC0
+- id: openneuro/ds004448
+  source:
+    type: openneuro
+    accession: ds004448
+  license: CC0
+- id: openneuro/ds004457
+  source:
+    type: openneuro
+    accession: ds004457
+  license: CC0
+- id: openneuro/ds004460
+  source:
+    type: openneuro
+    accession: ds004460
+  license: CC0
+- id: openneuro/ds004473
+  source:
+    type: openneuro
+    accession: ds004473
+  license: CC0
+- id: openneuro/ds004475
+  source:
+    type: openneuro
+    accession: ds004475
+  license: CC0
+- id: openneuro/ds004477
+  source:
+    type: openneuro
+    accession: ds004477
+  license: CC0
+- id: openneuro/ds004483
+  source:
+    type: openneuro
+    accession: ds004483
+  license: CC0
+- id: openneuro/ds004502
+  source:
+    type: openneuro
+    accession: ds004502
+  license: CC0
+- id: openneuro/ds004504
+  source:
+    type: openneuro
+    accession: ds004504
+  license: CC0
+- id: openneuro/ds004505
+  source:
+    type: openneuro
+    accession: ds004505
+  license: CC0
+- id: openneuro/ds004511
+  source:
+    type: openneuro
+    accession: ds004511
+  license: CC0
+- id: openneuro/ds004514
+  source:
+    type: openneuro
+    accession: ds004514
+  license: CC0
+- id: openneuro/ds004515
+  source:
+    type: openneuro
+    accession: ds004515
+  license: CC0
+- id: openneuro/ds004517
+  source:
+    type: openneuro
+    accession: ds004517
+  license: CC0
+- id: openneuro/ds004519
+  source:
+    type: openneuro
+    accession: ds004519
+  license: CC0
+- id: openneuro/ds004520
+  source:
+    type: openneuro
+    accession: ds004520
+  license: CC0
+- id: openneuro/ds004521
+  source:
+    type: openneuro
+    accession: ds004521
+  license: CC0
+- id: openneuro/ds004532
+  source:
+    type: openneuro
+    accession: ds004532
+  license: CC0
+- id: openneuro/ds004541
+  source:
+    type: openneuro
+    accession: ds004541
+  license: CC0
+- id: openneuro/ds004551
+  source:
+    type: openneuro
+    accession: ds004551
+  license: CC0
+- id: openneuro/ds004554
+  source:
+    type: openneuro
+    accession: ds004554
+  license: CC0
+- id: openneuro/ds004561
+  source:
+    type: openneuro
+    accession: ds004561
+  license: CC0
+- id: openneuro/ds004563
+  source:
+    type: openneuro
+    accession: ds004563
+  license: CC0
+- id: openneuro/ds004572
+  source:
+    type: openneuro
+    accession: ds004572
+  license: CC0
+- id: openneuro/ds004574
+  source:
+    type: openneuro
+    accession: ds004574
+  license: CC0
+- id: openneuro/ds004577
+  source:
+    type: openneuro
+    accession: ds004577
+  license: CC0
+- id: openneuro/ds004579
+  source:
+    type: openneuro
+    accession: ds004579
+  license: CC0
+- id: openneuro/ds004580
+  source:
+    type: openneuro
+    accession: ds004580
+  license: CC0
+- id: openneuro/ds004582
+  source:
+    type: openneuro
+    accession: ds004582
+  license: CC0
+- id: openneuro/ds004584
+  source:
+    type: openneuro
+    accession: ds004584
+  license: CC0
+- id: openneuro/ds004587
+  source:
+    type: openneuro
+    accession: ds004587
+  license: CC0
+- id: openneuro/ds004588
+  source:
+    type: openneuro
+    accession: ds004588
+  license: CC0
+- id: openneuro/ds004595
+  source:
+    type: openneuro
+    accession: ds004595
+  license: CC0
+- id: openneuro/ds004598
+  source:
+    type: openneuro
+    accession: ds004598
+  license: CC0
+- id: openneuro/ds004602
+  source:
+    type: openneuro
+    accession: ds004602
+  license: CC0
+- id: openneuro/ds004603
+  source:
+    type: openneuro
+    accession: ds004603
+  license: CC0
+- id: openneuro/ds004621
+  source:
+    type: openneuro
+    accession: ds004621
+  license: CC0
+- id: openneuro/ds004624
+  source:
+    type: openneuro
+    accession: ds004624
+  license: CC0
+- id: openneuro/ds004625
+  source:
+    type: openneuro
+    accession: ds004625
+  license: CC0
+- id: openneuro/ds004626
+  source:
+    type: openneuro
+    accession: ds004626
+  license: CC0
+- id: openneuro/ds004635
+  source:
+    type: openneuro
+    accession: ds004635
+  license: CC0
+- id: openneuro/ds004642
+  source:
+    type: openneuro
+    accession: ds004642
+  license: CC0
+- id: openneuro/ds004657
+  source:
+    type: openneuro
+    accession: ds004657
+  license: CC0
+- id: openneuro/ds004660
+  source:
+    type: openneuro
+    accession: ds004660
+  license: CC0
+- id: openneuro/ds004661
+  source:
+    type: openneuro
+    accession: ds004661
+  license: CC0
+- id: openneuro/ds004696
+  source:
+    type: openneuro
+    accession: ds004696
+  license: CC0
+- id: openneuro/ds004703
+  source:
+    type: openneuro
+    accession: ds004703
+  license: CC0
+- id: openneuro/ds004706
+  source:
+    type: openneuro
+    accession: ds004706
+  license: CC0
+- id: openneuro/ds004718
+  source:
+    type: openneuro
+    accession: ds004718
+  license: CC0
+- id: openneuro/ds004738
+  source:
+    type: openneuro
+    accession: ds004738
+  license: CC0
+- id: openneuro/ds004745
+  source:
+    type: openneuro
+    accession: ds004745
+  license: CC0
+- id: openneuro/ds004752
+  source:
+    type: openneuro
+    accession: ds004752
+  license: CC0
+- id: openneuro/ds004770
+  source:
+    type: openneuro
+    accession: ds004770
+  license: CC0
+- id: openneuro/ds004771
+  source:
+    type: openneuro
+    accession: ds004771
+  license: CC0
+- id: openneuro/ds004774
+  source:
+    type: openneuro
+    accession: ds004774
+  license: CC0
+- id: openneuro/ds004784
+  source:
+    type: openneuro
+    accession: ds004784
+  license: CC0
+- id: openneuro/ds004785
+  source:
+    type: openneuro
+    accession: ds004785
+  license: CC0
+- id: openneuro/ds004789
+  source:
+    type: openneuro
+    accession: ds004789
+  license: CC0
+- id: openneuro/ds004796
+  source:
+    type: openneuro
+    accession: ds004796
+  license: CC0
+- id: openneuro/ds004802
+  source:
+    type: openneuro
+    accession: ds004802
+  license: CC0
+- id: openneuro/ds004809
+  source:
+    type: openneuro
+    accession: ds004809
+  license: CC0
+- id: openneuro/ds004816
+  source:
+    type: openneuro
+    accession: ds004816
+  license: CC0
+- id: openneuro/ds004817
+  source:
+    type: openneuro
+    accession: ds004817
+  license: CC0
+- id: openneuro/ds004819
+  source:
+    type: openneuro
+    accession: ds004819
+  license: CC0
+- id: openneuro/ds004830
+  source:
+    type: openneuro
+    accession: ds004830
+  license: CC0
+- id: openneuro/ds004837
+  source:
+    type: openneuro
+    accession: ds004837
+  license: CC0
+- id: openneuro/ds004840
+  source:
+    type: openneuro
+    accession: ds004840
+  license: CC0
+- id: openneuro/ds004841
+  source:
+    type: openneuro
+    accession: ds004841
+  license: CC0
+- id: openneuro/ds004842
+  source:
+    type: openneuro
+    accession: ds004842
+  license: CC0
+- id: openneuro/ds004843
+  source:
+    type: openneuro
+    accession: ds004843
+  license: CC0
+- id: openneuro/ds004844
+  source:
+    type: openneuro
+    accession: ds004844
+  license: CC0
+- id: openneuro/ds004849
+  source:
+    type: openneuro
+    accession: ds004849
+  license: CC0
+- id: openneuro/ds004850
+  source:
+    type: openneuro
+    accession: ds004850
+  license: CC0
+- id: openneuro/ds004851
+  source:
+    type: openneuro
+    accession: ds004851
+  license: CC0
+- id: openneuro/ds004852
+  source:
+    type: openneuro
+    accession: ds004852
+  license: CC0
+- id: openneuro/ds004853
+  source:
+    type: openneuro
+    accession: ds004853
+  license: CC0
+- id: openneuro/ds004854
+  source:
+    type: openneuro
+    accession: ds004854
+  license: CC0
+- id: openneuro/ds004855
+  source:
+    type: openneuro
+    accession: ds004855
+  license: CC0
+- id: openneuro/ds004859
+  source:
+    type: openneuro
+    accession: ds004859
+  license: CC0
+- id: openneuro/ds004860
+  source:
+    type: openneuro
+    accession: ds004860
+  license: CC0
+- id: openneuro/ds004865
+  source:
+    type: openneuro
+    accession: ds004865
+  license: CC0
+- id: openneuro/ds004883
+  source:
+    type: openneuro
+    accession: ds004883
+  license: CC0
+- id: openneuro/ds004902
+  source:
+    type: openneuro
+    accession: ds004902
+  license: CC0
+- id: openneuro/ds004917
+  source:
+    type: openneuro
+    accession: ds004917
+  license: CC0
+- id: openneuro/ds004940
+  source:
+    type: openneuro
+    accession: ds004940
+  license: CC0
+- id: openneuro/ds004942
+  source:
+    type: openneuro
+    accession: ds004942
+  license: CC0
+- id: openneuro/ds004944
+  source:
+    type: openneuro
+    accession: ds004944
+  license: CC0
+- id: openneuro/ds004951
+  source:
+    type: openneuro
+    accession: ds004951
+  license: CC0
+- id: openneuro/ds004952
+  source:
+    type: openneuro
+    accession: ds004952
+  license: CC0
+- id: openneuro/ds004973
+  source:
+    type: openneuro
+    accession: ds004973
+  license: CC0
+- id: openneuro/ds004977
+  source:
+    type: openneuro
+    accession: ds004977
+  license: CC0
+- id: openneuro/ds004980
+  source:
+    type: openneuro
+    accession: ds004980
+  license: CC0
+- id: openneuro/ds004993
+  source:
+    type: openneuro
+    accession: ds004993
+  license: CC0
+- id: openneuro/ds004995
+  source:
+    type: openneuro
+    accession: ds004995
+  license: CC0
+- id: openneuro/ds004998
+  source:
+    type: openneuro
+    accession: ds004998
+  license: CC0
+- id: openneuro/ds005007
+  source:
+    type: openneuro
+    accession: ds005007
+  license: CC0
+- id: openneuro/ds005021
+  source:
+    type: openneuro
+    accession: ds005021
+  license: CC0
+- id: openneuro/ds005028
+  source:
+    type: openneuro
+    accession: ds005028
+  license: CC0
+- id: openneuro/ds005034
+  source:
+    type: openneuro
+    accession: ds005034
+  license: CC0
+- id: openneuro/ds005048
+  source:
+    type: openneuro
+    accession: ds005048
+  license: CC0
+- id: openneuro/ds005059
+  source:
+    type: openneuro
+    accession: ds005059
+  license: CC0
+- id: openneuro/ds005065
+  source:
+    type: openneuro
+    accession: ds005065
+  license: CC0
+- id: openneuro/ds005079
+  source:
+    type: openneuro
+    accession: ds005079
+  license: CC0
+- id: openneuro/ds005087
+  source:
+    type: openneuro
+    accession: ds005087
+  license: CC0
+- id: openneuro/ds005089
+  source:
+    type: openneuro
+    accession: ds005089
+  license: CC0
+- id: openneuro/ds005095
+  source:
+    type: openneuro
+    accession: ds005095
+  license: CC0
+- id: openneuro/ds005106
+  source:
+    type: openneuro
+    accession: ds005106
+  license: CC0
+- id: openneuro/ds005107
+  source:
+    type: openneuro
+    accession: ds005107
+  license: CC0
+- id: openneuro/ds005114
+  source:
+    type: openneuro
+    accession: ds005114
+  license: CC0
+- id: openneuro/ds005121
+  source:
+    type: openneuro
+    accession: ds005121
+  license: CC0
+- id: openneuro/ds005131
+  source:
+    type: openneuro
+    accession: ds005131
+  license: CC0
+- id: openneuro/ds005169
+  source:
+    type: openneuro
+    accession: ds005169
+  license: CC0
+- id: openneuro/ds005170
+  source:
+    type: openneuro
+    accession: ds005170
+  license: CC0
+- id: openneuro/ds005178
+  source:
+    type: openneuro
+    accession: ds005178
+  license: CC0
+- id: openneuro/ds005185
+  source:
+    type: openneuro
+    accession: ds005185
+  license: CC0
+- id: openneuro/ds005189
+  source:
+    type: openneuro
+    accession: ds005189
+  license: CC0
+- id: openneuro/ds005207
+  source:
+    type: openneuro
+    accession: ds005207
+  license: CC0
+- id: openneuro/ds005241
+  source:
+    type: openneuro
+    accession: ds005241
+  license: CC0
+- id: openneuro/ds005261
+  source:
+    type: openneuro
+    accession: ds005261
+  license: CC0
+- id: openneuro/ds005262
+  source:
+    type: openneuro
+    accession: ds005262
+  license: CC0
+- id: openneuro/ds005273
+  source:
+    type: openneuro
+    accession: ds005273
+  license: CC0
+- id: openneuro/ds005274
+  source:
+    type: openneuro
+    accession: ds005274
+  license: CC0
+- id: openneuro/ds005279
+  source:
+    type: openneuro
+    accession: ds005279
+  license: CC0
+- id: openneuro/ds005280
+  source:
+    type: openneuro
+    accession: ds005280
+  license: CC0
+- id: openneuro/ds005284
+  source:
+    type: openneuro
+    accession: ds005284
+  license: CC0
+- id: openneuro/ds005285
+  source:
+    type: openneuro
+    accession: ds005285
+  license: CC0
+- id: openneuro/ds005286
+  source:
+    type: openneuro
+    accession: ds005286
+  license: CC0
+- id: openneuro/ds005289
+  source:
+    type: openneuro
+    accession: ds005289
+  license: CC0
+- id: openneuro/ds005291
+  source:
+    type: openneuro
+    accession: ds005291
+  license: CC0
+- id: openneuro/ds005292
+  source:
+    type: openneuro
+    accession: ds005292
+  license: CC0
+- id: openneuro/ds005293
+  source:
+    type: openneuro
+    accession: ds005293
+  license: CC0
+- id: openneuro/ds005296
+  source:
+    type: openneuro
+    accession: ds005296
+  license: CC0
+- id: openneuro/ds005305
+  source:
+    type: openneuro
+    accession: ds005305
+  license: CC0
+- id: openneuro/ds005307
+  source:
+    type: openneuro
+    accession: ds005307
+  license: CC0
+- id: openneuro/ds005340
+  source:
+    type: openneuro
+    accession: ds005340
+  license: CC0
+- id: openneuro/ds005342
+  source:
+    type: openneuro
+    accession: ds005342
+  license: CC0
+- id: openneuro/ds005343
+  source:
+    type: openneuro
+    accession: ds005343
+  license: CC0
+- id: openneuro/ds005345
+  source:
+    type: openneuro
+    accession: ds005345
+  license: CC0
+- id: openneuro/ds005346
+  source:
+    type: openneuro
+    accession: ds005346
+  license: CC0
+- id: openneuro/ds005356
+  source:
+    type: openneuro
+    accession: ds005356
+  license: CC0
+- id: openneuro/ds005363
+  source:
+    type: openneuro
+    accession: ds005363
+  license: CC0
+- id: openneuro/ds005383
+  source:
+    type: openneuro
+    accession: ds005383
+  license: CC0
+- id: openneuro/ds005385
+  source:
+    type: openneuro
+    accession: ds005385
+  license: CC0
+- id: openneuro/ds005397
+  source:
+    type: openneuro
+    accession: ds005397
+  license: CC0
+- id: openneuro/ds005398
+  source:
+    type: openneuro
+    accession: ds005398
+  license: CC0
+- id: openneuro/ds005403
+  source:
+    type: openneuro
+    accession: ds005403
+  license: CC0
+- id: openneuro/ds005406
+  source:
+    type: openneuro
+    accession: ds005406
+  license: CC0
+- id: openneuro/ds005408
+  source:
+    type: openneuro
+    accession: ds005408
+  license: CC0
+- id: openneuro/ds005410
+  source:
+    type: openneuro
+    accession: ds005410
+  license: CC0
+- id: openneuro/ds005411
+  source:
+    type: openneuro
+    accession: ds005411
+  license: CC0
+- id: openneuro/ds005415
+  source:
+    type: openneuro
+    accession: ds005415
+  license: CC0
+- id: openneuro/ds005416
+  source:
+    type: openneuro
+    accession: ds005416
+  license: CC0
+- id: openneuro/ds005420
+  source:
+    type: openneuro
+    accession: ds005420
+  license: CC0
+- id: openneuro/ds005429
+  source:
+    type: openneuro
+    accession: ds005429
+  license: CC0
+- id: openneuro/ds005448
+  source:
+    type: openneuro
+    accession: ds005448
+  license: CC0
+- id: openneuro/ds005473
+  source:
+    type: openneuro
+    accession: ds005473
+  license: CC0
+- id: openneuro/ds005486
+  source:
+    type: openneuro
+    accession: ds005486
+  license: CC0
+- id: openneuro/ds005489
+  source:
+    type: openneuro
+    accession: ds005489
+  license: CC0
+- id: openneuro/ds005491
+  source:
+    type: openneuro
+    accession: ds005491
+  license: CC0
+- id: openneuro/ds005494
+  source:
+    type: openneuro
+    accession: ds005494
+  license: CC0
+- id: openneuro/ds005505
+  source:
+    type: openneuro
+    accession: ds005505
+  license: CC-BY-SA 4.0
+- id: openneuro/ds005506
+  source:
+    type: openneuro
+    accession: ds005506
+  license: CC-BY-SA 4.0
+- id: openneuro/ds005507
+  source:
+    type: openneuro
+    accession: ds005507
+  license: CC-BY-SA 4.0
+- id: openneuro/ds005508
+  source:
+    type: openneuro
+    accession: ds005508
+  license: CC-BY-SA 4.0
+- id: openneuro/ds005509
+  source:
+    type: openneuro
+    accession: ds005509
+  license: CC-BY-SA 4.0
+- id: openneuro/ds005510
+  source:
+    type: openneuro
+    accession: ds005510
+  license: CC-BY-SA 4.0
+- id: openneuro/ds005512
+  source:
+    type: openneuro
+    accession: ds005512
+  license: CC-BY-SA 4.0
+- id: openneuro/ds005514
+  source:
+    type: openneuro
+    accession: ds005514
+  license: CC-BY-SA 4.0
+- id: openneuro/ds005515
+  source:
+    type: openneuro
+    accession: ds005515
+  license: CC-BY-SA 4.0
+- id: openneuro/ds005516
+  source:
+    type: openneuro
+    accession: ds005516
+  license: CC-BY-SA 4.0
+- id: openneuro/ds005520
+  source:
+    type: openneuro
+    accession: ds005520
+  license: CC0
+- id: openneuro/ds005522
+  source:
+    type: openneuro
+    accession: ds005522
+  license: CC0
+- id: openneuro/ds005523
+  source:
+    type: openneuro
+    accession: ds005523
+  license: CC0
+- id: openneuro/ds005530
+  source:
+    type: openneuro
+    accession: ds005530
+  license: CC0
+- id: openneuro/ds005540
+  source:
+    type: openneuro
+    accession: ds005540
+  license: CC0
+- id: openneuro/ds005545
+  source:
+    type: openneuro
+    accession: ds005545
+  license: CC0
+- id: openneuro/ds005555
+  source:
+    type: openneuro
+    accession: ds005555
+  license: CC0
+- id: openneuro/ds005557
+  source:
+    type: openneuro
+    accession: ds005557
+  license: CC0
+- id: openneuro/ds005558
+  source:
+    type: openneuro
+    accession: ds005558
+  license: CC0
+- id: openneuro/ds005565
+  source:
+    type: openneuro
+    accession: ds005565
+  license: CC0
+- id: openneuro/ds005571
+  source:
+    type: openneuro
+    accession: ds005571
+  license: CC0
+- id: openneuro/ds005574
+  source:
+    type: openneuro
+    accession: ds005574
+  license: CC0
+- id: openneuro/ds005586
+  source:
+    type: openneuro
+    accession: ds005586
+  license: CC0
+- id: openneuro/ds005594
+  source:
+    type: openneuro
+    accession: ds005594
+  license: CC0
+- id: openneuro/ds005620
+  source:
+    type: openneuro
+    accession: ds005620
+  license: CC0
+- id: openneuro/ds005624
+  source:
+    type: openneuro
+    accession: ds005624
+  license: CC0
+- id: openneuro/ds005628
+  source:
+    type: openneuro
+    accession: ds005628
+  license: CC0
+- id: openneuro/ds005642
+  source:
+    type: openneuro
+    accession: ds005642
+  license: CC0
+- id: openneuro/ds005648
+  source:
+    type: openneuro
+    accession: ds005648
+  license: CC0
+- id: openneuro/ds005662
+  source:
+    type: openneuro
+    accession: ds005662
+  license: CC0
+- id: openneuro/ds005670
+  source:
+    type: openneuro
+    accession: ds005670
+  license: CC0
+- id: openneuro/ds005672
+  source:
+    type: openneuro
+    accession: ds005672
+  license: CC0
+- id: openneuro/ds005688
+  source:
+    type: openneuro
+    accession: ds005688
+  license: CC0
+- id: openneuro/ds005691
+  source:
+    type: openneuro
+    accession: ds005691
+  license: CC0
+- id: openneuro/ds005692
+  source:
+    type: openneuro
+    accession: ds005692
+  license: CC0
+- id: openneuro/ds005697
+  source:
+    type: openneuro
+    accession: ds005697
+  license: CC0
+- id: openneuro/ds005752
+  source:
+    type: openneuro
+    accession: ds005752
+  license: CC0
+- id: openneuro/ds005776
+  source:
+    type: openneuro
+    accession: ds005776
+  license: CC0
+- id: openneuro/ds005777
+  source:
+    type: openneuro
+    accession: ds005777
+  license: CC0
+- id: openneuro/ds005779
+  source:
+    type: openneuro
+    accession: ds005779
+  license: CC0
+- id: openneuro/ds005795
+  source:
+    type: openneuro
+    accession: ds005795
+  license: CC0
+- id: openneuro/ds005810
+  source:
+    type: openneuro
+    accession: ds005810
+  license: CC0
+- id: openneuro/ds005811
+  source:
+    type: openneuro
+    accession: ds005811
+  license: CC0
+- id: openneuro/ds005815
+  source:
+    type: openneuro
+    accession: ds005815
+  license: CC0
+- id: openneuro/ds005841
+  source:
+    type: openneuro
+    accession: ds005841
+  license: CC0
+- id: openneuro/ds005857
+  source:
+    type: openneuro
+    accession: ds005857
+  license: CC0
+- id: openneuro/ds005863
+  source:
+    type: openneuro
+    accession: ds005863
+  license: CC0
+- id: openneuro/ds005866
+  source:
+    type: openneuro
+    accession: ds005866
+  license: CC0
+- id: openneuro/ds005868
+  source:
+    type: openneuro
+    accession: ds005868
+  license: CC0
+- id: openneuro/ds005872
+  source:
+    type: openneuro
+    accession: ds005872
+  license: CC0
+- id: openneuro/ds005873
+  source:
+    type: openneuro
+    accession: ds005873
+  license: CC0
+- id: openneuro/ds005876
+  source:
+    type: openneuro
+    accession: ds005876
+  license: CC0
+- id: openneuro/ds005907
+  source:
+    type: openneuro
+    accession: ds005907
+  license: CC0
+- id: openneuro/ds005929
+  source:
+    type: openneuro
+    accession: ds005929
+  license: CC0
+- id: openneuro/ds005931
+  source:
+    type: openneuro
+    accession: ds005931
+  license: CC0
+- id: openneuro/ds005932
+  source:
+    type: openneuro
+    accession: ds005932
+  license: CC0
+- id: openneuro/ds005935
+  source:
+    type: openneuro
+    accession: ds005935
+  license: CC0
+- id: openneuro/ds005946
+  source:
+    type: openneuro
+    accession: ds005946
+  license: CC0
+- id: openneuro/ds005953
+  source:
+    type: openneuro
+    accession: ds005953
+  license: CC0
+- id: openneuro/ds005960
+  source:
+    type: openneuro
+    accession: ds005960
+  license: CC0
+- id: openneuro/ds005963
+  source:
+    type: openneuro
+    accession: ds005963
+  license: CC0
+- id: openneuro/ds005964
+  source:
+    type: openneuro
+    accession: ds005964
+  license: CC0
+- id: openneuro/ds006012
+  source:
+    type: openneuro
+    accession: ds006012
+  license: CC0
+- id: openneuro/ds006018
+  source:
+    type: openneuro
+    accession: ds006018
+  license: CC0
+- id: openneuro/ds006033
+  source:
+    type: openneuro
+    accession: ds006033
+  license: CC0
+- id: openneuro/ds006035
+  source:
+    type: openneuro
+    accession: ds006035
+  license: CC0
+- id: openneuro/ds006036
+  source:
+    type: openneuro
+    accession: ds006036
+  license: CC0
+- id: openneuro/ds006040
+  source:
+    type: openneuro
+    accession: ds006040
+  license: CC0
+- id: openneuro/ds006065
+  source:
+    type: openneuro
+    accession: ds006065
+  license: CC0
+- id: openneuro/ds006095
+  source:
+    type: openneuro
+    accession: ds006095
+  license: CC0
+- id: openneuro/ds006104
+  source:
+    type: openneuro
+    accession: ds006104
+  license: CC0
+- id: openneuro/ds006107
+  source:
+    type: openneuro
+    accession: ds006107
+  license: CC0
+- id: openneuro/ds006126
+  source:
+    type: openneuro
+    accession: ds006126
+  license: CC0
+- id: openneuro/ds006136
+  source:
+    type: openneuro
+    accession: ds006136
+  license: CC0
+- id: openneuro/ds006142
+  source:
+    type: openneuro
+    accession: ds006142
+  license: CC0
+- id: openneuro/ds006159
+  source:
+    type: openneuro
+    accession: ds006159
+  license: CC0
+- id: openneuro/ds006171
+  source:
+    type: openneuro
+    accession: ds006171
+  license: CC0
+- id: openneuro/ds006222
+  source:
+    type: openneuro
+    accession: ds006222
+  license: CC0
+- id: openneuro/ds006233
+  source:
+    type: openneuro
+    accession: ds006233
+  license: CC0
+- id: openneuro/ds006234
+  source:
+    type: openneuro
+    accession: ds006234
+  license: CC0
+- id: openneuro/ds006260
+  source:
+    type: openneuro
+    accession: ds006260
+  license: CC0
+- id: openneuro/ds006269
+  source:
+    type: openneuro
+    accession: ds006269
+  license: CC0
+- id: openneuro/ds006317
+  source:
+    type: openneuro
+    accession: ds006317
+  license: CC0
+- id: openneuro/ds006334
+  source:
+    type: openneuro
+    accession: ds006334
+  license: CC0
+- id: openneuro/ds006366
+  source:
+    type: openneuro
+    accession: ds006366
+  license: CC0
+- id: openneuro/ds006367
+  source:
+    type: openneuro
+    accession: ds006367
+  license: CC0
+- id: openneuro/ds006370
+  source:
+    type: openneuro
+    accession: ds006370
+  license: CC0
+- id: openneuro/ds006374
+  source:
+    type: openneuro
+    accession: ds006374
+  license: CC0
+- id: openneuro/ds006377
+  source:
+    type: openneuro
+    accession: ds006377
+  license: CC0
+- id: openneuro/ds006386
+  source:
+    type: openneuro
+    accession: ds006386
+  license: CC0
+- id: openneuro/ds006392
+  source:
+    type: openneuro
+    accession: ds006392
+  license: CC0
+- id: openneuro/ds006394
+  source:
+    type: openneuro
+    accession: ds006394
+  license: CC0
+- id: openneuro/ds006434
+  source:
+    type: openneuro
+    accession: ds006434
+  license: CC0
+- id: openneuro/ds006437
+  source:
+    type: openneuro
+    accession: ds006437
+  license: CC0
+- id: openneuro/ds006446
+  source:
+    type: openneuro
+    accession: ds006446
+  license: CC0
+- id: openneuro/ds006459
+  source:
+    type: openneuro
+    accession: ds006459
+  license: CC0
+- id: openneuro/ds006460
+  source:
+    type: openneuro
+    accession: ds006460
+  license: CC0
+- id: openneuro/ds006465
+  source:
+    type: openneuro
+    accession: ds006465
+  license: CC0
+- id: openneuro/ds006466
+  source:
+    type: openneuro
+    accession: ds006466
+  license: CC0
+- id: openneuro/ds006468
+  source:
+    type: openneuro
+    accession: ds006468
+  license: CC0
+- id: openneuro/ds006480
+  source:
+    type: openneuro
+    accession: ds006480
+  license: CC0
+- id: openneuro/ds006502
+  source:
+    type: openneuro
+    accession: ds006502
+  license: CC0
+- id: openneuro/ds006519
+  source:
+    type: openneuro
+    accession: ds006519
+  license: CC0
+- id: openneuro/ds006525
+  source:
+    type: openneuro
+    accession: ds006525
+  license: CC0
+- id: openneuro/ds006545
+  source:
+    type: openneuro
+    accession: ds006545
+  license: CC0
+- id: openneuro/ds006547
+  source:
+    type: openneuro
+    accession: ds006547
+  license: CC0
+- id: openneuro/ds006554
+  source:
+    type: openneuro
+    accession: ds006554
+  license: CC0
+- id: openneuro/ds006563
+  source:
+    type: openneuro
+    accession: ds006563
+  license: CC0
+- id: openneuro/ds006576
+  source:
+    type: openneuro
+    accession: ds006576
+  license: CC0
+- id: openneuro/ds006593
+  source:
+    type: openneuro
+    accession: ds006593
+  license: CC0
+- id: openneuro/ds006629
+  source:
+    type: openneuro
+    accession: ds006629
+  license: CC0
+- id: openneuro/ds006647
+  source:
+    type: openneuro
+    accession: ds006647
+  license: CC0
+- id: openneuro/ds006648
+  source:
+    type: openneuro
+    accession: ds006648
+  license: CC0
+- id: openneuro/ds006673
+  source:
+    type: openneuro
+    accession: ds006673
+  license: CC0
+- id: openneuro/ds006695
+  source:
+    type: openneuro
+    accession: ds006695
+  license: CC0
+- id: openneuro/ds006720
+  source:
+    type: openneuro
+    accession: ds006720
+  license: CC0
+- id: openneuro/ds006735
+  source:
+    type: openneuro
+    accession: ds006735
+  license: CC0
+- id: openneuro/ds006761
+  source:
+    type: openneuro
+    accession: ds006761
+  license: CC0
+- id: openneuro/ds006768
+  source:
+    type: openneuro
+    accession: ds006768
+  license: CC0
+- id: openneuro/ds006801
+  source:
+    type: openneuro
+    accession: ds006801
+  license: CC0
+- id: openneuro/ds006802
+  source:
+    type: openneuro
+    accession: ds006802
+  license: CC0
+- id: openneuro/ds006803
+  source:
+    type: openneuro
+    accession: ds006803
+  license: CC0
+- id: openneuro/ds006817
+  source:
+    type: openneuro
+    accession: ds006817
+  license: CC0
+- id: openneuro/ds006839
+  source:
+    type: openneuro
+    accession: ds006839
+  license: CC0
+- id: openneuro/ds006840
+  source:
+    type: openneuro
+    accession: ds006840
+  license: CC0
+- id: openneuro/ds006848
+  source:
+    type: openneuro
+    accession: ds006848
+  license: CC0
+- id: openneuro/ds006850
+  source:
+    type: openneuro
+    accession: ds006850
+  license: CC0
+- id: openneuro/ds006861
+  source:
+    type: openneuro
+    accession: ds006861
+  license: CC0
+- id: openneuro/ds006866
+  source:
+    type: openneuro
+    accession: ds006866
+  license: CC0
+- id: openneuro/ds006890
+  source:
+    type: openneuro
+    accession: ds006890
+  license: CC0
+- id: openneuro/ds006897
+  source:
+    type: openneuro
+    accession: ds006897
+  license: CC0
+- id: openneuro/ds006902
+  source:
+    type: openneuro
+    accession: ds006902
+  license: CC0
+- id: openneuro/ds006903
+  source:
+    type: openneuro
+    accession: ds006903
+  license: CC0
+- id: openneuro/ds006910
+  source:
+    type: openneuro
+    accession: ds006910
+  license: CC0
+- id: openneuro/ds006914
+  source:
+    type: openneuro
+    accession: ds006914
+  license: CC0
+- id: openneuro/ds006921
+  source:
+    type: openneuro
+    accession: ds006921
+  license: CC0
+- id: openneuro/ds006923
+  source:
+    type: openneuro
+    accession: ds006923
+  license: CC0
+- id: openneuro/ds006945
+  source:
+    type: openneuro
+    accession: ds006945
+  license: CC0
+- id: openneuro/ds006963
+  source:
+    type: openneuro
+    accession: ds006963
+  license: CC0
+- id: openneuro/ds006979
+  source:
+    type: openneuro
+    accession: ds006979
+  license: CC0
+- id: openneuro/ds007006
+  source:
+    type: openneuro
+    accession: ds007006
+  license: CC0
+- id: openneuro/ds007020
+  source:
+    type: openneuro
+    accession: ds007020
+  license: CC0
+- id: openneuro/ds007028
+  source:
+    type: openneuro
+    accession: ds007028
+  license: CC0
+- id: openneuro/ds007052
+  source:
+    type: openneuro
+    accession: ds007052
+  license: CC0
+- id: openneuro/ds007056
+  source:
+    type: openneuro
+    accession: ds007056
+  license: CC0
+- id: openneuro/ds007069
+  source:
+    type: openneuro
+    accession: ds007069
+  license: CC0
+- id: openneuro/ds007081
+  source:
+    type: openneuro
+    accession: ds007081
+  license: CC0
+- id: openneuro/ds007095
+  source:
+    type: openneuro
+    accession: ds007095
+  license: CC0
+- id: openneuro/ds007096
+  source:
+    type: openneuro
+    accession: ds007096
+  license: CC0
+- id: openneuro/ds007118
+  source:
+    type: openneuro
+    accession: ds007118
+  license: CC0
+- id: openneuro/ds007119
+  source:
+    type: openneuro
+    accession: ds007119
+  license: CC0
+- id: openneuro/ds007120
+  source:
+    type: openneuro
+    accession: ds007120
+  license: CC0
+- id: openneuro/ds007137
+  source:
+    type: openneuro
+    accession: ds007137
+  license: CC0
+- id: openneuro/ds007139
+  source:
+    type: openneuro
+    accession: ds007139
+  license: CC0
+- id: openneuro/ds007162
+  source:
+    type: openneuro
+    accession: ds007162
+  license: CC0
+- id: openneuro/ds007169
+  source:
+    type: openneuro
+    accession: ds007169
+  license: CC0
+- id: openneuro/ds007172
+  source:
+    type: openneuro
+    accession: ds007172
+  license: CC0
+- id: openneuro/ds007175
+  source:
+    type: openneuro
+    accession: ds007175
+  license: CC0
+- id: openneuro/ds007176
+  source:
+    type: openneuro
+    accession: ds007176
+  license: CC0
+- id: openneuro/ds007180
+  source:
+    type: openneuro
+    accession: ds007180
+  license: CC0
+- id: openneuro/ds007181
+  source:
+    type: openneuro
+    accession: ds007181
+  license: CC0
+- id: openneuro/ds007216
+  source:
+    type: openneuro
+    accession: ds007216
+  license: CC0
+- id: openneuro/ds007221
+  source:
+    type: openneuro
+    accession: ds007221
+  license: CC0
+- id: openneuro/ds007262
+  source:
+    type: openneuro
+    accession: ds007262
+  license: CC0
+- id: openneuro/ds007314
+  source:
+    type: openneuro
+    accession: ds007314
+  license: CC0
+- id: openneuro/ds007315
+  source:
+    type: openneuro
+    accession: ds007315
+  license: CC0
+- id: openneuro/ds007322
+  source:
+    type: openneuro
+    accession: ds007322
+  license: CC0
+- id: openneuro/ds007338
+  source:
+    type: openneuro
+    accession: ds007338
+  license: CC0
+- id: openneuro/ds007347
+  source:
+    type: openneuro
+    accession: ds007347
+  license: CC0
+- id: openneuro/ds007353
+  source:
+    type: openneuro
+    accession: ds007353
+  license: CC0
+- id: openneuro/ds007358
+  source:
+    type: openneuro
+    accession: ds007358
+  license: CC0
+- id: openneuro/ds007406
+  source:
+    type: openneuro
+    accession: ds007406
+  license: CC0
+- id: openneuro/ds007420
+  source:
+    type: openneuro
+    accession: ds007420
+  license: CC0
+- id: openneuro/ds007427
+  source:
+    type: openneuro
+    accession: ds007427
+  license: CC0
+- id: openneuro/ds007431
+  source:
+    type: openneuro
+    accession: ds007431
+  license: CC0
+- id: openneuro/ds007445
+  source:
+    type: openneuro
+    accession: ds007445
+  license: CC0
+- id: openneuro/ds007454
+  source:
+    type: openneuro
+    accession: ds007454
+  license: CC0
+- id: openneuro/ds007463
+  source:
+    type: openneuro
+    accession: ds007463
+  license: CC0
+- id: openneuro/ds007471
+  source:
+    type: openneuro
+    accession: ds007471
+  license: CC0
+- id: openneuro/ds007473
+  source:
+    type: openneuro
+    accession: ds007473
+  license: CC0
+- id: openneuro/ds007477
+  source:
+    type: openneuro
+    accession: ds007477
+  license: CC0
+- id: openneuro/ds007521
+  source:
+    type: openneuro
+    accession: ds007521
+  license: CC0
+- id: openneuro/ds007523
+  source:
+    type: openneuro
+    accession: ds007523
+  license: CC0
+- id: openneuro/ds007524
+  source:
+    type: openneuro
+    accession: ds007524
+  license: CC0
+- id: openneuro/ds007526
+  source:
+    type: openneuro
+    accession: ds007526
+  license: CC0
+- id: openneuro/ds007537
+  source:
+    type: openneuro
+    accession: ds007537
+  license: CC0
+- id: openneuro/ds007554
+  source:
+    type: openneuro
+    accession: ds007554
+  license: CC0
+- id: openneuro/ds007558
+  source:
+    type: openneuro
+    accession: ds007558
+  license: CC0
+- id: openneuro/ds007591
+  source:
+    type: openneuro
+    accession: ds007591
+  license: CC0
+- id: openneuro/ds007602
+  source:
+    type: openneuro
+    accession: ds007602
+  license: CC0
+- id: openneuro/ds007605
+  source:
+    type: openneuro
+    accession: ds007605
+  license: CC0
+- id: openneuro/ds007609
+  source:
+    type: openneuro
+    accession: ds007609
+  license: CC0
+- id: openneuro/ds007615
+  source:
+    type: openneuro
+    accession: ds007615
+  license: CC0
+- id: openneuro/ds007629
+  source:
+    type: openneuro
+    accession: ds007629
+  license: CC0
+- id: openneuro/ds007640
+  source:
+    type: openneuro
+    accession: ds007640
+  license: CC0
+- id: openneuro/ds007647
+  source:
+    type: openneuro
+    accession: ds007647
+  license: CC0
+- id: openneuro/ds007648
+  source:
+    type: openneuro
+    accession: ds007648
+  license: CC0
+- id: openneuro/ds007655
+  source:
+    type: openneuro
+    accession: ds007655
+  license: CC0
+- id: openneuro/ds007663
+  source:
+    type: openneuro
+    accession: ds007663
+  license: CC0
+- id: openneuro/ds007666
+  source:
+    type: openneuro
+    accession: ds007666
+  license: CC0
+- id: openneuro/ds007667
+  source:
+    type: openneuro
+    accession: ds007667
+  license: CC0
+- id: oxford/stn-lfp
+  source:
+    type: manual
+    url: https://data.mrc.ox.ac.uk/stn-lfp-on-off-and-dbs
+- id: penn/ram-public-data
+  source:
+    type: manual
+    url: https://memory.psych.upenn.edu/RAM_Public_Data
+- id: physionet/adfecgdb
+  source:
+    type: physionet
+    slug: adfecgdb
+    version: 1.0.0
+- id: physionet/afdb
+  source:
+    type: physionet
+    slug: afdb
+    version: 1.0.0
+- id: physionet/apnea-ecg
+  source:
+    type: physionet
+    slug: apnea-ecg
+    version: 1.0.0
+- id: physionet/autonomic-aging-cardiovascular
+  source:
+    type: physionet
+    slug: autonomic-aging-cardiovascular
+    version: 1.0.0
+- id: physionet/brugada-huca
+  source:
+    type: physionet
+    slug: brugada-huca
+    version: 1.0.0
+- id: physionet/butqdb
+  source:
+    type: physionet
+    slug: butqdb
+    version: 1.0.0
+- id: physionet/capslpdb
+  source:
+    type: physionet
+    slug: capslpdb
+    version: 1.0.0
+- id: physionet/cebsdb
+  source:
+    type: physionet
+    slug: cebsdb
+    version: 1.0.0
+- id: physionet/challenge-2017
+  source:
+    type: physionet
+    slug: challenge-2017
+    version: 1.0.0
+- id: physionet/challenge-2018
+  source:
+    type: physionet
+    slug: challenge-2018
+- id: physionet/challenge-2020
+  source:
+    type: physionet
+    slug: challenge-2020
+    version: 1.0.2
+- id: physionet/challenge-2021
+  source:
+    type: physionet
+    slug: challenge-2021
+    version: 1.0.3
+- id: physionet/chbmit
+  source:
+    type: physionet
+    slug: chbmit
+    version: 1.0.0
+- id: physionet/ctu-uhb-ctgdb
+  source:
+    type: physionet
+    slug: ctu-uhb-ctgdb
+    version: 1.0.0
+- id: physionet/ecgiddb
+  source:
+    type: physionet
+    slug: ecgiddb
+    version: 1.0.0
+- id: physionet/edb
+  source:
+    type: physionet
+    slug: edb
+    version: 1.0.0
+- id: physionet/eegmmidb
+  source:
+    type: physionet
+    slug: eegmmidb
+- id: physionet/ephnogram
+  source:
+    type: physionet
+    slug: ephnogram
+    version: 1.0.0
+- id: physionet/fantasia
+  source:
+    type: physionet
+    slug: fantasia
+    version: 1.0.0
+- id: physionet/grabmyo
+  source:
+    type: physionet
+    slug: grabmyo
+    version: 1.0.1
+- id: physionet/hd-semg
+  source:
+    type: physionet
+    slug: hd-semg
+    version: 2.0.0
+- id: physionet/hmc-sleep-staging
+  source:
+    type: physionet
+    slug: hmc-sleep-staging
+- id: physionet/i-care
+  source:
+    type: physionet
+    slug: i-care
+    version: '2.1'
+- id: physionet/icentia11k-continuous-ecg
+  source:
+    type: physionet
+    slug: icentia11k-continuous-ecg
+    version: '1.0'
+  license: CC BY-NC-SA 4.0
+- id: physionet/incartdb
+  source:
+    type: physionet
+    slug: incartdb
+    version: 1.0.0
+- id: physionet/ltafdb
+  source:
+    type: physionet
+    slug: ltafdb
+    version: 1.0.0
+  license: ODC-By 1.0
+- id: physionet/ltdb
+  source:
+    type: physionet
+    slug: ltdb
+    version: 1.0.0
+- id: physionet/ltstdb
+  source:
+    type: physionet
+    slug: ltstdb
+    version: 1.0.0
+- id: physionet/ludb
+  source:
+    type: physionet
+    slug: ludb
+    version: 1.0.1
+- id: physionet/mimic-iii-ext-ppg
+  source:
+    type: physionet
+    slug: mimic-iii-ext-ppg
+    version: 1.1.0
+    credentialed: true
+  license: PhysioNet Credentialed Health Data License 1.5.0
+- id: physionet/mimic-iv-ecg
+  source:
+    type: physionet
+    slug: mimic-iv-ecg
+    version: '1.0'
+- id: physionet/mimic3wdb
+  source:
+    type: physionet
+    slug: mimic3wdb
+    version: '1.0'
+  license: ODbL 1.0
+- id: physionet/mimic4wdb
+  source:
+    type: physionet
+    slug: mimic4wdb
+    version: 0.1.0
+  license: ODbL 1.0
+- id: physionet/mitdb
+  source:
+    type: physionet
+    slug: mitdb
+    version: 1.0.0
+- id: physionet/nsrdb
+  source:
+    type: physionet
+    slug: nsrdb
+    version: 1.0.0
+- id: physionet/ptb-xl
+  source:
+    type: physionet
+    slug: ptb-xl
+    version: 1.0.3
+- id: physionet/ptb-xl-plus
+  source:
+    type: physionet
+    slug: ptb-xl-plus
+    version: 1.0.1
+- id: physionet/ptbdb
+  source:
+    type: physionet
+    slug: ptbdb
+    version: 1.0.0
+- id: physionet/qtdb
+  source:
+    type: physionet
+    slug: qtdb
+    version: 1.0.0
+- id: physionet/sddb
+  source:
+    type: physionet
+    slug: sddb
+    version: 1.0.0
+- id: physionet/shdb-af
+  source:
+    type: physionet
+    slug: shdb-af
+    version: 1.0.1
+- id: physionet/siena-scalp-eeg
+  source:
+    type: physionet
+    slug: siena-scalp-eeg
+    version: 1.0.0
+- id: physionet/sleep-edfx
+  source:
+    type: physionet
+    slug: sleep-edfx
+    version: 1.0.0
+- id: physionet/stdb
+  source:
+    type: physionet
+    slug: stdb
+    version: 1.0.0
+- id: physionet/svdb
+  source:
+    type: physionet
+    slug: svdb
+    version: 1.0.0
+- id: physionet/tpehgdb
+  source:
+    type: physionet
+    slug: tpehgdb
+    version: 1.0.1
+  license: ODC-By 1.0
+- id: physionet/vitaldb
+  source:
+    type: physionet
+    slug: vitaldb
+    version: 1.0.0
+  license: CC BY 4.0
+- id: physionet/vitaldb-arrhythmia
+  source:
+    type: physionet
+    slug: vitaldb-arrhythmia
+    version: 1.0.0
+- id: pnpl/libribrain
+  source:
+    type: manual
+    url: https://arxiv.org/pdf/2608.25204
+- id: pulsedb/pulsedb
+  source:
+    type: manual
+    url: https://www.frontiersin.org/articles/10.3389/fdgth.2022.1090854
+- id: put/putemg
+  source:
+    type: manual
+    url: https://arxiv.org/html/1907.07428
+- id: qmul/deap
+  source:
+    type: manual
+    url: https://www.eecs.qmul.ac.uk/mmv/datasets/deap/
+- id: sjtu-bcmi/seed
+  source:
+    type: manual
+    url: https://bcmi.sjtu.edu.cn/home/seed/
+- id: sph/sph-12-lead
+  source:
+    type: manual
+    url: https://doi.org/10.1038/s41597-022-01403-5
+- id: stanford/hifi-ieeg-platform
+  source:
+    type: unavailable
+    url: https://journals.plos.org/plosone/article?id=10.1371%2Fjournal.pone.0305009
+- id: stanford/miller-ecog-library
+  source:
+    type: manual
+    url: https://purl.stanford.edu/zk881ps0522
+- id: stanford/sleep-clinic
+  source:
+    type: unavailable
+    url: https://www.nature.com/articles/s41591-025-04133-4
+- id: tufts/fnirs2mw
+  source:
+    type: manual
+    url: https://nips.cc/virtual/2021/36897
+- id: uci/ppg-dalia
+  source:
+    type: manual
+- id: uci/wesad
+  source:
+    type: manual
+    url: https://archive.ics.uci.edu/dataset/465/wesad+wearable+stress+and+affect+detection
+- id: ukbiobank/ecg
+  source:
+    type: manual
+    url: https://biobank.ndph.ox.ac.uk/ukb/field.cgi?id=20205
+- id: wildppg/wildppg
+  source:
+    type: manual
+    url: https://arxiv.org/html/2605.17859v1
+- id: zenodo/2547147
+  source:
+    type: zenodo
+    record: 2547147
+- id: zenodo/4916206
+  source:
+    type: zenodo
+    record: 4916206

@@ -4,7 +4,7 @@ Built from rich's own parts: two `Progress` displays in one `Live` (rich's docum
 pattern for several progress bars), with rich's built-in columns.
 
     all datasets ━━━━━━━━━━━━━━━━━━╺━━━━━━━━━━━  12/31  0:03:10
-    ⠴ physionet/mitdb 1.0.0 ━━━━━━━╺━━━━━━━  2.1/5.9 MB  410 kB/s  0:00:04  3/5 recordings  103.dat
+    ⠴ physionet/mitdb 1.0.0 ━━━━━━━╺━━━━━━━  2.1/5.9 MB  410 kB/s  0:00:04  3/5 files  103.dat
 
 Outside a terminal (output to a file) the bars are off and logs are plain lines from the
 standard library handler.
@@ -71,7 +71,7 @@ class DownloadDisplay:
             DownloadColumn(),
             TransferSpeedColumn(),
             TimeRemainingColumn(),
-            TextColumn("{task.fields[recordings]}", table_column=Column(no_wrap=True)),
+            TextColumn("{task.fields[files]}", table_column=Column(no_wrap=True)),
             TextColumn(
                 "[dim]{task.fields[current]}",
                 table_column=Column(no_wrap=True, overflow="ellipsis", ratio=1),
@@ -115,30 +115,30 @@ class DownloadDisplay:
 
 class ProgressBar:
     """Implements `ingest.IngestProgress` with one task of the dataset display: the bar
-    measures bytes; the recordings done and the newest file in progress are shown beside it."""
+    measures bytes; the files done and the newest file in progress are shown beside it."""
 
     def __init__(self, progress: Progress, dataset_id: str) -> None:
         self._progress = progress
         self._dataset_id = dataset_id
         self._lock = threading.Lock()
         self._active: list[str] = []  # files downloading now, oldest first
-        self._recordings = 0
-        self._recordings_done = 0
+        self._files = 0
+        self._files_done = 0
         self._task: TaskID = progress.add_task(
-            f"{dataset_id} [dim]listing files", total=None, recordings="", current=""
+            f"{dataset_id} [dim]listing files", total=None, files="", current=""
         )
 
-    def start(self, version: str, recordings: int, done: int, total_bytes: int | None) -> None:
-        self._recordings, self._recordings_done = recordings, done
+    def start(self, version: str, files: int, done: int, total_bytes: int | None) -> None:
+        self._files, self._files_done = files, done
         self._progress.update(
             self._task,
             description=f"{self._dataset_id} [dim]{version}",
             total=total_bytes,
-            recordings=self._recordings_text(),
+            files=self._files_text(),
         )
 
-    def _recordings_text(self) -> str:
-        return f"{self._recordings_done:,}/{plural(self._recordings, 'recording')}"
+    def _files_text(self) -> str:
+        return f"{self._files_done:,}/{plural(self._files, 'file')}"
 
     def file_started(self, path: str) -> None:
         with self._lock:
@@ -152,12 +152,10 @@ class ProgressBar:
         with self._lock:
             if path in self._active:
                 self._active.remove(path)
+            if ok:
+                self._files_done += 1
+                self._progress.update(self._task, files=self._files_text())
             self._show_current()
-
-    def recording_done(self) -> None:
-        with self._lock:
-            self._recordings_done += 1
-            self._progress.update(self._task, recordings=self._recordings_text())
 
     def _show_current(self) -> None:
         more = f" (+{len(self._active) - 1})" if len(self._active) > 1 else ""

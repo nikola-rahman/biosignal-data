@@ -1,8 +1,14 @@
-"""Catalog schema: one YAML file per dataset under ``catalog/<repository>/<dataset>.yaml``.
+"""Schemas of the two dataset files.
 
-The catalog describes *where a dataset lives and how to get it*. It deliberately says
-nothing about how the data should look after ingestion: the raw layer keeps every file
-exactly as the source publishes it.
+- `catalog.yaml` (`Dataset`): what a download needs, per dataset: its id, its source (type,
+  identifier at the source, version, the source's own settings) and its license, which every
+  copied version records in its manifest.
+- `docs/datasets.yaml` (`DatasetInfo`): descriptions for people (name, signals, access,
+  links, sizes, notes). The docs and the dataset explorer are built from it; downloads do
+  not read it.
+
+Neither says how the data should look after copying: the raw layer keeps every file exactly
+as the source publishes it.
 """
 
 from __future__ import annotations
@@ -35,7 +41,6 @@ class AccessTier(StrEnum):
 
 class Access(_Model):
     tier: AccessTier
-    license: str | None = None
     steps: list[str] = Field(
         default_factory=list,
         description="Manual steps a person must do before `ingest` can run, in order.",
@@ -168,6 +173,13 @@ class RsyncSource(_Model):
     )
 
 
+class UnavailableSource(_Model):
+    """Known to exist, but there is no way to get it (private, withdrawn, discontinued)."""
+
+    type: Literal["unavailable"]
+    url: HttpUrl | None = None
+
+
 class ManualSource(_Model):
     """No programmatic download. A person follows `access.steps` into a local folder,
     then `biosignal-data import <id> <folder>` publishes it to the raw layer."""
@@ -190,42 +202,32 @@ Source = Annotated[
     | HttpSource
     | NsrrSource
     | RsyncSource
-    | ManualSource,
+    | ManualSource
+    | UnavailableSource,
     Field(discriminator="type"),
 ]
 
 
+def _check_dataset_id(value: str) -> str:
+    if not DATASET_ID_RE.fullmatch(value):
+        raise ValueError(
+            f"dataset id {value!r} must look like 'repository/dataset' or "
+            "'repository/owner/dataset'"
+        )
+    return value
+
+
 class Dataset(_Model):
+    """One entry of catalog.yaml: what a download needs."""
+
     id: str = Field(description="<repository>/<the repository's own identifier>")
-    name: str
-    signals: list[str] = Field(min_length=1)
     source: Source
-    access: Access
-    homepage: HttpUrl | None = None
-    references: list[HttpUrl] = Field(default_factory=list)
-    stats: Stats = Field(default_factory=Stats)
-    related: list[str] = Field(
-        default_factory=list, description="Other catalog ids this overlaps with or contains."
-    )
-    notes: list[str] = Field(default_factory=list)
-    download_verified: bool = Field(
-        False, description="True once an ingest of this entry has been run end to end."
-    )
+    license: str | None = Field(None, description="Recorded in every copied version's manifest.")
 
     @field_validator("id")
     @classmethod
     def _check_id(cls, value: str) -> str:
-        if not DATASET_ID_RE.fullmatch(value):
-            raise ValueError(
-                f"dataset id {value!r} must look like 'repository/dataset' or "
-                "'repository/owner/dataset'"
-            )
-        return value
-
-    @field_validator("signals")
-    @classmethod
-    def _lower_signals(cls, value: list[str]) -> list[str]:
-        return [s.strip().lower() for s in value]
+        return _check_dataset_id(value)
 
     @property
     def repository(self) -> str:
@@ -239,3 +241,36 @@ class Dataset(_Model):
             if value:
                 return str(value)
         return None
+
+
+class DatasetInfo(_Model):
+    """One entry of docs/datasets.yaml: the description of a dataset, for people."""
+
+    id: str
+    name: str
+    signals: list[str] = Field(min_length=1)
+    access: Access
+    homepage: HttpUrl | None = None
+    references: list[HttpUrl] = Field(default_factory=list)
+    stats: Stats = Field(default_factory=Stats)
+    related: list[str] = Field(
+        default_factory=list, description="Other dataset ids this overlaps with or contains."
+    )
+    notes: list[str] = Field(default_factory=list)
+    download_verified: bool = Field(
+        False, description="True once a complete copy of this dataset has been checked."
+    )
+
+    @field_validator("id")
+    @classmethod
+    def _check_id(cls, value: str) -> str:
+        return _check_dataset_id(value)
+
+    @field_validator("signals")
+    @classmethod
+    def _lower_signals(cls, value: list[str]) -> list[str]:
+        return [s.strip().lower() for s in value]
+
+    @property
+    def repository(self) -> str:
+        return self.id.split("/", 1)[0]

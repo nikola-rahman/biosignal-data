@@ -50,6 +50,7 @@ class Store(Protocol):
     def open(self, key: str) -> BinaryIO: ...
     def delete(self, key: str) -> None: ...
     def list(self, prefix: str) -> Iterator[str]: ...
+    def sizes(self, prefix: str) -> dict[str, int]: ...
     def unfinished(self, prefix: str) -> tuple[Unfinished, ...]: ...
     def discard(self, item: Unfinished) -> None: ...
 
@@ -177,6 +178,16 @@ class S3Store:
             for item in page.get("Contents", []):
                 yield item["Key"][strip:]
 
+    def sizes(self, prefix: str) -> dict[str, int]:
+        """Every key under `prefix` with its size: one listing instead of one HEAD per key."""
+        strip = len(self.prefix) + 1 if self.prefix else 0
+        paginator = self.client.get_paginator("list_objects_v2")
+        return {
+            item["Key"][strip:]: int(item["Size"])
+            for page in paginator.paginate(Bucket=self.bucket, Prefix=self._key(prefix))
+            for item in page.get("Contents", [])
+        }
+
     def unfinished(self, prefix: str) -> tuple[Unfinished, ...]:
         strip = len(self.prefix) + 1 if self.prefix else 0
         found = []
@@ -255,6 +266,9 @@ class LocalStore:
         for path in sorted(base.rglob("*")):
             if path.is_file() and not path.name.endswith(".part"):
                 yield path.relative_to(self.root).as_posix()
+
+    def sizes(self, prefix: str) -> dict[str, int]:
+        return {key: self._path(key).stat().st_size for key in self.list(prefix)}
 
     def unfinished(self, prefix: str) -> tuple[Unfinished, ...]:
         base = self._path(prefix) if prefix else self.root

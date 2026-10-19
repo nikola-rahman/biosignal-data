@@ -3,11 +3,13 @@
 A catalog of public biosignal datasets (EEG, iEEG, ECG, EMG, sleep PSG, PPG, MEG, fNIRS, ...)
 and the code to copy them, unchanged, into the **raw layer** of an S3 bucket.
 
-- **Catalog**: 873 datasets, one YAML file each under [`catalog/`](catalog), saying where the
-  data lives, how to get access, and how big it is. Browse it in
+- **Datasets**: 873 of them. [`catalog.yaml`](catalog.yaml) lists what a download needs for
+  each (source, identifier, version, license); [`docs/datasets.yaml`](docs/datasets.yaml)
+  describes them (signals, access, links, sizes). Browse them in
   [`docs/datasets/`](docs/datasets/README.md).
-- **Ingest**: one command per dataset copies every file from its source to
-  `s3://<bucket>/raw/<dataset id>/<version>/`, verifies checksums, and writes a manifest.
+- **Download**: each dataset is planned (version and file list, read once), then copied
+  complete and unchanged, its files in parallel, to
+  `s3://<bucket>/raw/<dataset id>/<version>/`, with checksums verified and a manifest.
   Interrupted runs resume.
 - **Read**: open the raw files with the established library for each format
   (MNE, mne-bids, wfdb, pynwb, h5py, ...), with local caching.
@@ -21,8 +23,8 @@ source, which later layers can build on.
 uv sync                                    # Python 3.11+, installs everything
 uv run biosignal-data list --signal ecg
 uv run biosignal-data info physionet/mitdb
-uv run biosignal-data download physionet/mitdb --limit 5 --dry-run      # what it would copy
-uv run biosignal-data download physionet/mitdb --limit 5 --dest ./lake  # 5 recordings, a test
+uv run biosignal-data download physionet/mitdb --dest ./lake --dry-run  # the plan: files, size
+uv run biosignal-data download physionet/mitdb --dest ./lake            # copy it
 uv run biosignal-data download --all --dest s3://my-bucket              # everything
 uv run biosignal-data status --all --dest s3://my-bucket                # what is stored
 uv run biosignal-data check --all --latest --dest s3://my-bucket        # sizes vs manifests
@@ -31,8 +33,8 @@ uv run biosignal-data import <id> <folder> --version <label> --dest s3://my-buck
 
 | Command | What it does |
 | --- | --- |
-| `list` | find datasets in the catalog |
-| `info <id>` | one catalog entry: what it is, how to get access |
+| `list` | find datasets by their descriptions |
+| `info <id>` | one dataset: what it is, how to get access, where it is downloaded from |
 | `download` | copy datasets from their sources, unchanged, to `--dest` |
 | `import` | copy a dataset you downloaded by hand, from a folder |
 | `status` | what is stored in `--dest` |
@@ -43,14 +45,14 @@ uv run biosignal-data import <id> <folder> --version <label> --dest s3://my-buck
 - **Settings** that do not change between runs are in [`biosignal-data.yaml`](biosignal-data.yaml):
   the S3 storage (endpoint, region, addressing), parallel downloads, the staging folder for
   TUH, and the read cache. Nothing has a default.
+- **Complete datasets only:** the raw layer holds each dataset as its source publishes it.
+  A copy in which no file can hold recordings (only metadata) is reported, not counted as
+  done.
 - **Versions:** a version in the catalog is downloaded exactly, or the download fails; an
   entry without one gets the latest, with a warning ([`docs/access.md`](docs/access.md)).
 - **Secrets** come only from `BIOSIGNAL_*` variables: `BIOSIGNAL_ACCESS_KEY_ID` and
   `BIOSIGNAL_SECRET_ACCESS_KEY` for your storage, and one or two per gated source
   ([`docs/access.md`](docs/access.md)).
-- **Test subsets:** `--limit N` copies the first N recordings of each dataset (a dataset
-  published as one archive has one recording); `--include <glob>` only matching paths. The
-  version stays incomplete; a later run without them continues from it.
 - **Datasets that need you first** (credentials, download by hand) are skipped with a
   warning and listed at the end, with a warning for each source type whose code did not run.
 - **Warnings** show every choice the tool makes and everything it skips. Every run prints
@@ -103,17 +105,18 @@ Details and the manifest schema: [`docs/raw-layer.md`](docs/raw-layer.md).
 
 ```
 biosignal-data.yaml     settings that do not change between runs (no defaults)
-catalog/                one YAML per dataset (the source of truth)
-docs/                   design notes; docs/datasets/ is generated from the catalog
-scripts/                import_eegdash.py regenerates OpenNeuro/NEMAR entries
+catalog.yaml            what a download needs, per dataset
+docs/datasets.yaml      the description of each dataset, for people
+docs/                   design notes; docs/datasets/ is generated from the two files
+scripts/                import_eegdash.py (OpenNeuro/NEMAR entries), check_each.py (test runs)
 src/biosignal_data/
-    catalog/            schema and loader
+    catalog/            schemas and loader of the two files
     fetchers/           one module per kind of source
     storage/            raw-layer layout, manifest, S3 and local stores
     read/               raw-layer browsing and format openers
-    ingest.py           copy one dataset: verify, checkpoint, resume
+    ingest.py           plan and copy one dataset: verify, checkpoint, resume
     batch.py            many datasets at once, one shared download pool
-    selection.py        test subsets (--limit, --include) and globs
+    paths.py            globs, and which files can hold recordings
     config.py           biosignal-data.yaml
     console.py          progress display and logging
     cli.py              the `biosignal-data` command
@@ -122,9 +125,9 @@ tests/
 
 ## Status
 
-The code is tested against mocked sources; **no dataset has been downloaded completely end to end yet**.
-Every catalog entry carries `download_verified: false` until someone does. Set it to `true`
-in the entry once a download of it succeeds. Known open points are listed in
+The code is tested against mocked sources, and real downloads have been tested for a part
+of the catalog. Each description carries `download_verified`; set it to `true` once a
+complete copy of that dataset has been checked. Known open points are listed in
 [`docs/open-questions.md`](docs/open-questions.md).
 
 ## Development
@@ -133,7 +136,7 @@ in the entry once a download of it succeeds. Known open points are listed in
 uv sync
 uv run pytest
 uv run ruff check . && uv run ruff format --check . && uv run mypy src tests
-uv run biosignal-data dev docs    # after changing the catalog
+uv run biosignal-data dev docs    # after changing catalog.yaml or docs/datasets.yaml
 uv run pre-commit install         # run the checks on every commit
 ```
 

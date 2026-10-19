@@ -40,9 +40,8 @@ class AccessRestrictedError(FetchError):
     """The source holds the files back (embargo, request needed) from this account."""
 
 
-class NoRecordingsError(FetchError):
-    """A test subset was asked for, but the source holds no recordings (e.g. only BIDS
-    sidecars): nothing that a subset could be made of."""
+class UnavailableError(FetchError):
+    """The dataset is known, but there is no way to get it (catalog source `unavailable`)."""
 
 
 class ManualDownloadError(FetchError):

@@ -13,7 +13,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from biosignal_data.selection import glob_match
+from biosignal_data.paths import glob_match
 from biosignal_data.storage.layout import SUCCESS, VersionLocation, dataset_prefix
 from biosignal_data.storage.manifest import FileEntry, Manifest
 from biosignal_data.storage.stores import S3Settings, Store, open_store

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from biosignal_data.ingest import AlreadyComplete, ingest, verify
+from biosignal_data.ingest import AlreadyComplete, apply, ingest, planned, verify
 from biosignal_data.read.raw import RawDataset, complete_versions
 from biosignal_data.storage.manifest import Manifest
 from biosignal_data.storage.stores import LocalStore
@@ -78,10 +78,16 @@ def test_rerun_resumes_and_skips_finished_files(store: LocalStore) -> None:
     assert second.opened == {"a/b/c.csv": 1}
 
 
-def test_dry_run_copies_nothing(store: LocalStore) -> None:
+def test_plan_is_complete_before_copying_and_apply_copies_exactly_it(store: LocalStore) -> None:
     dataset = make_dataset()
-    report = ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES), dry_run=True)
-    assert report.copied == 0 and not list(store.list(""))
+    fetcher = FakeFetcher(dataset, FILES)
+    with planned(dataset, store, fetcher=fetcher) as plan:
+        assert plan.version.value == "1.0.0" and len(plan.files) == 3
+        assert plan.total_bytes == sum(len(b) for b in FILES.values()) and not plan.unknown_sizes
+        assert not list(store.list(""))  # planning copies nothing
+        report = apply(plan, store)
+    assert report.complete and report.copied == 3
+    assert fetcher.listed == 1  # the source was asked for its files once
 
 
 def test_verify_and_read_back(store: LocalStore, tmp_path: Path) -> None:
@@ -108,38 +114,15 @@ def test_latest_complete_version_is_chosen(store: LocalStore, tmp_path: Path) ->
     assert latest.location.version == "1.0.10"
 
 
-def test_subset_is_checkpointed_and_completed_later(store: LocalStore) -> None:
-    dataset = make_dataset()
-    prefix = "raw/test/example/1.0.0"
-    report = ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES), include=["sub-*/**"])
-    assert report.subset and not report.complete and report.copied == 1
-    assert store.exists(f"{prefix}/data/sub-01/eeg/data.edf")
-    assert not store.exists(f"{prefix}/_SUCCESS")
-
-    report = ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES), limit=1)
-    assert report.subset and report.copied == 1  # data.edf is stored; README is its metadata
-    assert store.exists(f"{prefix}/data/README")
-
-    report = ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES))
-    assert report.complete and report.copied == 1 and report.skipped == 2
-
-
-def test_subset_that_selects_everything_completes(store: LocalStore) -> None:
-    dataset = make_dataset()
-    report = ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES), include=["**"])
-    assert report.complete and not report.subset
-
-
 class _Recorder:
     def __init__(self) -> None:
         self.started: tuple[int, int, int | None] | None = None
         self.bytes = 0
         self.files: list[tuple[str, bool]] = []
         self.begun: list[str] = []
-        self.recordings_done = 0
 
-    def start(self, version: str, recordings: int, done: int, total_bytes: int | None) -> None:
-        self.started = (recordings, done, total_bytes)
+    def start(self, version: str, files: int, done: int, total_bytes: int | None) -> None:
+        self.started = (files, done, total_bytes)
 
     def file_started(self, path: str) -> None:
         self.begun.append(path)
@@ -149,9 +132,6 @@ class _Recorder:
 
     def file_done(self, path: str, ok: bool) -> None:
         self.files.append((path, ok))
-
-    def recording_done(self) -> None:
-        self.recordings_done += 1
 
 
 def test_progress_counts_only_successful_bytes(store: LocalStore) -> None:
@@ -168,18 +148,13 @@ def test_progress_counts_only_successful_bytes(store: LocalStore) -> None:
     ]
 
 
-def test_progress_counts_recordings(store: LocalStore) -> None:
+def test_progress_counts_files_already_stored(store: LocalStore) -> None:
     dataset = make_dataset()
-    files = {"README": b"r", "1.hea": b"h", "1.dat": b"d", "2.hea": b"h", "2.dat": b"d"}
+    ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES, fail={"a/b/c.csv"}))
     recorder = _Recorder()
-    ingest(dataset, store, fetcher=FakeFetcher(dataset, files), limit=1, progress=recorder)
-    assert recorder.started is not None and recorder.started[:2] == (1, 0)
-    assert recorder.recordings_done == 1
-
-    recorder = _Recorder()
-    ingest(dataset, store, fetcher=FakeFetcher(dataset, files), progress=recorder)
-    assert recorder.started is not None and recorder.started[:2] == (2, 1)  # 1 stored before
-    assert recorder.recordings_done == 1
+    ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES), progress=recorder)
+    assert recorder.started == (3, 2, len(FILES["a/b/c.csv"]))  # 3 files, 2 stored before
+    assert recorder.files == [("a/b/c.csv", True)]
 
 
 def test_undated_source_continues_an_earlier_days_download(
@@ -194,7 +169,7 @@ def test_undated_source_continues_an_earlier_days_download(
             return base.Fetcher.resolve_version(self)
 
     monkeypatch.setattr(base, "retrieval_version", lambda: "2026-10-01")
-    ingest(dataset, store, fetcher=Undated(dataset, FILES), limit=1)
+    ingest(dataset, store, fetcher=Undated(dataset, FILES, fail={"a/b/c.csv"}))
     monkeypatch.setattr(base, "retrieval_version", lambda: "2026-10-02")
     report = ingest(dataset, store, fetcher=Undated(dataset, FILES))
     assert report.version == "2026-10-01" and report.complete and report.skipped >= 1
@@ -221,10 +196,10 @@ def test_stop_ends_copies_and_keeps_what_is_finished(store: LocalStore) -> None:
     assert store.unfinished("raw") == ()  # no temporary files are left behind
 
 
-def test_subset_of_a_metadata_only_source_is_reported(store: LocalStore) -> None:
-    from biosignal_data.fetchers import NoRecordingsError  # noqa: PLC0415
-
+def test_a_copy_without_recordings_is_reported(store: LocalStore) -> None:
     dataset = make_dataset()
-    only_metadata = {"README": b"r", "sub-1/eeg/sub-1_channels.tsv": b"t"}
-    with pytest.raises(NoRecordingsError, match="no recordings"):
-        ingest(dataset, store, fetcher=FakeFetcher(dataset, only_metadata), limit=1)
+    only_metadata = {"README": b"r", "sub-1/eeg/sub-1_channels.tsv": b"t", ".datalad/config": b"c"}
+    report = ingest(dataset, store, fetcher=FakeFetcher(dataset, only_metadata))
+    assert report.complete and report.recording_files == 0  # copied faithfully, but flagged
+    report = ingest(make_dataset(id="test/other"), store, fetcher=FakeFetcher(dataset, FILES))
+    assert report.recording_files == 1  # sub-01/eeg/data.edf

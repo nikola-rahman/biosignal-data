@@ -2,11 +2,15 @@
 
     list       find datasets in the catalog
     info       one catalog entry: what it is and how to get access
-    download   copy datasets (or a test subset) from their sources to --dest
+    download   copy datasets from their sources to --dest (or show the plan: --dry-run)
     import     copy a dataset you downloaded by hand from a folder to --dest
     status     what is stored in --dest
     check      check stored files against their manifests
-    dev        maintainer commands (catalog validation, generated docs)
+    cleanup    remove unfinished uploads that stopped runs left in --dest
+    dev        maintainer commands (validation, generated docs)
+
+The datasets are listed in catalog.yaml (what a download needs) and described in
+docs/datasets.yaml (for people; read only by list, info, --signal and the docs).
 
 Settings that do not change between runs come from biosignal-data.yaml (see config.py);
 secrets from BIOSIGNAL_* environment variables. Nothing has a default.
@@ -25,7 +29,17 @@ import typer
 from rich.markup import escape
 
 from biosignal_data.batch import DONE, NEEDS_ACTION, Outcome, download_many
-from biosignal_data.catalog import AccessTier, Catalog, CatalogError, Dataset
+from biosignal_data.catalog import (
+    AccessTier,
+    Catalog,
+    CatalogError,
+    Dataset,
+    DatasetInfo,
+    Infos,
+    check_pair,
+    default_catalog_path,
+    default_info_path,
+)
 from biosignal_data.config import (
     Config,
     ConfigError,
@@ -35,10 +49,9 @@ from biosignal_data.config import (
     need,
 )
 from biosignal_data.console import DownloadDisplay, ProgressBar, console, setup_logging
-from biosignal_data.fetchers import FetchError, FetchOptions, RemoteFile, fetcher_for
-from biosignal_data.ingest import verify
+from biosignal_data.fetchers import FetchError, FetchOptions
+from biosignal_data.ingest import AlreadyComplete, Plan, planned, verify
 from biosignal_data.read.raw import stored_versions
-from biosignal_data.selection import select
 from biosignal_data.storage.layout import VersionLocation
 from biosignal_data.storage.manifest import Manifest
 from biosignal_data.storage.stores import S3Settings, S3Store, Store, open_store
@@ -61,7 +74,13 @@ app.add_typer(dev, name="dev")
 
 CatalogOpt = Annotated[
     Path | None,
-    typer.Option("--catalog", help="Catalog folder. Default: the repository's catalog/."),
+    typer.Option("--catalog", help=f"The dataset list. Default: {default_catalog_path()}."),
+]
+DescriptionsOpt = Annotated[
+    Path | None,
+    typer.Option(
+        "--descriptions", help=f"The dataset descriptions. Default: {default_info_path()}."
+    ),
 ]
 ConfigOpt = Annotated[
     Path | None,
@@ -72,7 +91,10 @@ DestOpt = Annotated[str, typer.Option("--dest", "-d", help=_DEST_HELP)]
 IdsArg = Annotated[list[str] | None, typer.Argument(help="Catalog ids, e.g. physionet/mitdb.")]
 AllOpt = Annotated[bool, typer.Option("--all", help="Every dataset in the catalog.")]
 SignalOpt = Annotated[
-    list[str], typer.Option("--signal", "-s", help="Datasets with this signal. Repeatable.")
+    list[str],
+    typer.Option(
+        "--signal", "-s", help="Datasets with this signal (from the descriptions). Repeatable."
+    ),
 ]
 RepositoryOpt = Annotated[
     list[str],
@@ -101,6 +123,13 @@ def _catalog(path: Path | None) -> Catalog:
         raise _fail(str(exc), 2) from exc
 
 
+def _infos(path: Path | None) -> Infos:
+    try:
+        return Infos.load(path)
+    except CatalogError as exc:
+        raise _fail(str(exc), 2) from exc
+
+
 def _config(path: Path | None) -> tuple[Config, Path]:
     try:
         return load_config(path)
@@ -122,6 +151,13 @@ def _dataset(catalog: Catalog, dataset_id: str) -> Dataset:
         raise _fail(str(exc.args[0] if exc.args else exc)) from exc
 
 
+def _info(infos: Infos, dataset_id: str) -> DatasetInfo:
+    try:
+        return infos.get(dataset_id)
+    except KeyError as exc:
+        raise _fail(str(exc.args[0] if exc.args else exc)) from exc
+
+
 def _select_datasets(
     cat: Catalog,
     ids: list[str] | None,
@@ -129,9 +165,10 @@ def _select_datasets(
     signal: list[str],
     repository: list[str],
     all_: bool,
+    descriptions: Path | None,
 ) -> list[Dataset]:
     """Exactly one way to select: ids (arguments and/or --ids-file), filters (--signal,
-    --repository; all filters must match), or --all."""
+    --repository; all filters must match), or --all. Only --signal reads the descriptions."""
     ids = list(ids or [])
     if ids_file is not None:
         lines = ids_file.read_text(encoding="utf-8").splitlines()
@@ -145,7 +182,11 @@ def _select_datasets(
         return list({d.id: d for d in (_dataset(cat, i) for i in ids)}.values())
     if all_:
         return list(cat)
-    return cat.filter(signals=signal, repositories=repository)
+    chosen = cat.filter(repositories=repository)
+    if signal:
+        with_signal = {d.id for d in _infos(descriptions).filter(signals=signal)}
+        chosen = [d for d in chosen if d.id in with_signal]
+    return chosen
 
 
 def _store(dest: str, config: Config, config_path: Path, parallel_uploads: int = 1) -> Store:
@@ -188,36 +229,41 @@ def list_(
     access: Annotated[
         list[AccessTier], typer.Option("--access", "-a", help="Access tier. Repeatable.")
     ] = [],  # noqa: B006
-    as_json: Annotated[bool, typer.Option("--json", help="Full entries as JSON.")] = False,
-    catalog: CatalogOpt = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Full descriptions as JSON.")] = False,
+    descriptions: DescriptionsOpt = None,
 ) -> None:
-    """Find datasets in the catalog. Without filters: all of them."""
-    datasets = _catalog(catalog).filter(signals=signal, tiers=access, repositories=repository)
+    """Find datasets, by their descriptions. Without filters: all of them."""
+    infos = _infos(descriptions).filter(signals=signal, tiers=access, repositories=repository)
     if as_json:
-        typer.echo(json.dumps([d.model_dump(mode="json") for d in datasets], indent=2))
+        typer.echo(json.dumps([d.model_dump(mode="json") for d in infos], indent=2))
         return
-    for d in datasets:
+    for d in infos:
         hours = f"{d.stats.hours:,.0f} h" if d.stats.hours is not None else "? h"
         typer.echo(f"{d.id:55} {d.access.tier.value:13} {','.join(d.signals):20} {hours:>12}")
-    console.print(f"{len(datasets)} datasets", highlight=False)
-
-
-# --- info ----------------------------------------------------------------------------------
+    console.print(plural(len(infos), "dataset"), highlight=False)
 
 
 @app.command()
 def info(
-    dataset_id: Annotated[str, typer.Argument(help="Catalog id, e.g. physionet/mitdb.")],
-    as_json: Annotated[bool, typer.Option("--json", help="The catalog entry as JSON.")] = False,
+    dataset_id: Annotated[str, typer.Argument(help="Dataset id, e.g. physionet/mitdb.")],
+    as_json: Annotated[
+        bool, typer.Option("--json", help="The catalog entry and description as JSON.")
+    ] = False,
     catalog: CatalogOpt = None,
+    descriptions: DescriptionsOpt = None,
 ) -> None:
-    """One catalog entry: what the dataset is and how to get access to it."""
-    d = _dataset(_catalog(catalog), dataset_id)
+    """One dataset: what it is, how to get access, and where the tool downloads it from."""
+    entry = _dataset(_catalog(catalog), dataset_id)
+    d = _info(_infos(descriptions), dataset_id)
     if as_json:
-        typer.echo(json.dumps(d.model_dump(mode="json", exclude_defaults=True), indent=2))
+        both = {
+            "catalog": entry.model_dump(mode="json", exclude_defaults=True),
+            "description": d.model_dump(mode="json", exclude_defaults=True),
+        }
+        typer.echo(json.dumps(both, indent=2))
         return
     typer.secho(f"{d.id}  {d.name}", bold=True)
-    for label, value in _info_rows(d):
+    for label, value in _info_rows(entry, d):
         if value:
             typer.echo(f"  {label:10}{value}")
     if d.access.steps:
@@ -232,7 +278,7 @@ def info(
             typer.echo(f"    - {note.strip()}")
 
 
-def _info_rows(d: Dataset) -> list[tuple[str, str]]:
+def _info_rows(entry: Dataset, d: DatasetInfo) -> list[tuple[str, str]]:
     stats = d.stats
     approx = "~" if stats.hours_estimated else ""
     size_parts = [
@@ -241,12 +287,13 @@ def _info_rows(d: Dataset) -> list[tuple[str, str]]:
         f"{approx}{stats.hours:,.0f} h" if stats.hours is not None else "",
         _size(stats.size_bytes) if stats.size_bytes is not None else "",
     ]
-    version = f" · version {d.pinned_version}" if d.pinned_version else " · version not pinned"
+    pinned = entry.pinned_version
+    version = f" · version {pinned}" if pinned else " · version not pinned"
     return [
         ("signals", ", ".join(d.signals)),
         ("size", " · ".join(p for p in size_parts if p) or "?"),
-        ("access", f"{d.access.tier.value} · license {d.access.license or '?'}"),
-        ("source", d.source.type + version),
+        ("access", f"{d.access.tier.value} · license {entry.license or '?'}"),
+        ("source", entry.source.type + version),
         ("homepage", str(d.homepage) if d.homepage else ""),
     ]
 
@@ -257,57 +304,39 @@ def _info_rows(d: Dataset) -> list[tuple[str, str]]:
 @app.command()
 def download(
     dataset_ids: IdsArg = None,
-    dest: Annotated[
-        str | None,
-        typer.Option("--dest", "-d", help=_DEST_HELP + " Not with --dry-run."),
-    ] = None,
+    dest: Annotated[str | None, typer.Option("--dest", "-d", help=_DEST_HELP)] = None,
     ids_file: IdsFileOpt = None,
     signal: SignalOpt = [],  # noqa: B006
     repository: RepositoryOpt = [],  # noqa: B006
     all_: AllOpt = False,
-    limit: Annotated[
-        int | None,
-        typer.Option(
-            "--limit",
-            "-n",
-            min=1,
-            help="Test subset: the first N recordings of each dataset, with the files and "
-            "metadata each one needs. A dataset published as one archive has one recording.",
-        ),
-    ] = None,
-    include: Annotated[
-        list[str],
-        typer.Option(
-            "--include",
-            "-i",
-            help="Test subset: only files whose path matches this glob (* within a folder, "
-            "** across folders). Repeatable.",
-        ),
-    ] = [],  # noqa: B006
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="Show what would be copied; copy nothing, no --dest."),
+        typer.Option(
+            "--dry-run", help="Show the plan for --dest (version, files, size); copy nothing."
+        ),
     ] = False,
     verbose: VerboseOpt = False,
     config: ConfigOpt = None,
     catalog: CatalogOpt = None,
+    descriptions: DescriptionsOpt = None,
 ) -> None:
-    """Copy datasets from their sources, unchanged, to --dest.
+    """Copy datasets from their sources, unchanged and complete, to --dest.
 
     Select datasets by ids, --ids-file, --signal/--repository, or --all. Many datasets copy
     at the same time. Datasets that need you to act first (credentials, download by hand)
     are skipped with a warning and listed at the end.
 
-    Files go to <dest>/raw/<id>/<version>/data/ with a manifest of checksums. If a run
-    stops, run the same command again: it continues where it stopped.
-
-    A test subset (--limit, --include) stays an incomplete version; the same command
-    without them later completes it without copying the subset again.
+    Each dataset is planned first (version and file list, read once from the source),
+    then exactly that plan is copied, its files in parallel. Files go to
+    <dest>/raw/<id>/<version>/data/ with a manifest of checksums. If a run stops, run the
+    same command again: it continues where it stopped.
     """
     setup_logging(verbose)
     cfg, cfg_path = _config(config)
     settings = _need(cfg.download, "download", cfg_path)
-    datasets = _select_datasets(_catalog(catalog), dataset_ids, ids_file, signal, repository, all_)
+    datasets = _select_datasets(
+        _catalog(catalog), dataset_ids, ids_file, signal, repository, all_, descriptions
+    )
     staging = cfg.staging
     options = FetchOptions(
         staging_dir=staging.dir if staging else None,
@@ -320,16 +349,14 @@ def download(
         highlight=False,
         soft_wrap=True,
     )
-    if dry_run:
-        if dest:
-            raise _fail("--dry-run copies nothing: leave out --dest")
-        for dataset in datasets:
-            _preview(dataset, options, include, limit)
-        return
     if not dest:
         raise _fail("missing --dest (a local folder or s3://bucket[/prefix])")
     store = _store(dest, cfg, cfg_path, settings.workers)
-    _run(datasets, store, options, settings, include, limit)
+    if dry_run:
+        for dataset in datasets:
+            _preview(dataset, store, options)
+        return
+    _run(datasets, store, options, settings)
 
 
 @app.command("import")
@@ -355,7 +382,7 @@ def import_(
     settings = _need(cfg.download, "download", cfg_path)
     store = _store(dest, cfg, cfg_path, settings.workers)
     options = FetchOptions(from_dir=folder, version=version)
-    _run([dataset], store, options, settings, include=[], limit=None)
+    _run([dataset], store, options, settings)
 
 
 def _run(
@@ -363,8 +390,6 @@ def _run(
     store: Store,
     options: FetchOptions,
     settings: DownloadConfig,
-    include: list[str],
-    limit: int | None,
 ) -> None:
     console.print(
         f"[bold]{plural(len(datasets), 'dataset')}[/] -> {store.uri}/{ROOT}", highlight=False
@@ -377,7 +402,7 @@ def _run(
     )
     _warn_unfinished(store, store.uri)
     try:
-        outcomes = _copy(datasets, store, options, settings, include, limit)
+        outcomes = _copy(datasets, store, options, settings)
     except KeyboardInterrupt:
         console.print(
             "[yellow]stopped.[/] Files copied so far are kept; run the same command again "
@@ -394,8 +419,6 @@ def _copy(
     store: Store,
     options: FetchOptions,
     settings: DownloadConfig,
-    include: list[str],
-    limit: int | None,
 ) -> list[Outcome]:
     with DownloadDisplay(len(datasets)) as display:
         bars: dict[str, ProgressBar] = {}
@@ -418,8 +441,6 @@ def _copy(
             root=ROOT,
             workers=settings.workers,
             parallel_datasets=settings.parallel_datasets,
-            include=include,
-            limit=limit,
             progress_for=progress_for,
             on_done=on_done,
         )
@@ -427,7 +448,6 @@ def _copy(
 
 _OUTCOME_STYLE = {
     "complete": ("✓", "green"),
-    "subset": ("✓", "green"),
     "already": ("•", "yellow"),
     "incomplete": ("✗", "red"),
     "credentials": ("!", "yellow"),
@@ -444,19 +464,20 @@ def _print_outcome(outcome: Outcome) -> None:
     d, r = outcome.dataset, outcome.report
     if r is not None:
         text = (
-            f"{d.id} {r.version}: {outcome.status} · {plural(r.recordings, 'recording')} · "
+            f"{d.id} {r.version}: {outcome.status} · {plural(r.files, 'file')} · "
             f"{plural(r.copied, 'file')} ({_size(r.bytes_copied)}) copied"
         )
         if r.skipped:
             text += f" · {r.skipped:,} already there"
         if r.failed:
             text += f" · {plural(len(r.failed), 'file')} failed (run again to retry)"
+        if outcome.message:
+            text += f" · {outcome.message}"
     else:
         label = {
             "already": "skipped, already complete",
             "credentials": "skipped, needs credentials",
             "restricted": "skipped, access restricted by the source",
-            "no-recordings": "no recordings found",
             "manual": "skipped, download by hand",
             "unavailable": "skipped, not available",
             "failed": "failed",
@@ -484,7 +505,7 @@ def _print_summary(outcomes: list[Outcome]) -> None:
         ("Access restricted by the source (request access on its page)", "restricted"),
         ("Download by hand, then `biosignal-data import`", "manual"),
         ("Not available", "unavailable"),
-        ("No recordings at the source (only metadata)", "no-recordings"),
+        ("Copied, but no recordings: no file can hold signals (metadata only)", "no-recordings"),
         ("Failed", "failed"),
         ("Incomplete, some files failed (run again to retry)", "incomplete"),
     ]
@@ -519,46 +540,32 @@ def _warn_untested(outcomes: list[Outcome]) -> None:
         )
 
 
-def _preview(
-    dataset: Dataset, options: FetchOptions, include: list[str], limit: int | None
-) -> None:
-    fetcher = fetcher_for(dataset, options)
+def _preview(dataset: Dataset, store: Store, options: FetchOptions) -> None:
+    """The plan of one dataset against --dest, without copying: version, files, size."""
     try:
-        fetcher.check_access()
-        fetcher.prepare()
-        resolved = fetcher.resolve_version()
-        files = {f.path: f for f in fetcher.list_files()}
+        with planned(dataset, store, options=options, root=ROOT) as plan:
+            _print_plan(plan)
+    except AlreadyComplete as exc:
+        console.print(f"[yellow]•[/] {dataset.id}: {escape(str(exc))}", highlight=False)
     except FetchError as exc:  # needs action, or the source refused: say so, go on
         console.print(
             f"[yellow]![/] {dataset.id}: {escape(str(exc))}", highlight=False, soft_wrap=True
         )
-        return
     except (OSError, RuntimeError, ValueError) as exc:  # as in a real run: report, go on
         console.print(
             f"[red]✗[/] {dataset.id}: {type(exc).__name__}: {escape(str(exc))}",
             highlight=False,
             soft_wrap=True,
         )
-        return
-    finally:
-        fetcher.cleanup(complete=False)
-    typer.secho(f"{dataset.id} {resolved.value}", bold=True)
-    typer.echo(f"  whole dataset   {_describe(list(files.values()))}")
-    if not include and limit is None:
-        return
-    selection = select(list(files), include, limit)
-    chosen = [files[p] for p in selection.paths]
+
+
+def _print_plan(plan: Plan) -> None:
+    unknown = f" ({plan.unknown_sizes} sizes unknown)" if plan.unknown_sizes else ""
+    typer.secho(f"{plan.dataset.id} {plan.version.value}", bold=True)
     typer.echo(
-        f"  would copy      {plural(len(selection.recordings), 'recording')}, {_describe(chosen)}"
+        f"  {plural(len(plan.files), 'file')}, {_size(plan.total_bytes)}{unknown}; "
+        f"{plural(plan.recording_files, 'file')} can hold recordings"
     )
-    for f in chosen:
-        typer.echo(f"    {_size(f.size):>10}  {f.path}")
-
-
-def _describe(files: list[RemoteFile]) -> str:
-    sizes = [f.size for f in files if f.size is not None]
-    unknown = f" ({len(files) - len(sizes)} sizes unknown)" if len(sizes) < len(files) else ""
-    return f"{plural(len(files), 'file')}, {_size(sum(sizes))}{unknown}"
 
 
 # --- status / check ------------------------------------------------------------------------
@@ -574,10 +581,13 @@ def status(
     all_: AllOpt = False,
     config: ConfigOpt = None,
     catalog: CatalogOpt = None,
+    descriptions: DescriptionsOpt = None,
 ) -> None:
     """What is stored in --dest: versions, complete or not, files and size."""
     cfg, cfg_path = _config(config)
-    datasets = _select_datasets(_catalog(catalog), dataset_ids, ids_file, signal, repository, all_)
+    datasets = _select_datasets(
+        _catalog(catalog), dataset_ids, ids_file, signal, repository, all_, descriptions
+    )
     store = _store(dest, cfg, cfg_path)
     missing = 0
     for d in datasets:
@@ -592,7 +602,7 @@ def status(
             key = location.manifest_key if complete else location.partial_manifest_key
             data = store.get_bytes(key)
             files = Manifest.from_json(data).files if data else []
-            state = "complete" if complete else "[yellow]incomplete (subset or interrupted)[/]"
+            state = "complete" if complete else "[yellow]incomplete (interrupted)[/]"
             console.print(
                 f"  {d.id}  {version}  {state}  {len(files):,} files, "
                 f"{_size(sum(f.size for f in files))}",
@@ -622,13 +632,16 @@ def check(
     all_: AllOpt = False,
     config: ConfigOpt = None,
     catalog: CatalogOpt = None,
+    descriptions: DescriptionsOpt = None,
 ) -> None:
     """Check that stored files are all there with the size (and SHA-256) of the manifest.
-    An incomplete version is checked against the files copied so far."""
+    An incomplete (interrupted) version is checked against the files copied so far."""
     if (version is None) == (not latest):
         raise _fail("give either --version <version> or --latest")
     cfg, cfg_path = _config(config)
-    datasets = _select_datasets(_catalog(catalog), dataset_ids, ids_file, signal, repository, all_)
+    datasets = _select_datasets(
+        _catalog(catalog), dataset_ids, ids_file, signal, repository, all_, descriptions
+    )
     if version is not None and len(datasets) != 1:
         raise _fail("--version applies to one dataset; use --latest for several")
     store = _store(dest, cfg, cfg_path)
@@ -693,9 +706,14 @@ def cleanup(
 
 
 @dev.command()
-def validate(catalog: CatalogOpt = None) -> None:
-    """Validate every catalog file."""
-    typer.echo(f"{len(_catalog(catalog))} catalog entries are valid")
+def validate(catalog: CatalogOpt = None, descriptions: DescriptionsOpt = None) -> None:
+    """Validate catalog.yaml and docs/datasets.yaml, and that they list the same datasets."""
+    cat, infos = _catalog(catalog), _infos(descriptions)
+    try:
+        check_pair(cat, infos)
+    except CatalogError as exc:
+        raise _fail(str(exc), 2) from exc
+    typer.echo(f"{len(cat)} datasets: catalog and descriptions are valid and match")
 
 
 @dev.command()
@@ -703,11 +721,17 @@ def docs(
     out: Annotated[Path, typer.Option(help="Output folder.")] = Path("docs/datasets"),
     check: Annotated[bool, typer.Option(help="Fail if the generated docs are stale.")] = False,
     catalog: CatalogOpt = None,
+    descriptions: DescriptionsOpt = None,
 ) -> None:
-    """Generate the dataset pages in docs/datasets/ from the catalog."""
+    """Generate the dataset pages in docs/datasets/ from the two dataset files."""
     from biosignal_data.docsgen import write_docs  # noqa: PLC0415
 
-    stale = write_docs(_catalog(catalog), out, check=check)
+    cat, infos = _catalog(catalog), _infos(descriptions)
+    try:
+        check_pair(cat, infos)
+    except CatalogError as exc:
+        raise _fail(str(exc), 2) from exc
+    stale = write_docs(cat, infos, out, check=check)
     if check and stale:
         raise _fail("stale docs: " + ", ".join(stale) + "; run `biosignal-data dev docs`")
     typer.echo(f"docs {'checked' if check else 'written'} in {out}")

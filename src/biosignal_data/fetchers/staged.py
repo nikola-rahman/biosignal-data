@@ -22,6 +22,7 @@ from biosignal_data.fetchers.base import (
     LocalDirFetcher,
     ManualDownloadError,
     RemoteFile,
+    UnavailableError,
     require_env,
 )
 
@@ -95,6 +96,17 @@ class RsyncFetcher(StagedFetcher):
         # -L follows links (TUH subcorpora link into TUEG); trailing slash copies contents.
         remote = self.source.remote.rstrip("/") + "/"
         _run(["rsync", "-auxL", "--partial", "-e", ssh, remote, str(folder) + "/"], cwd=folder)
+
+
+class UnavailableFetcher(Fetcher):
+    """Source type `unavailable`: there is nothing to download, and no way to get it."""
+
+    def check_access(self) -> None:
+        raise UnavailableError(f"{self.dataset.id} cannot be obtained (see its docs page)")
+
+    def list_files(self) -> Iterator[RemoteFile]:
+        self.check_access()
+        return iter(())
 
 
 class ManualFetcher(StagedFetcher):

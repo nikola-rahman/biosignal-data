@@ -60,6 +60,11 @@ class VersionLocation:
         return f"{self.prefix}/{DATA_DIR}/{safe_relpath(relpath)}"
 
     @property
+    def data_prefix(self) -> str:
+        """The folder of the copied files, for listing them all at once."""
+        return f"{self.prefix}/{DATA_DIR}/"
+
+    @property
     def manifest_key(self) -> str:
         return f"{self.prefix}/{MANIFEST}"
 
