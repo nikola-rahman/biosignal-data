@@ -22,6 +22,7 @@ from s3transfer.manager import TransferConfig, TransferManager
 from s3transfer.subscribers import BaseSubscriber
 
 if TYPE_CHECKING:
+    import zarr.abc.store
     from mypy_boto3_s3 import S3Client
 
 MiB = 1024 * 1024
@@ -65,6 +66,7 @@ class Store(Protocol):
     def sizes(self, prefix: str) -> dict[str, int]: ...
     def unfinished(self, prefix: str) -> tuple[Unfinished, ...]: ...
     def discard(self, item: Unfinished) -> None: ...
+    def zarr_store(self, key: str, *, read_only: bool) -> zarr.abc.store.Store: ...
 
 
 @dataclass(frozen=True)
@@ -232,6 +234,28 @@ class S3Store:
             Bucket=self.bucket, Key=self._key(item.key), UploadId=item.upload_id
         )
 
+    def zarr_store(self, key: str, *, read_only: bool) -> zarr.abc.store.Store:
+        """A Zarr store for the Zarr hierarchy at `key`, reached with the same settings."""
+        if self.settings is None:
+            raise ValueError("S3Store.zarr_store needs the store's settings, not only a client")
+        from zarr.storage import FsspecStore  # noqa: PLC0415 - Zarr loads only when used
+
+        s3 = self.settings
+        return FsspecStore.from_url(
+            f"s3://{self.bucket}/{self._key(key)}",
+            read_only=read_only,
+            storage_options={
+                "key": s3.access_key_id,
+                "secret": s3.secret_access_key,
+                "endpoint_url": s3.endpoint,
+                "client_kwargs": {"region_name": s3.region},
+                "config_kwargs": {
+                    "s3": {"addressing_style": s3.addressing},
+                    "signature_version": "s3v4",
+                },
+            },
+        )
+
 
 class LocalStore:
     """A folder on disk with the same layout. Useful for tests and for staging small sets."""
@@ -309,6 +333,11 @@ class LocalStore:
 
     def discard(self, item: Unfinished) -> None:
         self._path(item.key).unlink(missing_ok=True)
+
+    def zarr_store(self, key: str, *, read_only: bool) -> zarr.abc.store.Store:
+        from zarr.storage import LocalStore as ZarrLocalStore  # noqa: PLC0415
+
+        return ZarrLocalStore(self._path(key), read_only=read_only)
 
 
 class _KnownSize(BaseSubscriber):

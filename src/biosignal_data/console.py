@@ -165,3 +165,63 @@ class ProgressBar:
     def finish(self) -> None:
         """Remove the bar; the CLI prints one result line instead."""
         self._progress.remove_task(self._task)
+
+
+class StandardizeBar:
+    """Implements `standard.convert.StandardProgress`: one bar per dataset, counting
+    recordings; the newest recording in progress is shown beside it."""
+
+    def __init__(self, dataset_id: str) -> None:
+        self._progress = Progress(
+            SpinnerColumn(),
+            TextColumn("{task.description}", table_column=Column(no_wrap=True)),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+            TextColumn(
+                "[dim]{task.fields[current]}",
+                table_column=Column(no_wrap=True, overflow="ellipsis", ratio=1),
+            ),
+            console=console,
+            expand=True,
+            transient=True,
+            disable=not console.is_terminal,
+        )
+        self._dataset_id = dataset_id
+        self._lock = threading.Lock()
+        self._active: list[str] = []
+        self._task = self._progress.add_task(dataset_id, total=None, current="")
+
+    def __enter__(self) -> StandardizeBar:
+        self._progress.start()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self._progress.stop()
+
+    def start(self, units: int, done: int) -> None:
+        self._progress.update(self._task, total=units, completed=done)
+
+    def unit_started(self, unit_id: str) -> None:
+        with self._lock:
+            self._active.append(unit_id)
+            self._show_current()
+
+    def unit_done(self, unit_id: str, ok: bool) -> None:
+        with self._lock:
+            if unit_id in self._active:
+                self._active.remove(unit_id)
+            if ok:
+                self._progress.advance(self._task)
+            self._show_current()
+
+    def _show_current(self) -> None:
+        more = f" (+{len(self._active) - 1})" if len(self._active) > 1 else ""
+        current = f"{self._active[-1]}{more}" if self._active else ""
+        self._progress.update(self._task, current=current)

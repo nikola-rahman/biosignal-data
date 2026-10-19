@@ -6,6 +6,7 @@
     import     copy a dataset you downloaded by hand from a folder to --dest
     status     what is stored in --dest
     check      check stored files against their manifests
+    standardize  convert raw versions in --dest to the standard layer (Zarr + Parquet)
     cleanup    remove unfinished uploads that stopped runs left in --dest
     dev        maintainer commands (validation, generated docs)
 
@@ -44,14 +45,30 @@ from biosignal_data.config import (
     Config,
     ConfigError,
     DownloadConfig,
+    StandardizeConfig,
     default_config_path,
     load_config,
     need,
 )
-from biosignal_data.console import DownloadDisplay, ProgressBar, console, setup_logging
+from biosignal_data.console import (
+    DownloadDisplay,
+    ProgressBar,
+    StandardizeBar,
+    console,
+    setup_logging,
+)
 from biosignal_data.fetchers import FetchError, FetchOptions
 from biosignal_data.ingest import AlreadyComplete, Plan, planned, verify
-from biosignal_data.read.raw import stored_versions
+from biosignal_data.read.raw import complete_versions, stored_versions
+from biosignal_data.standard.convert import (
+    AlreadyStandard,
+    StandardManifest,
+    StandardPlan,
+    convert,
+    iter_not_converted,
+    plan_standard,
+)
+from biosignal_data.standard.layout import StandardLocation
 from biosignal_data.storage.layout import VersionLocation
 from biosignal_data.storage.manifest import Manifest
 from biosignal_data.storage.stores import S3Settings, S3Store, Store, open_store
@@ -664,6 +681,157 @@ def check(
             what = "sizes and SHA-256" if checksums else "sizes"
             console.print(f"[green]✓[/] {d.id} {chosen}: {what} ok{note}", highlight=False)
     raise typer.Exit(1 if bad else 0)
+
+
+@app.command()
+def standardize(
+    dataset_ids: IdsArg = None,
+    dest: Annotated[str | None, typer.Option("--dest", "-d", help=_DEST_HELP)] = None,
+    version: Annotated[
+        str | None,
+        typer.Option("--version", help="This raw version (one dataset only)."),
+    ] = None,
+    ids_file: IdsFileOpt = None,
+    signal: SignalOpt = [],  # noqa: B006
+    repository: RepositoryOpt = [],  # noqa: B006
+    all_: AllOpt = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Show the recordings found; convert nothing."),
+    ] = False,
+    verbose: VerboseOpt = False,
+    config: ConfigOpt = None,
+    catalog: CatalogOpt = None,
+    descriptions: DescriptionsOpt = None,
+) -> None:
+    """Convert raw versions in --dest to the standard layer: signals as Zarr v3 arrays at
+    their native sampling rates with the exact stored values, metadata as Parquet tables.
+
+    The raw version is read from <dest>/raw/, the result written to
+    <dest>/standard/<id>/<raw version>/. Without --version, the newest complete raw version
+    is used. Every raw file is either used or listed in the manifest as not converted, with
+    the reason. If a run stops, run the same command again: it continues where it stopped.
+    See docs/standard-layer.md.
+    """
+    setup_logging(verbose)
+    cfg, cfg_path = _config(config)
+    settings = _need(cfg.standardize, "standardize", cfg_path)
+    staging = _need(cfg.staging, "staging", cfg_path)
+    datasets = _select_datasets(
+        _catalog(catalog), dataset_ids, ids_file, signal, repository, all_, descriptions
+    )
+    if version is not None and len(datasets) != 1:
+        raise _fail("--version applies to one dataset")
+    if not dest:
+        raise _fail("missing --dest (a local folder or s3://bucket[/prefix])")
+    store = _store(dest, cfg, cfg_path, settings.workers)
+    console.print(
+        f"settings from {cfg_path}: workers {settings.workers}; raw files are fetched to "
+        f"{staging.dir.expanduser() / 'standardize'}",
+        highlight=False,
+        soft_wrap=True,
+    )
+    failed = 0
+    for d in datasets:
+        try:
+            ok = _standardize_one(d.id, version, store, settings, staging.dir, dry_run)
+        except KeyboardInterrupt:
+            console.print(
+                "[yellow]stopped.[/] Recordings finished so far are kept; run the same "
+                "command again to continue.",
+                highlight=False,
+            )
+            raise typer.Exit(130) from None
+        failed += not ok
+    raise typer.Exit(1 if failed else 0)
+
+
+def _standardize_one(
+    dataset_id: str,
+    version: str | None,
+    store: Store,
+    settings: StandardizeConfig,
+    staging_dir: Path,
+    dry_run: bool,
+) -> bool:
+    """Plan (and unless `dry_run`, convert) one dataset; print one result line."""
+    if version is None:
+        versions = complete_versions(store, dataset_id, ROOT)
+        if not versions:
+            console.print(
+                f"[yellow]![/] {dataset_id}: no complete raw version",
+                highlight=False,
+                soft_wrap=True,
+            )
+            return True
+        version = versions[-1]
+        console.print(
+            f"[dim]{dataset_id}: newest complete raw version {version} (no --version given)",
+            highlight=False,
+            soft_wrap=True,
+        )
+    try:
+        plan = plan_standard(store, dataset_id, version, raw_root=ROOT)
+    except AlreadyStandard:
+        console.print(
+            f"[green]✓[/] {dataset_id} {version}: already complete", highlight=False, soft_wrap=True
+        )
+        return True
+    except FileNotFoundError as exc:
+        console.print(f"[red]✗[/] {dataset_id}: {exc}", highlight=False, soft_wrap=True)
+        return False
+    if dry_run:
+        _print_standard_plan(plan)
+        return True
+    with StandardizeBar(f"{dataset_id} [dim]{version}") as bar:
+        report = convert(
+            plan,
+            store,
+            workers=settings.workers,
+            work_dir=staging_dir.expanduser() / "standardize",
+            progress=bar,
+        )
+    if not report.complete:
+        console.print(
+            f"[red]✗[/] {dataset_id} {version}: {plural(len(report.failed), 'recording')} "
+            f"failed of {report.units:,}; run again to retry them",
+            highlight=False,
+            soft_wrap=True,
+        )
+        for unit_id, error in sorted(report.failed.items()):
+            console.print(f"    {unit_id}: {error}", highlight=False, soft_wrap=True)
+        return False
+    location = StandardLocation(dataset_id, version)
+    manifest = StandardManifest.model_validate_json(store.get_bytes(location.manifest_key) or b"")
+    console.print(
+        f"[green]✓[/] {dataset_id} {version}: {plural(manifest.recordings, 'recording')}, "
+        f"{plural(manifest.channels, 'channel')}, {plural(manifest.events, 'event')} -> "
+        f"{report.location}",
+        highlight=False,
+        soft_wrap=True,
+    )
+    for reason, count in iter_not_converted(manifest):
+        console.print(f"    [yellow]not converted[/]: {plural(count, 'file')}: {reason}",
+                      highlight=False, soft_wrap=True)  # fmt: skip
+    for problem in manifest.problems:
+        console.print(f"    [yellow]problem[/]: {problem}", highlight=False, soft_wrap=True)
+    return True
+
+
+def _print_standard_plan(plan: StandardPlan) -> None:
+    formats: dict[str, int] = {}
+    for unit in plan.units:
+        formats[unit.format] = formats.get(unit.format, 0) + 1
+    annotations = sum(len(u.annotations) for u in plan.units)
+    found = ", ".join(f"{n:,} {fmt.upper()}" for fmt, n in sorted(formats.items()))
+    console.print(
+        f"{plan.raw.location.dataset_id} {plan.raw.location.version}: "
+        f"{plural(len(plan.units), 'recording')} ({found or 'none'}), "
+        f"{plural(annotations, 'annotation file')}; {len(plan.to_convert):,} to convert, "
+        f"{len(plan.done):,} done by an earlier run",
+        highlight=False,
+        soft_wrap=True,
+    )
 
 
 def _warn_unfinished(store: Store, dest: str) -> None:

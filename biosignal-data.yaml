@@ -13,6 +13,9 @@ download:
   workers: 16                  # parallel file downloads, shared by all datasets of a run
   parallel_datasets: 6         # datasets listed and copied at the same time
 
+standardize:
+  workers: 4                   # recordings converted at the same time
+
 # Disk for TUH EEG: rsync writes files here before they are uploaded.
 staging:
   dir: ~/biosignal-staging

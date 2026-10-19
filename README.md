@@ -101,6 +101,21 @@ s3://<bucket>/raw/<repository>/<dataset>/<version>/
 
 Details and the manifest schema: [`docs/raw-layer.md`](docs/raw-layer.md).
 
+## The standard layer
+
+`biosignal-data standardize <id> --dest s3://<bucket>` converts a raw version: signals as
+Zarr v3 arrays at their native sampling rates with the exact stored values, metadata as
+Parquet tables, every raw file either used or listed with the reason it was not.
+
+```
+s3://<bucket>/standard/<repository>/<dataset>/<raw version>/
+    recordings.parquet, channels.parquet, events.parquet
+    signals/<recording>.zarr/<rate>Hz
+    _manifest.json, _SUCCESS
+```
+
+Details: [`docs/standard-layer.md`](docs/standard-layer.md).
+
 ## Repository map
 
 ```

@@ -22,6 +22,30 @@ Things that are not settled yet, in rough order of how much they matter.
 8. **Very large file counts.** MIMIC-III Waveform has millions of files; the partial manifest
    is rewritten every 30 s, which gets slow at that scale.
 
+9. **The standard layer converts WFDB and EDF/BDF only.** Multi-segment WFDB records and
+   discontinuous EDF+ are listed as not converted; adding them must keep their gaps explicit.
+   BIDS (OpenNeuro, NEMAR), NWB, MATLAB and the other formats come next. Subjects, and the
+   mapping of channel and event names to a common vocabulary, are not done yet.
+
+## Research questions for the model
+
+The data layers keep everything native (rates, values, units, channel metadata, times) so
+that these stay open:
+
+- **Standardize or not.** The usual practice (one sampling rate, a fixed montage, z-scored
+  amplitudes, fixed windows) loses information. The alternative: positions in seconds,
+  tokens at the native rate with dynamic patch sizes, one token stream per channel with a
+  metadata embedding (type, position, reference, unit, filters), physical units with the
+  scale as an input, and packed sequences of different lengths. Compare both on tasks that
+  need high frequencies (e.g. high-frequency oscillations in EEG, EMG).
+- **Time scales.** The finest detail (patch size and rate), the base context, and whether a
+  long-context level over window embeddings (hours, days) is part of the foundation model.
+- **Annotations.** Self-supervised pretraining on signals only; annotations for downstream
+  tasks. Datasets used for both are split by subject.
+- **The target.** At least 50 % less error than the best published results, on a fixed
+  benchmark suite with the same labels and splits. Some tasks have a ceiling set by how
+  well human experts agree (e.g. sleep staging).
+
 ## Backlog
 
 - **Request access to the gated datasets** (95 need a person): NSRR data requests per

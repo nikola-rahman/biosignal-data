@@ -28,6 +28,11 @@ dependencies = [
     "scipy>=1.11", # MATLAB v4-v7
     "wfdb>=4.1", # PhysioNet WFDB
     "rich>=13",
+    # The standard layer.
+    "pyedflib>=0.1.38", # EDF/BDF digital samples, exactly as stored
+    "pyarrow>=16", # Parquet tables
+    "s3fs>=2024.6", # S3 access for Zarr
+    "zarr>=3.1.3", # signal arrays
 ]
 
 [project.scripts]
@@ -77,7 +82,7 @@ plugins = ["pydantic.mypy"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["nemar.*", "dandi.*", "huggingface_hub.*", "kaggle.*", "kagglesdk.*", "mne.*", "mne_bids.*", "wfdb.*", "pynwb.*", "h5py.*", "scipy.*", "pandas.*", "moto.*"]
+module = ["nemar.*", "dandi.*", "huggingface_hub.*", "kaggle.*", "kagglesdk.*", "mne.*", "mne_bids.*", "wfdb.*", "pynwb.*", "h5py.*", "scipy.*", "pandas.*", "moto.*", "pyarrow.*", "pyedflib.*", "s3fs.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 
 from biosignal_data.paths import glob_match
@@ -86,6 +87,16 @@ class RawDataset:
     def files(self) -> list[FileEntry]:
         return self.manifest.files
 
+    @cached_property
+    def _by_path(self) -> dict[str, FileEntry]:
+        return {f.path: f for f in self.manifest.files}
+
+    def entry(self, path: str) -> FileEntry:
+        """The manifest entry of `path`."""
+        if path not in self._by_path:
+            raise FileNotFoundError(f"{path} is not in the manifest of {self.location.prefix}")
+        return self._by_path[path]
+
     def glob(self, pattern: str) -> list[FileEntry]:
         """Files whose path matches `pattern` (`*` inside a folder, `**` across folders)."""
         return [f for f in self.files if glob_match(f.path, pattern)]
@@ -101,10 +112,13 @@ class RawDataset:
 
     def local_path(self, path: str, *, verify: bool = True) -> Path:
         """Download `path` into the cache (once) and return its local path."""
-        entry = next((f for f in self.files if f.path == path), None)
-        if entry is None:
-            raise FileNotFoundError(f"{path} is not in the manifest of {self.location.prefix}")
-        target = self.local_root / path
+        return self.fetch_to(path, self.local_root, verify=verify)
+
+    def fetch_to(self, path: str, folder: Path, *, verify: bool = True) -> Path:
+        """Download `path` to `folder/<path>` unless it is there with the right size, and
+        return that local path. The SHA-256 is checked against the manifest."""
+        entry = self.entry(path)
+        target = folder / path
         if target.is_file() and target.stat().st_size == entry.size:
             return target
         target.parent.mkdir(parents=True, exist_ok=True)

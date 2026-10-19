@@ -1,0 +1,144 @@
+"""The Parquet tables of the standard layer: their schemas, and their rows for one recording.
+
+Format-specific fields are kept as JSON text in the `source` columns, as the source wrote
+them, so that nothing in a header is lost.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+from typing import Any
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from biosignal_data.standard.sources import Event, Source
+
+RECORDINGS = pa.schema(
+    [
+        ("recording_id", pa.string()),
+        ("format", pa.string()),
+        ("start_time", pa.timestamp("us")),  # as the source wrote it, without a time zone
+        ("duration_s", pa.float64()),
+        ("arrays", pa.list_(pa.string())),  # array names in the Zarr group, e.g. "250Hz"
+        ("n_channels", pa.int32()),
+        ("signals", pa.string()),  # the Zarr group, relative to the version folder
+        ("source_files", pa.list_(pa.string())),  # raw files it was made from
+        ("source_sha256", pa.list_(pa.string())),
+        ("source_header", pa.string()),  # the header text, as written
+    ]
+)
+CHANNELS = pa.schema(
+    [
+        ("recording_id", pa.string()),
+        ("array", pa.string()),
+        ("index", pa.int32()),  # row in the array
+        ("name", pa.string()),  # as the source wrote it
+        ("standard_name", pa.string()),  # a mapping added later; empty for now
+        ("unit", pa.string()),
+        ("sampling_rate", pa.float64()),
+        ("dtype", pa.string()),
+        ("scale", pa.float64()),  # physical = stored * scale + offset
+        ("offset", pa.float64()),
+        ("invalid_value", pa.int64()),
+        ("source", pa.string()),
+    ]
+)
+EVENTS = pa.schema(
+    [
+        ("recording_id", pa.string()),
+        ("file", pa.string()),
+        ("annotator", pa.string()),
+        ("onset_s", pa.float64()),
+        ("duration_s", pa.float64()),
+        ("label", pa.string()),
+        ("text", pa.string()),
+        ("channel", pa.string()),
+        ("sample", pa.int64()),
+        ("source", pa.string()),
+    ]
+)
+SCHEMAS = {"recordings": RECORDINGS, "channels": CHANNELS, "events": EVENTS}
+
+
+def recording_table(
+    recording_id: str, source: Source, signals: str, files: dict[str, str]
+) -> pa.Table:
+    """`files`: every raw file the recording was made from, with its SHA-256."""
+    return pa.Table.from_pylist(
+        [
+            {
+                "recording_id": recording_id,
+                "format": source.format,
+                "start_time": source.start_time,
+                "duration_s": source.duration_s,
+                "arrays": [g.name for g in source.groups],
+                "n_channels": sum(len(g.channels) for g in source.groups),
+                "signals": signals,
+                "source_files": list(files),
+                "source_sha256": list(files.values()),
+                "source_header": source.header,
+            }
+        ],
+        schema=RECORDINGS,
+    )
+
+
+def channel_table(recording_id: str, source: Source) -> pa.Table:
+    return pa.Table.from_pylist(
+        [
+            {
+                "recording_id": recording_id,
+                "array": g.name,
+                "index": i,
+                "name": c.name,
+                "standard_name": None,
+                "unit": c.unit,
+                "sampling_rate": g.rate,
+                "dtype": g.dtype.name,
+                "scale": c.scale,
+                "offset": c.offset,
+                "invalid_value": c.invalid_value,
+                "source": _json(c.source),
+            }
+            for g in source.groups
+            for i, c in enumerate(g.channels)
+        ],
+        schema=CHANNELS,
+    )
+
+
+def event_table(recording_id: str | None, events: list[Event]) -> pa.Table:
+    return pa.Table.from_pylist(
+        [
+            {
+                "recording_id": recording_id,
+                "file": e.file,
+                "annotator": e.annotator,
+                "onset_s": e.onset_s,
+                "duration_s": e.duration_s,
+                "label": e.label,
+                "text": e.text,
+                "channel": e.channel,
+                "sample": e.sample,
+                "source": _json(e.source) if e.source else None,
+            }
+            for e in events
+        ],
+        schema=EVENTS,
+    )
+
+
+def to_parquet(table: pa.Table) -> bytes:
+    out = io.BytesIO()
+    pq.write_table(table, out, compression="zstd")
+    return out.getvalue()
+
+
+def from_parquet(data: bytes, table: str) -> pa.Table:
+    return pq.read_table(io.BytesIO(data), schema=SCHEMAS[table])
+
+
+def _json(value: dict[str, Any]) -> str:
+    return json.dumps(value, sort_keys=True, default=str)

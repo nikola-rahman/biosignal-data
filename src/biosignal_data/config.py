@@ -34,6 +34,10 @@ class DownloadConfig(_Section):
     parallel_datasets: int = Field(ge=1)  # datasets listed and copied at the same time
 
 
+class StandardizeConfig(_Section):
+    workers: int = Field(ge=1)  # recordings converted at the same time
+
+
 class StagingConfig(_Section):
     """Disk for the sources whose tools must write files before upload (TUH, NSRR, Kaggle)."""
 
@@ -48,6 +52,7 @@ class ReadConfig(_Section):
 class Config(_Section):
     s3: S3Config | None = None
     download: DownloadConfig | None = None
+    standardize: StandardizeConfig | None = None
     staging: StagingConfig | None = None
     read: ReadConfig | None = None
 
