@@ -23,7 +23,8 @@ quality:
   flat_s: 1.0                  # a run of one stored value counts as flat from 1 s on
   percentile_sample: 100000    # valid values per channel for the 1st, 50th, 99th percentile
   seed: 0
-  workers: 16                  # recordings measured at the same time; most time is waiting for S3
+  workers: 8                   # recordings measured at the same time; more made the S3 storage
+                               # answer 429 Too Many Requests, with other jobs (2026-10-20)
 
 # Disk for TUH EEG: rsync writes files here before they are uploaded.
 staging:

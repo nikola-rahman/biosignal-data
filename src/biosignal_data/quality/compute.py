@@ -340,9 +340,12 @@ def measure(
     by_recording: dict[str, list[dict[str, Any]]] = {}
     for c in channels:
         by_recording.setdefault(c["recording_id"], []).append(c)
+    # One listing, not a request per recording: thousands of small requests at once made
+    # the storage answer 429 Too Many Requests (challenge-2017, 2026-10-20).
+    stored = set(store.list(f"{location.prefix}/_parts/"))
     todo = [
         r["recording_id"] for r in recordings
-        if r["signals"] and not store.exists(location.part_key(r["recording_id"]))
+        if r["signals"] and location.part_key(r["recording_id"]) not in stored
     ]  # fmt: skip
     done = sum(1 for r in recordings if r["signals"]) - len(todo)
 
