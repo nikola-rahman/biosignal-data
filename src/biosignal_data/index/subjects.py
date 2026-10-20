@@ -21,17 +21,27 @@ class SubjectError(ValueError):
     """A recording id does not match its dataset's subject pattern."""
 
 
-def subject_of(dataset_id: str, recording_id: str, rule: SubjectRule | None) -> tuple[str, bool]:
-    """The qualified subject id of a recording, and whether the source states it."""
-    if rule is None or rule.rule is not SubjectRuleKind.PATTERN:
+def subject_of(
+    dataset_id: str,
+    recording_id: str,
+    rule: SubjectRule | None,
+    table: dict[str, str] | None = None,
+) -> tuple[str, bool]:
+    """The qualified subject id of a recording, and whether the source states it. `table`:
+    for a table rule, the rule's table read as {recording column: subject column}."""
+    if rule is None or rule.pattern is None:
         certain = rule is not None and rule.rule is SubjectRuleKind.ONE_PER_RECORDING
         return f"{dataset_id}:{recording_id}", certain
-    if rule.pattern is None:  # the rule's validator requires it; this is for the type
-        raise ValueError(f"{dataset_id}: a pattern rule without a pattern")
     match = re.search(rule.pattern, recording_id)
     if match is None:
         raise SubjectError(f"{dataset_id}: {recording_id!r} does not match {rule.pattern!r}")
     subject = match.group(1)
+    if rule.rule is SubjectRuleKind.TABLE:
+        if table is None:
+            raise ValueError(f"{dataset_id}: a table rule needs its table")
+        if subject not in table:
+            raise SubjectError(f"{dataset_id}: {subject!r} is not in the subject table")
+        subject = table[subject]
     for group in rule.same_person:
         if subject in group:
             subject = group[0]  # one id for one person

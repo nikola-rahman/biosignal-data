@@ -1,13 +1,22 @@
 # Rules for the training index (biosignal-data index), per dataset: how recordings map to
-# persons (for splits by person), and channel types that only the dataset's own
-# documentation can tell. Every rule names its source; `certain: true` only when the source
-# states it, with the quote in `evidence`. See docs/training-layer.md.
+# persons (for splits by person), recordings to leave out, and channel types that only the
+# dataset's own documentation can tell. Every rule names its source; `certain: true` only
+# when the source states it, with the quote in `evidence`. See docs/training-layer.md.
 #
 # A dataset without an entry: each recording is its own subject, not certain; channel types
 # from the general rules in src/biosignal_data/index/signals.py only.
+#
+# Quotes checked against the pages on 2026-10-20; patterns checked against every recording.
 
 datasets:
   - id: physionet/adfecgdb
+    subject:
+      rule: one_per_recording  # 5 recordings
+      certain: true
+      source: https://physionet.org/content/adfecgdb/1.0.0/
+      evidence: >-
+        contains multichannel fetal electrocardiogram (FECG) recordings obtained from 5
+        different women in labor, between 38 and 41 weeks of gestation.
     channels:
       - name: '^Direct_\d+$'
         type: ecg
@@ -17,3 +26,205 @@ datasets:
         type: ecg
         source: https://physionet.org/content/adfecgdb/1.0.0/
         notes: abdominal ECG (maternal and fetal), not breathing effort
+
+  - id: physionet/afdb
+    subject:
+      rule: unknown
+      certain: false
+      source: https://physionet.org/content/afdb/1.0.0/
+      notes: >-
+        "25 long-term ECG recordings of human subjects"; the page does not say whether two
+        recordings come from one person.
+
+  - id: physionet/apnea-ecg
+    subject:
+      rule: pattern
+      pattern: '^([abcx]\d{2})r?$'  # a01, and a01r: the respiration record of a01
+      certain: false
+      source: https://physionet.org/content/apnea-ecg/1.0.0/
+      notes: >-
+        A record and its respiration record (a01, a01r) are one night of one person. The
+        page does not say whether the learning set (a, b, c) and the test set (x) share
+        persons.
+    exclude:
+      - pattern: '^c05$'
+        reason: a part of another recording of the dataset
+        source: https://physionet.org/content/apnea-ecg/1.0.0/
+        evidence: >-
+          In April 2013, Chiu-wen Wu reported that training set control records c05 and c06
+          come from the same original recording (c05 begins 80 seconds later than c06).
+        checked: >-
+          2026-10-20: all 2,793,000 samples of c05 equal those of c06 from 80 s (8,000
+          samples) on; c06 is 11,000 samples longer.
+
+  - id: physionet/autonomic-aging-cardiovascular
+    subject:
+      rule: one_per_recording  # 1,121 recordings
+      certain: true
+      source: https://physionet.org/content/autonomic-aging-cardiovascular/1.0.0/
+      evidence: >-
+        Electrocardiogram and continuous non-invasive blood pressure signals were recorded
+        simultaneously at rest in 1,121 healthy volunteers.
+
+  - id: physionet/brugada-huca
+    subject:
+      rule: pattern
+      pattern: '^files/(\d+)/\d+$'
+      certain: true
+      source: https://physionet.org/content/brugada-huca/1.0.0/
+      evidence: Each row corresponds to one recording, identified by a unique patient_id.
+
+  - id: physionet/butqdb
+    subject:
+      rule: pattern
+      pattern: '^(\d{3})\d{3}/'
+      certain: true
+      source: https://physionet.org/content/butqdb/1.0.0/
+      evidence: >-
+        The names of the recordings are six-digit numbers where the first three numbers are
+        unique subject identifiers and the next three numbers indicate the measurement
+        number of this subject.
+
+  - id: physionet/capslpdb
+    subject:
+      rule: unknown
+      certain: false
+      source: https://physionet.org/content/capslpdb/1.0.0/
+      notes: >-
+        108 recordings, 16 healthy subjects and "92 pathological recordings"; the page does
+        not say that each pathological recording is a different person.
+
+  - id: physionet/cebsdb
+    subject:
+      rule: pattern
+      pattern: '^[bmp](\d{3})$'
+      certain: true
+      source: https://physionet.org/files/cebsdb/1.0.0/info.txt
+      evidence: >-
+        Records are labelled either as b***, m*** or p*** where *** varies from 001 to 020
+        and identifies the subject under measurement.
+
+  - id: physionet/challenge-2017
+    subject:
+      rule: unknown
+      certain: false
+      source: https://physionet.org/content/challenge-2017/1.0.0/
+      notes: The page gives no subjects for the 8,528 training recordings.
+
+  - id: physionet/challenge-2018
+    subject:
+      rule: pattern
+      pattern: '^(?:training|test)/([^/]+)/'
+      certain: true
+      source: https://physionet.org/content/challenge-2018/1.0.0/
+      evidence: Each directory contains one subdirectory per subject (e.g. training/tr03-0005 ).
+
+  - id: physionet/chbmit
+    subject:
+      rule: pattern
+      pattern: '^(chb\d{2})/'
+      same_person: [[chb01, chb21]]
+      certain: true
+      source: https://physionet.org/content/chbmit/1.0.0/
+      evidence: Case chb21 was obtained 1.5 years after case chb01, from the same female subject.
+
+  - id: physionet/ctu-uhb-ctgdb
+    subject:
+      rule: unknown
+      certain: false
+      source: https://physionet.org/content/ctu-uhb-ctgdb/1.0.0/
+      notes: >-
+        552 recordings selected from 9164; the page does not say whether one woman or one
+        fetus has more than one.
+
+  - id: physionet/ecgiddb
+    subject:
+      rule: pattern
+      pattern: '^(Person_\d{2})/'
+      certain: true
+      source: https://physionet.org/content/ecgiddb/1.0.0/
+      evidence: >-
+        The number of records for each person varies from 2 (collected during one day) to
+        20
+      notes: 310 recordings in 90 folders Person_01 to Person_90, from 90 persons.
+
+  - id: physionet/edb
+    subject:
+      rule: pattern
+      pattern: '^(e\d{4})$'
+      same_person:
+        - [e0118, e0119, e0120, e0121, e0122]
+        - [e0123, e0124, e0125, e0126]
+        - [e0129, e0133]
+        - [e0136, e0139]
+        - [e0147, e0148]
+        - [e0154, e0155]
+        - [e0162, e0163]
+      certain: true
+      source: https://physionet.org/content/edb/1.0.0/
+      evidence: >-
+        Records e0118-e0122 come from the same subject; also records e0123-e0126, records
+        e0129 and e0133, records e0136 and e0139, records e0147 and e0148, records e0154 and
+        e0155, and records e0162 and e0163.
+
+  - id: physionet/eegmmidb
+    subject:
+      rule: pattern
+      pattern: '^(S\d{3})/'
+      certain: false
+      source: https://physionet.org/content/eegmmidb/1.0.0/
+      notes: >-
+        "Each subject completed 14 experimental runs"; the files are in folders S001 to
+        S109 of 14 runs each, but the page does not say in words that a folder is a subject.
+
+  - id: physionet/ephnogram
+    subject:
+      rule: table
+      pattern: '^WFDB/(ECGPCG\d{4})$'
+      table:
+        file: ECGPCGSpreadsheet.csv
+        delimiter: ','
+        recording_column: Record Name
+        subject_column: Subject ID
+      certain: true
+      source: https://physionet.org/content/ephnogram/1.0.0/
+      evidence: >-
+        The description of the corresponding physical activities and the unique subject IDs
+        are provided in the spreadsheet: ECGPCGSpreadsheet.csv .
+      notes: >-
+        The page says 24 subjects and 69 recordings; the spreadsheet has 25 subjects and 70
+        records.
+
+  - id: physionet/fantasia
+    subject:
+      rule: one_per_recording  # 40 recordings f1y01 ... f2o10; subset/ has no signals
+      certain: true
+      source: https://physionet.org/content/fantasia/1.0.0/
+      evidence: >-
+        Twenty young (21 - 34 years old) and twenty elderly (68 - 85 years old)
+        rigorously-screened healthy subjects underwent 120 minutes of continuous supine
+        resting
+
+  - id: physionet/grabmyo
+    subject:
+      rule: pattern
+      pattern: '^Session[1-3]/session[1-3]_(participant\d+)/'
+      certain: true
+      source: https://physionet.org/content/grabmyo/1.0.1/
+      evidence: Within each session folder, there are 43 sub-folders for each of the participants.
+
+  - id: physionet/mitdb
+    subject:
+      rule: pattern
+      pattern: '^(\d{3})$'
+      same_person: [['201', '202']]
+      certain: true
+      source: https://physionet.org/content/mitdb/1.0.0/
+      evidence: Records 201 and 202 originate from the same subject
+    exclude:
+      - pattern: '^x_mitdb/'
+        reason: a part of another recording of the dataset
+        source: https://physionet.org/content/mitdb/1.0.0/
+        checked: >-
+          2026-10-20: each of the 23 x_mitdb records (x_108 ... x_234) equals the first
+          216,000 samples (10 min) of the record of the same number, both signals.

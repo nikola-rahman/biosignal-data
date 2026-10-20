@@ -121,7 +121,7 @@ def test_the_index_points_at_the_standard_layer_with_subjects_splits_and_types(
     )  # fmt: skip
     store.put_bytes(f"{prefix}/recordings.parquet", _parquet(recordings))
     store.put_bytes(f"{prefix}/channels.parquet", _parquet(channels))
-    store.put_bytes(f"{prefix}/_manifest.json", b"{}")
+    store.put_bytes(f"{prefix}/_manifest.json", b'{"raw_version": "1.0.0"}')
     store.put_bytes(f"{prefix}/_SUCCESS", b"")
     rules_path = tmp_path / "index.yaml"
     rules_path.write_text(
@@ -167,3 +167,78 @@ def test_index_rules_file_errors_name_the_entry(tmp_path: Path) -> None:
     )
     with pytest.raises(RulesError, match="a/b"):
         IndexRules.load(path)
+
+
+def test_a_table_rule_takes_the_subject_from_a_table() -> None:
+    rule = _rule(
+        rule="table", pattern=r"/(ECGPCG\d{4})$",
+        table={"file": "s.csv", "delimiter": ",", "recording_column": "Record Name",
+               "subject_column": "Subject ID"},
+    )  # fmt: skip
+    table = {"ECGPCG0013": "S002", "ECGPCG0049": "S002"}
+    assert subject_of("p/e", "WFDB/ECGPCG0049", rule, table) == ("p/e:S002", True)
+    with pytest.raises(ValueError, match="not in the subject table"):
+        subject_of("p/e", "WFDB/ECGPCG0001", rule, table)
+    with pytest.raises(ValueError, match="exactly when rule is table"):
+        _rule(rule="pattern", pattern="(x)", table=rule.table)
+
+
+def test_an_exclude_rule_needs_evidence_or_a_check(tmp_path: Path) -> None:
+    path = tmp_path / "index.yaml"
+    path.write_text(
+        "datasets:\n  - id: a/b\n    exclude:\n"
+        "      - {pattern: '^x_', reason: copies, source: 'https://physionet.org/'}\n"
+    )
+    with pytest.raises(RulesError, match="needs `evidence` or `checked`"):
+        IndexRules.load(path)
+
+
+def test_excluded_recordings_and_subjects_from_a_raw_table(
+    store: LocalStore, tmp_path: Path
+) -> None:
+    prefix = "standard/physionet/ephnogram/1.0.0"
+    rows = [
+        {"recording_id": rec, "format": "wfdb", "duration_s": 60.0, "arrays": ["8000Hz"],
+         "n_channels": 1, "signals": f"signals/{rec}.zarr", "source_files": [],
+         "source_sha256": []}
+        for rec in ("WFDB/ECGPCG0001", "WFDB/ECGPCG0002", "WFDB/x_ECGPCG0002")
+    ]  # fmt: skip
+    store.put_bytes(
+        f"{prefix}/recordings.parquet",
+        _parquet(pa.Table.from_pylist(rows, schema=tables.RECORDINGS)),
+    )
+    store.put_bytes(
+        f"{prefix}/channels.parquet",
+        _parquet(pa.Table.from_pylist([], schema=tables.CHANNELS)),
+    )
+    store.put_bytes(f"{prefix}/_manifest.json", b'{"raw_version": "1.0.0"}')
+    store.put_bytes(f"{prefix}/_SUCCESS", b"")
+    store.put_bytes(
+        "raw/physionet/ephnogram/1.0.0/data/t.csv",
+        "﻿Record Name,Subject ID\nECGPCG0001,S001\nECGPCG0002,S001\n".encode(),
+    )
+    rules_path = tmp_path / "index.yaml"
+    rules_path.write_text(
+        "datasets:\n"
+        "  - id: physionet/ephnogram\n"
+        "    subject:\n"
+        "      rule: table\n"
+        "      pattern: '^WFDB/(ECGPCG\\d{4})$'\n"
+        "      table: {file: t.csv, delimiter: ',', recording_column: Record Name,\n"
+        "              subject_column: Subject ID}\n"
+        "      certain: true\n"
+        "      source: https://physionet.org/content/ephnogram/1.0.0/\n"
+        "      evidence: the unique subject IDs are provided in the spreadsheet\n"
+        "    exclude:\n"
+        "      - pattern: '/x_'\n"
+        "        reason: an excerpt of another recording\n"
+        "        source: https://physionet.org/content/ephnogram/1.0.0/\n"
+        "        checked: samples equal\n"
+    )
+
+    m = build_index(
+        store, ["physionet/ephnogram"], IndexRules.load(rules_path), version="2026-10-20"
+    ).manifest
+
+    assert (m.recordings, m.subjects, m.subjects_assumed) == (2, 1, 0)
+    assert m.excluded == {"physionet/ephnogram: an excerpt of another recording": 1}

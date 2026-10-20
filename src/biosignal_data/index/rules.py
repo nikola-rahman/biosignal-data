@@ -30,6 +30,7 @@ class RulesError(ValueError):
 
 class SubjectRuleKind(StrEnum):
     PATTERN = "pattern"  # a regex on the recording id; group 1 is the subject
+    TABLE = "table"  # a table of the raw dataset; `pattern` group 1 is the key in it
     ONE_PER_RECORDING = "one_per_recording"  # the documentation says so
     UNKNOWN = "unknown"  # the documentation does not say: one per recording, not certain
 
@@ -38,9 +39,19 @@ class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class SubjectTable(_Model):
+    """A delimited text file of the raw dataset (under data/), one row per recording."""
+
+    file: str
+    delimiter: str
+    recording_column: str  # holds group 1 of the rule's pattern
+    subject_column: str
+
+
 class SubjectRule(_Model):
     rule: SubjectRuleKind
     pattern: str | None = None
+    table: SubjectTable | None = None
     same_person: list[list[str]] = Field(default_factory=list)  # subject ids of one person
     certain: bool
     source: HttpUrl
@@ -49,8 +60,11 @@ class SubjectRule(_Model):
 
     @model_validator(mode="after")
     def _check(self) -> SubjectRule:
-        if (self.rule is SubjectRuleKind.PATTERN) != (self.pattern is not None):
-            raise ValueError("`pattern` is given exactly when rule is pattern")
+        with_pattern = self.rule in (SubjectRuleKind.PATTERN, SubjectRuleKind.TABLE)
+        if with_pattern != (self.pattern is not None):
+            raise ValueError("`pattern` is given exactly when rule is pattern or table")
+        if (self.rule is SubjectRuleKind.TABLE) != (self.table is not None):
+            raise ValueError("`table` is given exactly when rule is table")
         if self.pattern is not None and re.compile(self.pattern).groups < 1:
             raise ValueError("`pattern` needs a group: group 1 is the subject id")
         if self.rule is SubjectRuleKind.UNKNOWN and self.certain:
@@ -67,10 +81,33 @@ class ChannelRule(_Model):
     notes: str | None = None
 
 
+class ExcludeRule(_Model):
+    """Recordings left out of the index: copies of, or extracts from, other recordings of
+    the same dataset. Leaving a recording out is a claim about the data, so it needs a
+    source and a quote, or `checked`: how the samples were compared."""
+
+    pattern: str  # a regex on the recording id
+    reason: str
+    source: HttpUrl
+    evidence: str | None = None
+    checked: str | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> ExcludeRule:
+        re.compile(self.pattern)
+        if not (self.evidence or self.checked):
+            raise ValueError("an exclude rule needs `evidence` or `checked`")
+        return self
+
+
 class DatasetRules(_Model):
     id: str
     subject: SubjectRule | None = None
+    exclude: list[ExcludeRule] = Field(default_factory=list)
     channels: list[ChannelRule] = Field(default_factory=list)
+
+    def excluded(self, recording_id: str) -> ExcludeRule | None:
+        return next((e for e in self.exclude if re.search(e.pattern, recording_id)), None)
 
 
 @dataclass(frozen=True)

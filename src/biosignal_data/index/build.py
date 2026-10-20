@@ -12,11 +12,13 @@ layer, which a data loader reads (see training/). An index is immutable once com
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import io
+import json
 import logging
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -25,13 +27,18 @@ import pyarrow.parquet as pq
 from pydantic import BaseModel, ConfigDict
 
 from biosignal_data import __version__
-from biosignal_data.index.rules import IndexRules, channel_overrides
+from biosignal_data.index.rules import (
+    DatasetRules,
+    IndexRules,
+    SubjectTable,
+    channel_overrides,
+)
 from biosignal_data.index.signals import signal_type
 from biosignal_data.index.subjects import split_of, subject_of
 from biosignal_data.read.raw import complete_versions
 from biosignal_data.standard.layout import ROOT as STANDARD_ROOT
 from biosignal_data.standard.layout import StandardLocation
-from biosignal_data.storage.layout import SUCCESS, retrieval_version
+from biosignal_data.storage.layout import SUCCESS, VersionLocation, retrieval_version
 from biosignal_data.storage.manifest import utcnow
 from biosignal_data.storage.stores import Store
 
@@ -86,6 +93,7 @@ class IndexManifest(BaseModel):
     datasets: dict[str, str]  # dataset id -> standard version used
     standard_manifests_sha256: dict[str, str]
     left_out: dict[str, str]  # dataset id -> why (e.g. no complete standard version)
+    excluded: dict[str, int]  # "dataset: reason" -> recordings left out by an exclude rule
     recordings: int
     recordings_without_signals: int
     subjects: int
@@ -115,13 +123,10 @@ def build_index(
     prefix = f"{ROOT}/{version}"
     if store.exists(f"{prefix}/{SUCCESS}") and not replace:
         raise AlreadyIndexed(f"{store.uri}/{prefix} is already complete; use --replace")
-    recordings: list[dict[str, Any]] = []
-    channels: list[dict[str, Any]] = []
+    found = _Found()
     used: dict[str, str] = {}
     manifests: dict[str, str] = {}
     left_out: dict[str, str] = {}
-    without_signals = 0
-    unknown: Counter[str] = Counter()
     for dataset_id in dataset_ids:
         versions = complete_versions(store, dataset_id, STANDARD_ROOT)
         if not versions:
@@ -133,53 +138,10 @@ def build_index(
             raise FileNotFoundError(f"{location.manifest_key} is missing but _SUCCESS exists")
         used[dataset_id] = location.version
         manifests[dataset_id] = hashlib.sha256(data).hexdigest()
-        dataset_rules = rules.get(dataset_id)
-        overrides = channel_overrides(dataset_rules)
-        recording_table = _read(store, location.table_key("recordings")).to_pylist()
-        with_signals = set()
-        for r in recording_table:
-            if not r["signals"]:
-                without_signals += 1
-                continue
-            subject, certain = subject_of(dataset_id, r["recording_id"], dataset_rules.subject)
-            with_signals.add(r["recording_id"])
-            recordings.append(
-                {
-                    "dataset_id": dataset_id,
-                    "version": location.version,
-                    "recording_id": r["recording_id"],
-                    "subject_id": subject,
-                    "subject_certain": certain,
-                    "split": split_of(subject),
-                    "duration_s": r["duration_s"],
-                    "start_time": r["start_time"],
-                    "arrays": r["arrays"],
-                    "signals": f"{location.prefix}/{r['signals']}",
-                }
-            )
-        for c in _read(store, location.table_key("channels")).to_pylist():
-            if c["recording_id"] not in with_signals:
-                continue
-            kind, decided_by = signal_type(c["name"], overrides)
-            if decided_by == "none":
-                unknown[f"{dataset_id}: {c['name']}"] += 1
-            channels.append(
-                {
-                    "dataset_id": dataset_id,
-                    "recording_id": c["recording_id"],
-                    "array": c["array"],
-                    "index": c["index"],
-                    "name": c["name"],
-                    "signal_type": kind.value,
-                    "signal_type_from": decided_by,
-                    "sampling_rate": c["sampling_rate"],
-                    "unit": c["unit"],
-                    "scale": c["scale"],
-                    "offset": c["offset"],
-                    "invalid_value": c["invalid_value"],
-                }
-            )
-        log.info("%s %s: %d recordings indexed", dataset_id, location.version, len(with_signals))
+        raw = VersionLocation(dataset_id, json.loads(data)["raw_version"])
+        indexed = _index_dataset(store, location, raw, rules.get(dataset_id), found)
+        log.info("%s %s: %d recordings indexed", dataset_id, location.version, indexed)
+    recordings, channels = found.recordings, found.channels
     subjects = {r["subject_id"]: r["subject_certain"] for r in recordings}
     manifest = IndexManifest(
         version=version,
@@ -189,19 +151,109 @@ def build_index(
         datasets=used,
         standard_manifests_sha256=manifests,
         left_out=left_out,
+        excluded=dict(found.excluded),
         recordings=len(recordings),
-        recordings_without_signals=without_signals,
+        recordings_without_signals=found.without_signals,
         subjects=len(subjects),
         subjects_assumed=sum(1 for certain in subjects.values() if not certain),
         splits=dict(Counter(r["split"] for r in recordings)),
         signal_types=dict(Counter(c["signal_type"] for c in channels)),
-        unknown_channels=dict(unknown.most_common()),
+        unknown_channels=dict(found.unknown.most_common()),
     )
     store.put_bytes(f"{prefix}/recordings.parquet", _parquet(recordings, RECORDINGS))
     store.put_bytes(f"{prefix}/channels.parquet", _parquet(channels, CHANNELS))
     store.put_bytes(f"{prefix}/_manifest.json", manifest.model_dump_json(indent=2).encode())
     store.put_bytes(f"{prefix}/{SUCCESS}", b"", content_type="text/plain")
     return IndexReport(f"{store.uri}/{prefix}", manifest)
+
+
+@dataclass
+class _Found:
+    """The rows of the index, and what was left out, over all datasets."""
+
+    recordings: list[dict[str, Any]] = field(default_factory=list)
+    channels: list[dict[str, Any]] = field(default_factory=list)
+    without_signals: int = 0
+    excluded: Counter[str] = field(default_factory=Counter)
+    unknown: Counter[str] = field(default_factory=Counter)
+
+
+def _index_dataset(
+    store: Store,
+    location: StandardLocation,
+    raw: VersionLocation,
+    rules: DatasetRules,
+    found: _Found,
+) -> int:
+    """Add the recordings and channels of one standard version; returns the recordings."""
+    dataset_id = location.dataset_id
+    overrides = channel_overrides(rules)
+    table = None
+    if rules.subject is not None and rules.subject.table is not None:
+        table = _subject_table(store, raw, rules.subject.table)
+    indexed = set()
+    for r in _read(store, location.table_key("recordings")).to_pylist():
+        if not r["signals"]:
+            found.without_signals += 1
+            continue
+        exclude = rules.excluded(r["recording_id"])
+        if exclude is not None:
+            found.excluded[f"{dataset_id}: {exclude.reason}"] += 1
+            continue
+        subject, certain = subject_of(dataset_id, r["recording_id"], rules.subject, table)
+        indexed.add(r["recording_id"])
+        found.recordings.append(
+            {
+                "dataset_id": dataset_id,
+                "version": location.version,
+                "recording_id": r["recording_id"],
+                "subject_id": subject,
+                "subject_certain": certain,
+                "split": split_of(subject),
+                "duration_s": r["duration_s"],
+                "start_time": r["start_time"],
+                "arrays": r["arrays"],
+                "signals": f"{location.prefix}/{r['signals']}",
+            }
+        )
+    for c in _read(store, location.table_key("channels")).to_pylist():
+        if c["recording_id"] not in indexed:
+            continue
+        kind, decided_by = signal_type(c["name"], overrides)
+        if decided_by == "none":
+            found.unknown[f"{dataset_id}: {c['name']}"] += 1
+        found.channels.append(
+            {
+                "dataset_id": dataset_id,
+                "recording_id": c["recording_id"],
+                "array": c["array"],
+                "index": c["index"],
+                "name": c["name"],
+                "signal_type": kind.value,
+                "signal_type_from": decided_by,
+                "sampling_rate": c["sampling_rate"],
+                "unit": c["unit"],
+                "scale": c["scale"],
+                "offset": c["offset"],
+                "invalid_value": c["invalid_value"],
+            }
+        )
+    return len(indexed)
+
+
+def _subject_table(store: Store, raw: VersionLocation, table: SubjectTable) -> dict[str, str]:
+    """{recording: subject} from a table of the raw dataset."""
+    key = raw.data_key(table.file)
+    data = store.get_bytes(key)
+    if data is None:
+        raise FileNotFoundError(key)
+    rows = csv.DictReader(io.StringIO(data.decode("utf-8-sig")), delimiter=table.delimiter)
+    mapping: dict[str, str] = {}
+    for row in rows:
+        recording, subject = row[table.recording_column], row[table.subject_column]
+        if mapping.setdefault(recording, subject) != subject:
+            raise ValueError(f"{key}: {recording!r} has two subjects")
+    return mapping
 
 
 def _read(store: Store, key: str) -> pa.Table:
