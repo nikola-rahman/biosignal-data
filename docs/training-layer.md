@@ -52,27 +52,50 @@ A name no rule matches stays `unknown`, never a guess; the manifest lists those 
 
 ## The data loader (computed)
 
+**The model gets the samples and their times, and nothing else**: no channel names, no
+signal types, no units, no dataset or subject. The index keeps those for us, to select
+data and to analyse results; they never go into a batch.
+
 `biosignal_data.training`:
 
-    selection = Selection.load(store, "2026-10-20", split="train", signal_types={"ecg", "eeg"})
-    source = WindowSource(selection, store_factory, cache_directory=..., cache_bytes=...,
-                          window_s=30.0, min_window_s=10.0, shuffle_buffer=4096,
-                          reads_in_flight=8, seed=0)
-    for window in source.windows(epoch, part, parts): ...
+    selection = Selection.load(store, "2026-10-20", split="train", signal_types=None)
+    source = ExampleSource(selection, store_factory, cache_directory=..., cache_bytes=...,
+                           max_tokens=8192, samples_per_token=64, max_channels=32,
+                           shuffle_buffer=4096, reads_in_flight=8, seed=0)
+    for example in source.examples(epoch, part, parts):
+        example.signals  # the model input
+        example.origin   # for analysis only
 
-A window is one array (one sampling rate) of one recording, at its native rate, in
-physical units (float32, NaN where a sample is invalid or a channel has no calibration),
-with the name, signal type and unit of each channel. Nothing is resampled or normalized:
-those are choices of the experiment, made in its own code.
+An example is a set of signals from one recording and one time span. Each signal is one
+channel at its native rate:
 
-A unit of work is one array of one recording. Its shards (64 MiB at most) are read whole
-through a local disk cache (`WholeObjectCache`) and cut into windows from a random offset
-per epoch; pieces shorter than `min_window_s` at the ends are left out, and a recording
-shorter than one window is one window. Several units are read at the same time, because
-one read from the S3 storage takes 80-240 ms; the windows go through a shuffle buffer.
-Memory stays bounded, whatever the length of a recording.
+- `values`: physical values (stored integer x scale + offset) as float32; the stored
+  integers if the channel has no calibration; NaN where a sample is invalid. Units stay as
+  the source wrote them.
+- `sampling_rate`, and `start_s`: the time of the first sample from the start of the
+  example (relative time, never the date or the clock time).
 
-The units are dealt over `parts` (data loader workers times distributed ranks) after a
-shuffle fixed by `seed` and `epoch`. `TorchWindows` in
-`biosignal_data.training.torch_dataset` wraps a source as a PyTorch `IterableDataset`
-(install the `train` extra).
+The signals are in random order, so the order of channels in a file (a montage
+convention) means nothing. Nothing is resampled, filtered, re-referenced or normalized.
+
+**How a recording becomes examples.** A time cursor moves through the recording. At each
+step the selected channels are put in random order and cut into groups of random size;
+each group is one example over the same time span. The span is the longest in which every
+group fits the token budget (`max_tokens` tokens of `samples_per_token` samples), so a
+group with many fast channels covers a short time, and one slow channel a long time. The
+first span of a recording is a random part of a full one, so the cuts differ from epoch to
+epoch. Every sample of every selected channel is in exactly one example per epoch.
+
+The token budget and the token size are settings of the model, given to the sampler; the
+tokenizer itself is part of the model.
+
+**How it reads.** The shards of a recording (64 MiB at most) are read whole through a
+local disk cache (`WholeObjectCache`); several recordings are read at the same time,
+because one read from the S3 storage takes 80-240 ms; examples go through a shuffle
+buffer. Memory stays bounded, whatever the length of a recording. The recordings are dealt
+over `parts` (data loader workers times distributed ranks) after a shuffle fixed by `seed`
+and `epoch`. `TorchExamples` in `biosignal_data.training.torch_dataset` wraps a source as
+a PyTorch `IterableDataset` (install the `train` extra).
+
+**Evaluation** uses the official split and protocol of each benchmark, so that results
+compare with published ones; the 80/10/10 split above is for pretraining only.

@@ -1,12 +1,12 @@
-"""A PyTorch IterableDataset over a WindowSource (needs the `train` extra: torch).
+"""A PyTorch IterableDataset over an ExampleSource (needs the `train` extra: torch).
 
-dataset = TorchWindows(source)
+dataset = TorchExamples(source)
 loader = torch.utils.data.DataLoader(dataset, batch_size=None, num_workers=8)
 for epoch in range(epochs):
     dataset.set_epoch(epoch)  # takes effect with persistent_workers=False (the default)
-    for window in loader: ...
+    for example in loader: ...  # the model gets example.signals only
 
-Each data loader worker of each distributed rank reads its own part of the units.
+Each data loader worker of each distributed rank reads its own part of the recordings.
 """
 
 from __future__ import annotations
@@ -16,11 +16,11 @@ from collections.abc import Iterator
 import torch.distributed as dist
 from torch.utils.data import IterableDataset, get_worker_info
 
-from biosignal_data.training.loader import Window, WindowSource
+from biosignal_data.training.loader import Example, ExampleSource
 
 
-class TorchWindows(IterableDataset[Window]):
-    def __init__(self, source: WindowSource) -> None:
+class TorchExamples(IterableDataset[Example]):
+    def __init__(self, source: ExampleSource) -> None:
         super().__init__()
         self.source = source
         self.epoch = 0
@@ -28,7 +28,7 @@ class TorchWindows(IterableDataset[Window]):
     def set_epoch(self, epoch: int) -> None:
         self.epoch = epoch
 
-    def __iter__(self) -> Iterator[Window]:
+    def __iter__(self) -> Iterator[Example]:
         info = get_worker_info()
         worker, workers = (info.id, info.num_workers) if info is not None else (0, 1)
         rank, ranks = (
@@ -36,4 +36,4 @@ class TorchWindows(IterableDataset[Window]):
             if dist.is_available() and dist.is_initialized()
             else (0, 1)
         )
-        yield from self.source.windows(self.epoch, rank * workers + worker, ranks * workers)
+        yield from self.source.examples(self.epoch, rank * workers + worker, ranks * workers)
