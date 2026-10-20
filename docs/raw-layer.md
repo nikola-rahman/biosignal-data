@@ -23,6 +23,12 @@ being able to prove where every byte came from.
    twice mean the source serves them so: the file is kept as served, with the difference in
    its manifest entry (`differs_from_source`), and the run warns. Different bytes mean a
    transfer error, and the file fails.
+7. **A complete version can get the files it lacks, and only those.** When the source
+   holds files that a complete version lacks (PhysioNet added apnea-ecg's test-set answers
+   after its `SHA256SUMS.txt`; until 2026-10-20 the PhysioNet fetcher read only that list),
+   `download --add-missing` lists the source again and copies only those files. Stored
+   files are not touched and none is removed; the manifest is written again at the end.
+   This repairs a copy of the same version; it is not a new version (rule 2).
 
 ## Keys
 

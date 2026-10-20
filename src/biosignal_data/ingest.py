@@ -16,8 +16,10 @@ Guarantees:
   `_manifest.partial.json`, and files already recorded there with a matching object size
   are not copied again.
 - `_manifest.json` and then `_SUCCESS` are written only when every file succeeded. A
-  version with `_SUCCESS` is written to again only when asked (`replace=True`): then every
-  file is copied again in place, over the old one.
+  version with `_SUCCESS` is written to again only when asked: `replace=True` copies every
+  file again in place, over the old one; `add_missing=True` lists the source again and
+  copies only the files the version lacks (stored files are not touched, none is removed;
+  the manifest is written again at the end, so readers see the old one until then).
 - A complete version holds exactly the files of its manifest: before `_SUCCESS`, stored
   files the source does not list (any more) are removed.
 """
@@ -95,6 +97,7 @@ class Plan:
     manifest: Manifest  # new, or the partial one of an earlier run
     fetcher: Fetcher = field(repr=False)
     replace: bool = False  # the version is complete and is made again
+    add_missing: bool = False  # the version is complete; only files it lacks are copied
     complete: bool = False  # set by apply() when the version is complete
 
     @property
@@ -142,18 +145,22 @@ def planned(
     fetcher: Fetcher | None = None,
     root: str = "raw",
     replace: bool = False,
+    add_missing: bool = False,
     stop: threading.Event | None = None,
 ) -> Iterator[Plan]:
     """Check access, prepare the source, and plan the copy. On exit, the source cleans up
     what it prepared; staged files are removed only if `apply` completed the version.
     `replace`: a complete version is made again instead of raising `AlreadyComplete`.
+    `add_missing`: a complete version gets the files the source lists and it lacks.
     `stop`: when set, listing stops with `StoppedError` (Ctrl+C during a long listing)."""
     fetcher = fetcher or fetcher_for(dataset, options)
     fetcher.check_access()
     fetcher.prepare()
+    if replace and add_missing:
+        raise ValueError("replace and add_missing exclude each other")
     plan: Plan | None = None
     try:
-        plan = _plan(dataset, store, fetcher, root, replace, stop)
+        plan = _plan(dataset, store, fetcher, root, replace, add_missing, stop)
         yield plan
     finally:
         fetcher.cleanup(plan.complete if plan else False)
@@ -167,6 +174,7 @@ def ingest(
     fetcher: Fetcher | None = None,
     root: str = "raw",
     replace: bool = False,
+    add_missing: bool = False,
     workers: int = 8,
     checkpoint_every: float = 30.0,
     progress: IngestProgress | None = None,
@@ -176,8 +184,9 @@ def ingest(
     """Plan and copy `dataset` into `store`. Files are copied by `workers` threads, or by
     `executor` if given (a pool shared by several datasets copying at the same time)."""
     with planned(
-        dataset, store, options=options, fetcher=fetcher, root=root, replace=replace, stop=stop
-    ) as plan:
+        dataset, store, options=options, fetcher=fetcher, root=root, replace=replace,
+        add_missing=add_missing, stop=stop,
+    ) as plan:  # fmt: skip
         return apply(
             plan,
             store,
@@ -195,20 +204,19 @@ def _plan(
     fetcher: Fetcher,
     root: str,
     replace: bool,
+    add_missing: bool,
     stop: threading.Event | None,
 ) -> Plan:
     version = fetcher.resolve_version()
     version = _continue_dated_version(dataset, store, root, version)
     location = VersionLocation(dataset.id, version.value, root)
     complete = store.exists(location.success_key)
-    if complete and not replace:
+    if complete and not (replace or add_missing):
         raise AlreadyComplete(
-            f"{store.uri}/{location.prefix} is already complete; use --replace to make it again"
+            f"{store.uri}/{location.prefix} is already complete; use --replace to make it "
+            "again, or --add-missing to copy only files it lacks"
         )
-    if complete:  # every file is copied again: nothing from earlier runs is reused
-        manifest = _new_manifest(dataset, version)
-    else:
-        manifest = _start_manifest(dataset, store, location, version)
+    manifest = _first_manifest(dataset, store, location, version, complete, replace)
     files = []
     for remote in fetcher.list_files():
         if stop is not None and stop.is_set():
@@ -227,8 +235,13 @@ def _plan(
             done.pop(remote.path, None)
             to_copy.append(remote)
     manifest.files = sorted(done.values(), key=lambda f: f.path)
-    plan = Plan(dataset, version, location, files, to_copy, manifest, fetcher, replace=complete)
-    if complete:
+    if complete and add_missing:
+        _check_additions(store, location, files, to_copy, manifest)
+    plan = Plan(
+        dataset, version, location, files, to_copy, manifest, fetcher,
+        replace=complete and replace, add_missing=complete and add_missing,
+    )  # fmt: skip
+    if complete and replace:
         log.warning(
             "%s %s: complete, and made again (--replace): every file is copied again",
             dataset.id,
@@ -243,6 +256,53 @@ def _plan(
     )
     _warn_implicit(plan)
     return plan
+
+
+def _first_manifest(
+    dataset: Dataset,
+    store: Store,
+    location: VersionLocation,
+    version: ResolvedVersion,
+    complete: bool,
+    replace: bool,
+) -> Manifest:
+    """The manifest a plan starts from."""
+    if complete and replace:  # every file is copied again: nothing earlier is reused
+        return _new_manifest(dataset, version)
+    if complete:  # add_missing: the complete manifest (or an interrupted add's partial)
+        data = store.get_bytes(location.partial_manifest_key) or store.get_bytes(
+            location.manifest_key
+        )
+        if data is None:  # _SUCCESS is written after the manifest, so this is damage
+            raise FetchError(f"{location.manifest_key} is missing but _SUCCESS exists")
+        return Manifest.from_json(data)
+    return _start_manifest(dataset, store, location, version)
+
+
+def _check_additions(
+    store: Store,
+    location: VersionLocation,
+    files: list[RemoteFile],
+    to_copy: list[RemoteFile],
+    manifest: Manifest,
+) -> None:
+    """For add_missing: nothing to add is AlreadyComplete; say what is added and kept."""
+    where = f"{location.dataset_id} {location.version}"
+    if not to_copy:
+        raise AlreadyComplete(
+            f"{store.uri}/{location.prefix} is complete and lacks no file of the source"
+        )
+    listed = {f.path for f in files}
+    gone = [f.path for f in manifest.files if f.path not in listed]
+    if gone:
+        log.warning(
+            "%s: %s stored but no longer listed by the source (e.g. %s); kept",
+            where, plural(len(gone), "file"), gone[0],
+        )  # fmt: skip
+    log.warning(
+        "%s: complete, but lacks %s of the source (e.g. %s); copying only those",
+        where, plural(len(to_copy), "file"), to_copy[0].path,
+    )  # fmt: skip
 
 
 def apply(
@@ -298,8 +358,12 @@ def apply(
             plan.version.value,
             plural(len(missing), "file"),
         )
-    _remove_unlisted(plan, store)
+    if not plan.add_missing:  # adding files to a complete version never removes any
+        _remove_unlisted(plan, store)
     plan.manifest.files = sorted(done.values(), key=lambda f: f.path)
+    if plan.add_missing:  # earlier missing files stay listed unless now copied
+        earlier = {m.path: m for m in plan.manifest.missing if m.path not in done}
+        missing = earlier | missing
     plan.manifest.missing = sorted(missing.values(), key=lambda f: f.path)
     plan.manifest.completed_at = utcnow()
     store.put_bytes(location.manifest_key, plan.manifest.to_json())

@@ -8,7 +8,9 @@ their SHA-256, so it is used as the file list and every file is verified against
   has them: faster than physionet.org, and it gives file sizes. A version that is not on the
   copy, or a file that the copy lacks, comes from physionet.org, with a warning saying so.
   The file list and checksums are SHA256SUMS.txt either way, so every file is checked the
-  same way.
+  same way. Files on the copy that SHA256SUMS.txt does not list (PhysioNet added them
+  later, e.g. apnea-ecg's test-set answers x01.apn ... x35.apn) are copied too, checked by
+  their size only, with a warning naming them.
 - Credentialed datasets are not on that copy; they come only from physionet.org, with the
   user's PhysioNet account (BIOSIGNAL_PHYSIONET_USERNAME / _PASSWORD) after the DUA is signed.
 
@@ -182,6 +184,26 @@ class PhysioNetFetcher(Fetcher):
                 opener=s3_opener(client, MIRROR_BUCKET, prefix + SUMS),
             )
         )
+        unlisted = sorted(set(sizes) - {name for name, _ in listed} - {SUMS})
+        if unlisted:
+            log.warning(
+                "%s %s: %s on PhysioNet's AWS copy but not in %s (e.g. %s); copied too, "
+                "checked by size only",
+                self.dataset.id,
+                version,
+                plural(len(unlisted), "file"),
+                SUMS,
+                ", ".join(unlisted[:3]),
+            )
+        files += [
+            RemoteFile(
+                path=name,
+                size=sizes[name],
+                url=f"{where}{name}",
+                opener=s3_opener(client, MIRROR_BUCKET, prefix + name),
+            )
+            for name in unlisted
+        ]
         return files
 
     def _mirror_files_without_sums(

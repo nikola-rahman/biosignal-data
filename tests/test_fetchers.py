@@ -92,7 +92,9 @@ def test_physionet_downloads_from_aws_mirror(
             "100.hea": 6,
             "100.dat": 100,
             "SHA256SUMS.txt": len(sums),
+            "extra.html": 1,  # on the copy but not in SHA256SUMS.txt: copied, size only
         }
+        assert next(f for f in listed if f.path == "extra.html").checksum is None
         assert all(f.url and f.url.startswith("s3://physionet-open/mitdb/1.0.0/") for f in listed)
         report = ingest(dataset, store, options=PHYSIONET)
     assert report.complete

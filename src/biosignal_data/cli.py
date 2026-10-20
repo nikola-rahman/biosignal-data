@@ -130,6 +130,13 @@ ReplaceOpt = Annotated[
     bool,
     typer.Option("--replace", help="Make complete versions again instead of skipping them."),
 ]
+AddMissingOpt = Annotated[
+    bool,
+    typer.Option(
+        "--add-missing",
+        help="For complete versions: list the source again and copy only the files they lack.",
+    ),
+]
 
 
 def _fail(message: str, code: int = 1) -> typer.Exit:
@@ -341,6 +348,7 @@ def download(
         ),
     ] = False,
     replace: ReplaceOpt = False,
+    add_missing: AddMissingOpt = False,
     verbose: VerboseOpt = False,
     config: ConfigOpt = None,
     catalog: CatalogOpt = None,
@@ -359,8 +367,12 @@ def download(
 
     A complete version is skipped, unless --replace: then every file is copied again, in
     place over the old one, and the version is complete again when all have succeeded.
+    With --add-missing, a complete version gets only the files the source lists and it
+    lacks (e.g. files added to the source later); stored files are not touched.
     """
     setup_logging(verbose)
+    if replace and add_missing:
+        raise _fail("--replace and --add-missing exclude each other")
     cfg, cfg_path = _config(config)
     settings = _need(cfg.download, "download", cfg_path)
     datasets = _select_datasets(
@@ -385,9 +397,9 @@ def download(
     store = _store(dest, cfg, cfg_path, settings.workers)
     if dry_run:
         for dataset in datasets:
-            _preview(dataset, store, options, replace)
+            _preview(dataset, store, options, replace, add_missing)
         return
-    _run(datasets, store, options, settings, replace)
+    _run(datasets, store, options, settings, replace, add_missing)
 
 
 @app.command("import")
@@ -413,7 +425,7 @@ def import_(
     settings = _need(cfg.download, "download", cfg_path)
     store = _store(dest, cfg, cfg_path, settings.workers)
     options = FetchOptions(from_dir=folder, version=version)
-    _run([dataset], store, options, settings, replace=False)
+    _run([dataset], store, options, settings, replace=False, add_missing=False)
 
 
 def _run(
@@ -422,6 +434,7 @@ def _run(
     options: FetchOptions,
     settings: DownloadConfig,
     replace: bool,
+    add_missing: bool,
 ) -> None:
     console.print(
         f"[bold]{plural(len(datasets), 'dataset')}[/] -> {store.uri}/{ROOT}", highlight=False
@@ -434,7 +447,7 @@ def _run(
     )
     _warn_unfinished(store, store.uri)
     try:
-        outcomes = _copy(datasets, store, options, settings, replace)
+        outcomes = _copy(datasets, store, options, settings, replace, add_missing)
     except KeyboardInterrupt:
         console.print(
             "[yellow]stopped.[/] Files copied so far are kept; run the same command again "
@@ -452,6 +465,7 @@ def _copy(
     options: FetchOptions,
     settings: DownloadConfig,
     replace: bool,
+    add_missing: bool,
 ) -> list[Outcome]:
     with DownloadDisplay(len(datasets)) as display:
         bars: dict[str, ProgressBar] = {}
@@ -473,6 +487,7 @@ def _copy(
             options=options,
             root=ROOT,
             replace=replace,
+            add_missing=add_missing,
             workers=settings.workers,
             parallel_datasets=settings.parallel_datasets,
             progress_for=progress_for,
@@ -584,10 +599,14 @@ def _warn_untested(outcomes: list[Outcome]) -> None:
         )
 
 
-def _preview(dataset: Dataset, store: Store, options: FetchOptions, replace: bool) -> None:
+def _preview(
+    dataset: Dataset, store: Store, options: FetchOptions, replace: bool, add_missing: bool
+) -> None:
     """The plan of one dataset against --dest, without copying: version, files, size."""
     try:
-        with planned(dataset, store, options=options, root=ROOT, replace=replace) as plan:
+        with planned(
+            dataset, store, options=options, root=ROOT, replace=replace, add_missing=add_missing
+        ) as plan:
             _print_plan(plan)
     except AlreadyComplete as exc:
         console.print(f"[yellow]•[/] {dataset.id}: {escape(str(exc))}", highlight=False)

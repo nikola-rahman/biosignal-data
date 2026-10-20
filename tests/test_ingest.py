@@ -302,3 +302,26 @@ def test_a_stop_ends_a_long_listing(store: LocalStore) -> None:
 
     with pytest.raises(StoppedError, match="stopped while listing"):
         ingest(dataset, store, fetcher=Endless(dataset, {}), stop=stop)
+
+
+def test_add_missing_copies_only_files_a_complete_version_lacks(store: LocalStore) -> None:
+    dataset = make_dataset()
+    fewer = {k: v for k, v in FILES.items() if k != "a/b/c.csv"}
+    ingest(dataset, store, fetcher=FakeFetcher(dataset, fewer), workers=2)
+    prefix = "raw/test/example/1.0.0"
+    with pytest.raises(AlreadyComplete, match="--add-missing"):
+        ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES), workers=2)
+
+    fetcher = FakeFetcher(dataset, FILES)
+    report = ingest(dataset, store, fetcher=fetcher, workers=2, add_missing=True)
+
+    assert report.complete and report.copied == 1 and fetcher.opened == {"a/b/c.csv": 1}
+    manifest = Manifest.from_json(store.get_bytes(f"{prefix}/_manifest.json") or b"")
+    assert sorted(f.path for f in manifest.files) == sorted(FILES)
+    assert verify(store, "test/example", "1.0.0", "raw", deep=True) == {}
+    with pytest.raises(AlreadyComplete, match="lacks no file"):
+        ingest(dataset, store, fetcher=FakeFetcher(dataset, FILES), add_missing=True)
+    # a file the source no longer lists is kept: adding never removes
+    report = ingest(dataset, store, fetcher=FakeFetcher(dataset, fewer | {"new.txt": b"n"}),
+                    add_missing=True)  # fmt: skip
+    assert report.complete and store.exists(f"{prefix}/data/a/b/c.csv")
