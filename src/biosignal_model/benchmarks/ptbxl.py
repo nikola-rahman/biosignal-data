@@ -28,6 +28,7 @@ import ast
 import csv
 import io
 import random
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -43,6 +44,7 @@ from biosignal_data.storage.layout import VersionLocation
 from biosignal_data.storage.stores import Store
 from biosignal_data.training.loader import Channel, Example, Origin, Signal
 from biosignal_model.batch import Packer
+from biosignal_model.benchmarks import LOG_EVERY_STEPS, Log
 from biosignal_model.model import Encoder, ModelConfig
 
 DATASET = "physionet/ptb-xl"
@@ -122,7 +124,7 @@ def macro_auc(y: np.ndarray, p: np.ndarray) -> tuple[float, int]:
     return float(np.mean(aucs)), len(aucs)
 
 
-def load(store: Store, settings: PtbxlSettings) -> tuple[Records, list[dict[str, str]]]:
+def load(store: Store, settings: PtbxlSettings, log: Log) -> tuple[Records, list[dict[str, str]]]:
     """Every record of the chosen rate, read once into memory, and the statement table."""
     dataset = StandardDataset.open(store, DATASET, "latest")
     raw = VersionLocation(DATASET, dataset.manifest.raw_version)
@@ -160,8 +162,17 @@ def load(store: Store, settings: PtbxlSettings) -> tuple[Records, list[dict[str,
             signals, Origin(DATASET, record, f"{DATASET}:{row['patient_id']}", 0.0, origin_channels)
         )
 
+    examples = []
+    started = time.monotonic()
     with ThreadPoolExecutor(settings.read_threads) as pool:
-        examples = list(pool.map(read, rows))
+        for example in pool.map(read, rows):
+            examples.append(example)
+            if len(examples) % 1000 == 0 or len(examples) == len(rows):
+                seconds = time.monotonic() - started
+                log({
+                    "load/records": float(len(examples)), "load/of": float(len(rows)),
+                    "load/records_per_s": len(examples) / seconds, "load/seconds": seconds,
+                })  # fmt: skip
     return Records(
         ids=[r[column] for r in rows],
         examples=examples,
@@ -197,14 +208,19 @@ def _batches(n: int, packer: Packer, examples: list[Example], rows: int) -> list
 
 @torch.no_grad()
 def embed(
-    model: Encoder, examples: list[Example], max_tokens: int, rows: int, device: torch.device
-) -> np.ndarray:
+    model: Encoder, examples: list[Example], max_tokens: int, rows: int, device: torch.device,
+    log: Log, name: str,
+) -> np.ndarray:  # fmt: skip
+    """The mean feature of every example; progress as `embed/<name>/...`."""
     model.eval()
     packer = _packer(model.config, max_tokens, rows)
-    parts = [
-        _pooled(model, [examples[i] for i in ids], packer, device).cpu()
-        for ids in _batches(len(examples), packer, examples, rows)
-    ]
+    batches = _batches(len(examples), packer, examples, rows)
+    parts, started = [], time.monotonic()
+    for k, ids in enumerate(batches, 1):
+        parts.append(_pooled(model, [examples[i] for i in ids], packer, device).cpu())
+        if k % max(1, len(batches) // 10) == 0 or k == len(batches):
+            log({f"embed/{name}/batches": float(k), f"embed/{name}/of": float(len(batches)),
+                 f"embed/{name}/seconds": time.monotonic() - started})  # fmt: skip
     return torch.cat(parts).numpy()
 
 
@@ -225,9 +241,11 @@ def _fit(x: torch.Tensor, y: torch.Tensor, l2: float, steps: int) -> torch.Tenso
 
 
 def probe(
-    features: np.ndarray, y: np.ndarray, folds: np.ndarray, s: PtbxlSettings
-) -> dict[str, float]:
-    """L2 chosen on fold 9 by macro-AUC, then one fit on folds 1-8, scored on fold 10."""
+    features: np.ndarray, y: np.ndarray, folds: np.ndarray, s: PtbxlSettings, log: Log,
+    prefix: str,
+) -> dict[str, float]:  # fmt: skip
+    """L2 chosen on fold 9 by macro-AUC, then one fit on folds 1-8, scored on fold 10. Each
+    L2 tried is logged with its fold-9 macro-AUC, under `prefix`."""
     train, val, test = (np.isin(folds, f) for f in (TRAIN, VALIDATION, TEST))
     mean, std = features[train].mean(0), features[train].std(0) + 1e-8
     x = torch.from_numpy((features - mean) / std).double()
@@ -236,6 +254,7 @@ def probe(
     for l2 in s.probe_l2:
         w = _fit(x[train], yt[train], l2, s.probe_steps)
         auc, _ = macro_auc(y[val], (x[val] @ w[:-1] + w[-1]).numpy())
+        log({f"{prefix}/l2": l2, f"{prefix}/validation_macro_auc": auc})
         if auc > best_auc:
             best, best_auc = l2, auc
     w = _fit(x[train], yt[train], best, s.probe_steps)
@@ -245,10 +264,12 @@ def probe(
 
 def end_to_end(
     config: ModelConfig, records: Records, y: np.ndarray, max_tokens: int, s: PtbxlSettings,
-    device: torch.device, start: dict[str, torch.Tensor] | None,
+    device: torch.device, start: dict[str, torch.Tensor] | None, log: Log, prefix: str,
 ) -> dict[str, float]:  # fmt: skip
     """The encoder and a linear head, every weight trained on folds 1-8; the epoch with the
-    best macro-AUC on fold 9 is scored on fold 10. `start`: pretrained weights, or None."""
+    best macro-AUC on fold 9 is scored on fold 10. `start`: pretrained weights, or None.
+    Logged under `prefix`: the training loss every LOG_EVERY_STEPS steps, and per epoch its
+    mean training loss, fold-9 macro-AUC, time and speed; fold 10 only for a chosen epoch."""
     torch.manual_seed(s.seed)
     model = Encoder(config).to(device)
     if start is not None:
@@ -276,9 +297,11 @@ def end_to_end(
     val = [i for i in range(len(records.ids)) if records.folds[i] in VALIDATION]
     test = [i for i in range(len(records.ids)) if records.folds[i] in TEST]
     best_val, best_test, best_epoch, labels_n = -1.0, 0.0, 0, 0
+    step = 0
     for epoch in range(1, s.finetune_epochs + 1):
         model.train()
         rng.shuffle(train)
+        started, losses, window = time.monotonic(), [], []
         for k in range(0, len(train), s.finetune_examples_per_step):
             ids = train[k : k + s.finetune_examples_per_step]
             pooled = _pooled(model, [records.examples[i] for i in ids], packer, device)
@@ -287,31 +310,54 @@ def end_to_end(
             optimizer.zero_grad(set_to_none=True)
             loss.backward()  # type: ignore[no-untyped-call]
             optimizer.step()
+            step += 1
+            window.append(loss.item())
+            if step % LOG_EVERY_STEPS == 0:
+                log({f"{prefix}/train_loss": float(np.mean(window)), f"{prefix}/step": float(step)})
+                losses += window
+                window = []
+        losses += window
+        seconds = time.monotonic() - started
         auc_val, _ = macro_auc(y[val], predict(val))
+        record = {
+            f"{prefix}/epoch": float(epoch),
+            f"{prefix}/epoch_train_loss": float(np.mean(losses)),
+            f"{prefix}/epoch_validation_macro_auc": auc_val,
+            f"{prefix}/epoch_seconds": seconds,
+            f"{prefix}/examples_per_s": len(train) / seconds,
+        }
         if auc_val > best_val:  # fold 10 is scored for the epoch fold 9 chooses
             best_val, best_epoch = auc_val, epoch
             best_test, labels_n = macro_auc(y[test], predict(test))
+            record[f"{prefix}/chosen_epoch"] = float(epoch)
+            record[f"{prefix}/chosen_test_macro_auc"] = best_test
+        log(record)
     return {"macro_auc": best_test, "labels": float(labels_n), "epoch": float(best_epoch),
             "validation_macro_auc": best_val}  # fmt: skip
 
 
 def run(
-    store: Store, checkpoint: dict[str, Any], settings: PtbxlSettings, device: torch.device
-) -> dict[str, float]:
+    store: Store, checkpoint: dict[str, Any], settings: PtbxlSettings, device: torch.device,
+    log: Log,
+) -> dict[str, float]:  # fmt: skip
     """All scores of one checkpoint, as a flat dict for logging: `<task>/<method>/<name>`."""
     from biosignal_model.train import TrainConfig  # noqa: PLC0415 - avoids a cycle
 
     train_config = TrainConfig.model_validate(checkpoint["config"])
     config = train_config.model_settings()
     max_tokens = train_config.tokens.max_tokens
-    records, statements = load(store, settings)
+    records, statements = load(store, settings, log)
     pretrained = Encoder(config).to(device)
     pretrained.load_state_dict(checkpoint["model"])
     torch.manual_seed(settings.seed)
     untrained = Encoder(config).to(device)
     features = {
-        "probe": embed(pretrained, records.examples, max_tokens, settings.rows, device),
-        "random": embed(untrained, records.examples, max_tokens, settings.rows, device),
+        "probe": embed(
+            pretrained, records.examples, max_tokens, settings.rows, device, log, "probe"
+        ),
+        "random": embed(
+            untrained, records.examples, max_tokens, settings.rows, device, log, "random"
+        ),
     }
     results: dict[str, float] = {
         "records": float(len(records.ids)),
@@ -327,9 +373,13 @@ def run(
         results[f"{task}/classes"] = float(len(classes))
         results[f"{task}/records"] = float(keep.sum())
         for name, f in features.items():
-            scores = probe(f[keep], y[keep], records.folds[keep], settings)
+            scores = probe(f[keep], y[keep], records.folds[keep], settings, log, f"{task}/{name}")
             results |= {f"{task}/{name}/{k}": v for k, v in scores.items()}
+            log({f"{task}/{name}/macro_auc": scores["macro_auc"]})
         for name, start in (("finetune", checkpoint["model"]), ("supervised", None)):
-            scores = end_to_end(config, kept, y[keep], max_tokens, settings, device, start)
+            scores = end_to_end(
+                config, kept, y[keep], max_tokens, settings, device, start, log, f"{task}/{name}"
+            )
             results |= {f"{task}/{name}/{k}": v for k, v in scores.items()}
+            log({f"{task}/{name}/macro_auc": scores["macro_auc"]})
     return results

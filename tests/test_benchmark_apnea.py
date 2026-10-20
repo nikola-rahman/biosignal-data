@@ -65,7 +65,9 @@ def test_the_probe_finds_a_separable_feature() -> None:
     x = rng.normal(size=(400, 8))
     x[:, 3] += 4 * y  # one feature tells the classes apart
     groups = np.arange(400) // 50
-    s = apnea.probe(x[:300], y[:300], groups[:300], x[300:], y[300:], SETTINGS)
+    logged: list[dict[str, float]] = []
+    s = apnea.probe(x[:300], y[:300], groups[:300], x[300:], y[300:], SETTINGS, logged.append, "p")
+    assert [r["p/l2"] for r in logged] == SETTINGS.probe_l2  # every L2 tried is logged
     best = ((x[300:, 3] > 2) == (y[300:] == 1)).mean()  # the Bayes rule on these minutes
     assert s["accuracy"] >= best - 0.03 and s["l2"] in SETTINGS.probe_l2
 
@@ -79,8 +81,16 @@ def test_the_benchmark_runs_end_to_end_on_a_small_model() -> None:
     learn = apnea.minutes(data, ["a01"], SETTINGS.context_s)  # type: ignore[arg-type]
     test = apnea.minutes(data, ["x01"], SETTINGS.context_s)  # type: ignore[arg-type]
     device = torch.device("cpu")
-    features = apnea.embed(Encoder(config), learn, 512, SETTINGS.rows, device)
+    logged: list[dict[str, float]] = []
+    features = apnea.embed(Encoder(config), learn, 512, SETTINGS.rows, device, logged.append, "e")
     assert features.shape == (8, 32) and np.isfinite(features).all()
+    assert logged[-1]["embed/e/batches"] == logged[-1]["embed/e/of"]  # the last batch is logged
     for start in (None, Encoder(config).state_dict()):  # supervised, and fine-tuning
-        scores = apnea.end_to_end(config, learn, test, 512, SETTINGS, device, start)
+        logged.clear()
+        scores = apnea.end_to_end(
+            config, learn, test, 512, SETTINGS, device, start, logged.append, "f"
+        )
         assert set(scores) == {"accuracy", "sensitivity", "specificity", "auc"}
+        epochs = [r for r in logged if "f/epoch" in r]
+        assert [r["f/epoch"] for r in epochs] == list(range(1, SETTINGS.supervised_epochs + 1))
+        assert all(np.isfinite(r["f/epoch_train_loss"]) for r in epochs)

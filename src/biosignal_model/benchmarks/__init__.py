@@ -7,10 +7,19 @@ benchmark's own `settings` (each benchmark module checks them against its settin
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 import yaml
 from pydantic import BaseModel, ConfigDict
+
+LOG_EVERY_STEPS = 20  # training steps between two records of the training loss
+
+
+class Log(Protocol):
+    """Records metrics while a benchmark runs (Weights & Biases and the console), with keys
+    such as `<task>/<method>/train_loss`."""
+
+    def __call__(self, metrics: dict[str, float]) -> None: ...
 
 
 class BenchmarkRun(BaseModel):

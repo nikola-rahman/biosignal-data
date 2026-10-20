@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import math
 import random
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,6 +42,7 @@ from biosignal_data.read.standard import StandardDataset
 from biosignal_data.storage.stores import Store
 from biosignal_data.training.loader import Channel, Example, Origin, Signal
 from biosignal_model.batch import Packer
+from biosignal_model.benchmarks import LOG_EVERY_STEPS, Log
 from biosignal_model.model import Encoder, ModelConfig
 
 DATASET = "physionet/apnea-ecg"
@@ -168,11 +170,19 @@ def _pooled(
 
 @torch.no_grad()
 def embed(
-    model: Encoder, m: Minutes, max_tokens: int, rows: int, device: torch.device
-) -> np.ndarray:
+    model: Encoder, m: Minutes, max_tokens: int, rows: int, device: torch.device, log: Log,
+    name: str,
+) -> np.ndarray:  # fmt: skip
+    """The mean feature of every labelled minute; progress as `embed/<name>/...`."""
     model.eval()
     packer = _packer(model.config, max_tokens, rows)
-    parts = [_pooled(model, m, ids, packer, device).cpu() for ids in _chunks(m, packer, rows)]
+    chunks = _chunks(m, packer, rows)
+    parts, started = [], time.monotonic()
+    for k, ids in enumerate(chunks, 1):
+        parts.append(_pooled(model, m, ids, packer, device).cpu())
+        if k % max(1, len(chunks) // 10) == 0 or k == len(chunks):
+            log({f"embed/{name}/batches": float(k), f"embed/{name}/of": float(len(chunks)),
+                 f"embed/{name}/seconds": time.monotonic() - started})  # fmt: skip
     return torch.cat(parts).numpy()
 
 
@@ -207,10 +217,11 @@ def _scores(labels: np.ndarray, p: np.ndarray) -> dict[str, float]:
 
 def probe(
     learn: np.ndarray, learn_labels: np.ndarray, groups: np.ndarray,
-    test: np.ndarray, test_labels: np.ndarray, s: ApneaSettings,
+    test: np.ndarray, test_labels: np.ndarray, s: ApneaSettings, log: Log, prefix: str,
 ) -> dict[str, float]:  # fmt: skip
     """Logistic regression on standardized features: L2 by cross-validation on the
-    learning set (folds by record), then one fit on all of it and one score on test."""
+    learning set (folds by record), then one fit on all of it and one score on test. Each
+    L2 tried is logged with its cross-validated accuracy, under `prefix`."""
     mean, std = learn.mean(0), learn.std(0) + 1e-8
     xl = torch.from_numpy((learn - mean) / std).double()
     xt = torch.from_numpy((test - mean) / std).double()
@@ -226,6 +237,7 @@ def probe(
             w = _fit_logistic(xl[~held], yl[~held], l2, s.probe_steps)
             p = torch.sigmoid(xl[held] @ w[:-1] + w[-1]).numpy()
             correct += int(((p >= 0.5) == (learn_labels[held] == 1)).sum())
+        log({f"{prefix}/l2": l2, f"{prefix}/cv_accuracy": correct / len(learn_labels)})
         if correct / len(learn_labels) > best_accuracy:
             best, best_accuracy = l2, correct / len(learn_labels)
     w = _fit_logistic(xl, yl, best, s.probe_steps)
@@ -235,11 +247,14 @@ def probe(
 
 def end_to_end(
     config: ModelConfig, learn: Minutes, test: Minutes, max_tokens: int,
-    s: ApneaSettings, device: torch.device, start: dict[str, torch.Tensor] | None,
+    s: ApneaSettings, device: torch.device, start: dict[str, torch.Tensor] | None, log: Log,
+    prefix: str,
 ) -> dict[str, float]:  # fmt: skip
     """The encoder and a linear head, every weight trained on the learning set with the
     labels, scored once on the test set. `start`: the pretrained weights (fine-tuning),
-    or None for random weights (supervised from zero); the rest is the same."""
+    or None for random weights (supervised from zero); the rest is the same. Logged under
+    `prefix`: the training loss every LOG_EVERY_STEPS steps, and per epoch its mean, time
+    and speed (the protocol has no validation set)."""
     torch.manual_seed(s.seed)
     model = Encoder(config).to(device)
     if start is not None:
@@ -252,9 +267,11 @@ def end_to_end(
     packer = _packer(config, max_tokens, s.rows)
     order = list(range(len(learn.examples)))
     rng = random.Random(s.seed)  # noqa: S311 - not secret
-    for _ in range(s.supervised_epochs):
+    step = 0
+    for epoch in range(1, s.supervised_epochs + 1):
         model.train()
         rng.shuffle(order)
+        started, losses, window = time.monotonic(), [], []
         for k in range(0, len(order), s.supervised_examples_per_step):
             ids = order[k : k + s.supervised_examples_per_step]
             pooled = _pooled(model, learn, ids, packer, device)
@@ -264,6 +281,17 @@ def end_to_end(
             optimizer.zero_grad(set_to_none=True)
             loss.backward()  # type: ignore[no-untyped-call]
             optimizer.step()
+            step += 1
+            window.append(loss.item())
+            if step % LOG_EVERY_STEPS == 0:
+                log({f"{prefix}/train_loss": float(np.mean(window)), f"{prefix}/step": float(step)})
+                losses += window
+                window = []
+        losses += window
+        seconds = time.monotonic() - started
+        log({f"{prefix}/epoch": float(epoch), f"{prefix}/epoch_train_loss": float(np.mean(losses)),
+             f"{prefix}/epoch_seconds": seconds,
+             f"{prefix}/examples_per_s": len(order) / seconds})  # fmt: skip
     model.eval()
     p = []
     with torch.no_grad():
@@ -277,6 +305,7 @@ def run(
     checkpoint: dict[str, Any],
     settings: ApneaSettings,
     device: torch.device,
+    log: Log,
 ) -> dict[str, float]:
     """All scores of one checkpoint, as a flat dict for logging."""
     from biosignal_model.train import TrainConfig  # noqa: PLC0415 - avoids a cycle
@@ -298,12 +327,15 @@ def run(
     untrained = Encoder(config).to(device)
     for name, model in (("probe", pretrained), ("random", untrained)):
         scores = probe(
-            embed(model, learn, max_tokens, settings.rows, device), learn.labels,
-            learn.record_of, embed(model, test, max_tokens, settings.rows, device),
-            test.labels, settings,
+            embed(model, learn, max_tokens, settings.rows, device, log, f"{name}/learning"),
+            learn.labels, learn.record_of,
+            embed(model, test, max_tokens, settings.rows, device, log, f"{name}/test"),
+            test.labels, settings, log, name,
         )  # fmt: skip
         results |= {f"{name}/{k}": v for k, v in scores.items()}
+        log({f"{name}/auc": scores["auc"]})
     for name, start in (("finetune", checkpoint["model"]), ("supervised", None)):
-        scores = end_to_end(config, learn, test, max_tokens, settings, device, start)
+        scores = end_to_end(config, learn, test, max_tokens, settings, device, start, log, name)
         results |= {f"{name}/{k}": v for k, v in scores.items()}
+        log({f"{name}/auc": scores["auc"]})
     return results

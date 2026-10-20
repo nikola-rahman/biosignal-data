@@ -70,8 +70,11 @@ def test_the_probe_chooses_on_fold_9_and_scores_fold_10() -> None:
         finetune_epochs=1, finetune_learning_rate=1e-3, finetune_weight_decay=0.0,
         finetune_examples_per_step=8, seed=0,
     )  # fmt: skip
-    scores = ptbxl.probe(features, y, folds, settings)
+    logged: list[dict[str, float]] = []
+    scores = ptbxl.probe(features, y, folds, settings, logged.append, "p")
     assert scores["macro_auc"] > 0.95 and scores["labels"] == 2 and scores["l2"] in (1e-3, 1.0)
+    assert [r["p/l2"] for r in logged] == [1e-3, 1.0]  # every L2 tried, with its fold-9 AUC
+    assert max(r["p/validation_macro_auc"] for r in logged) == scores["validation_macro_auc"]
 
 
 def test_fine_tuning_runs_end_to_end_on_a_small_model() -> None:
@@ -88,8 +91,19 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model() -> None:
         finetune_examples_per_step=4, seed=0,
     )  # fmt: skip
     device = torch.device("cpu")
+    logged: list[dict[str, float]] = []
     for start in (None, Encoder(config).state_dict()):
-        scores = ptbxl.end_to_end(config, records, y, 256, settings, device, start)
+        logged.clear()
+        scores = ptbxl.end_to_end(
+            config, records, y, 256, settings, device, start, logged.append, "f"
+        )
         assert 0.0 <= scores["macro_auc"] <= 1.0 and scores["epoch"] in (1.0, 2.0)
-    features = ptbxl.embed(Encoder(config), records.examples, 256, 2, device)
+        epochs = [r for r in logged if "f/epoch" in r]
+        assert [r["f/epoch"] for r in epochs] == [1.0, 2.0]
+        assert all(np.isfinite(r["f/epoch_train_loss"]) for r in epochs)
+        chosen = [r for r in epochs if "f/chosen_epoch" in r]  # fold 10 only when chosen
+        assert chosen[-1]["f/chosen_test_macro_auc"] == scores["macro_auc"]
+    logged.clear()
+    features = ptbxl.embed(Encoder(config), records.examples, 256, 2, device, logged.append, "e")
     assert features.shape == (24, 32) and np.isfinite(features).all()
+    assert logged[-1]["embed/e/batches"] == logged[-1]["embed/e/of"]

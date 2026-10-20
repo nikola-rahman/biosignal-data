@@ -67,6 +67,7 @@ def benchmark(
     (no artifacts) and to the store, next to the checkpoint."""
     import io  # noqa: PLC0415
     import json  # noqa: PLC0415
+    import time  # noqa: PLC0415
 
     import torch  # noqa: PLC0415
     import wandb  # noqa: PLC0415
@@ -100,7 +101,14 @@ def benchmark(
         project=run.wandb_project, entity=run.wandb_entity, mode=run.wandb_mode,
         job_type="benchmark", name=f"{name} {run.checkpoint}", save_code=False, config=described,
     )  # fmt: skip
-    results = module.run(store, checkpoint, bench_settings, torch.device(run.device))
+
+    def log(metrics: dict[str, float]) -> None:
+        """Each record of progress to W&B, and the same line to the console."""
+        logged.log(metrics)
+        line = " ".join(f"{k}={v:.5g}" for k, v in metrics.items())
+        typer.echo(f"{time.strftime('%H:%M:%S')} {line}")
+
+    results = module.run(store, checkpoint, bench_settings, torch.device(run.device), log)
     logged.summary.update({f"{name}/{k}": v for k, v in results.items()})
     logged.finish()
     key = (
