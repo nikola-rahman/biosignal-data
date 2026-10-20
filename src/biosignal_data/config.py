@@ -40,6 +40,15 @@ class StandardizeConfig(_Section):
     workers: int = Field(ge=1)  # recordings converted at the same time
 
 
+class QualityConfig(_Section):
+    """`biosignal-data quality`: what counts as flat, and the sample for percentiles."""
+
+    flat_s: float = Field(gt=0)  # a run of one stored value counts as flat from here on
+    percentile_sample: int = Field(ge=100)  # valid values per channel for p01, p50, p99
+    seed: int
+    workers: int = Field(ge=1)  # recordings measured at the same time
+
+
 class StagingConfig(_Section):
     """Disk for the sources whose tools must write files before upload (TUH, NSRR, Kaggle)."""
 
@@ -55,6 +64,7 @@ class Config(_Section):
     s3: S3Config | None = None
     download: DownloadConfig | None = None
     standardize: StandardizeConfig | None = None
+    quality: QualityConfig | None = None
     staging: StagingConfig | None = None
     read: ReadConfig | None = None
 

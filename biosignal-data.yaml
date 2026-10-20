@@ -18,6 +18,13 @@ download:
 standardize:
   workers: 4                   # recordings converted at the same time
 
+# biosignal-data quality: per-channel measurements of the standard layer.
+quality:
+  flat_s: 1.0                  # a run of one stored value counts as flat from 1 s on
+  percentile_sample: 100000    # valid values per channel for the 1st, 50th, 99th percentile
+  seed: 0
+  workers: 4                   # recordings measured at the same time
+
 # Disk for TUH EEG: rsync writes files here before they are uploaded.
 staging:
   dir: ~/biosignal-staging

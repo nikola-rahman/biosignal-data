@@ -8,6 +8,7 @@
     check      check stored files against their manifests
     standardize  convert raw versions in --dest to the standard layer (Zarr + Parquet)
     index      build the training index (subjects, splits, signal types) from the standard layer
+    quality    measure each channel of the standard layer (flat, invalid, limits, values)
     cleanup    remove unfinished uploads that stopped runs left in --dest
     dev        maintainer commands (validation, generated docs)
 
@@ -887,6 +888,58 @@ def _print_standard_plan(plan: StandardPlan) -> None:
         highlight=False,
         soft_wrap=True,
     )
+
+
+@app.command("quality")
+def quality(
+    dest: DestOpt,
+    dataset_ids: IdsArg = None,
+    ids_file: IdsFileOpt = None,
+    signal: SignalOpt = [],  # noqa: B006
+    repository: RepositoryOpt = [],  # noqa: B006
+    all_: AllOpt = False,
+    replace: ReplaceOpt = False,
+    verbose: VerboseOpt = False,
+    config: ConfigOpt = None,
+    catalog: CatalogOpt = None,
+    descriptions: DescriptionsOpt = None,
+) -> None:
+    """Measure every channel of the newest complete standard version of each dataset:
+    invalid and non-finite samples, flat runs, samples at the recorder's limits, and the
+    physical values. Written to <dest>/quality/<id>/<version>/; nothing is deleted or
+    changed. The settings come from the `quality` section of biosignal-data.yaml."""
+    from biosignal_data.quality import AlreadyMeasured, measure  # noqa: PLC0415
+
+    setup_logging(verbose)
+    cfg, cfg_path = _config(config)
+    settings = _need(cfg.quality, "quality", cfg_path)
+    datasets = _select_datasets(
+        _catalog(catalog), dataset_ids, ids_file, signal, repository, all_, descriptions
+    )
+    store = _store(dest, cfg, cfg_path, settings.workers)
+    failed = 0
+    for d in datasets:
+        try:
+            m = measure(
+                store, d.id, flat_s=settings.flat_s, percentile_sample=settings.percentile_sample,
+                seed=settings.seed, workers=settings.workers, replace=replace,
+            )  # fmt: skip
+        except AlreadyMeasured as exc:
+            console.print(f"[green]✓[/] {d.id}: {escape(str(exc))}", highlight=False)
+            continue
+        except FileNotFoundError as exc:
+            console.print(f"[yellow]![/] {d.id}: {escape(str(exc))}", highlight=False)
+            continue
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            failed += 1
+            console.print(f"[red]✗[/] {d.id}: {type(exc).__name__}: {escape(str(exc))}")
+            continue
+        console.print(
+            f"[green]✓[/] {d.id} {m.standard_version}: {plural(m.recordings, 'recording')}, "
+            f"{plural(m.channels, 'channel')} measured",
+            highlight=False,
+        )
+    raise typer.Exit(1 if failed else 0)
 
 
 @app.command("index")
