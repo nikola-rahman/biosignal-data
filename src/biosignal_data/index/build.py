@@ -53,7 +53,8 @@ RECORDINGS = pa.schema(
         ("recording_id", pa.string()),
         ("subject_id", pa.string()),  # qualified by the dataset
         ("subject_certain", pa.bool_()),  # the source states the mapping
-        ("split", pa.string()),
+        ("split", pa.string()),  # train, validation, test, or held_out (for a benchmark)
+        ("held_out_for", pa.string()),  # the benchmark, when split is held_out
         ("duration_s", pa.float64()),
         ("start_time", pa.timestamp("us")),
         ("arrays", pa.list_(pa.string())),
@@ -94,6 +95,7 @@ class IndexManifest(BaseModel):
     standard_manifests_sha256: dict[str, str]
     left_out: dict[str, str]  # dataset id -> why (e.g. no complete standard version)
     excluded: dict[str, int]  # "dataset: reason" -> recordings left out by an exclude rule
+    held_out: dict[str, int]  # benchmark -> recordings kept out of pretraining for it
     recordings: int
     recordings_without_signals: int
     subjects: int
@@ -152,6 +154,7 @@ def build_index(
         standard_manifests_sha256=manifests,
         left_out=left_out,
         excluded=dict(found.excluded),
+        held_out=dict(found.held_out),
         recordings=len(recordings),
         recordings_without_signals=found.without_signals,
         subjects=len(subjects),
@@ -175,6 +178,7 @@ class _Found:
     channels: list[dict[str, Any]] = field(default_factory=list)
     without_signals: int = 0
     excluded: Counter[str] = field(default_factory=Counter)
+    held_out: Counter[str] = field(default_factory=Counter)
     unknown: Counter[str] = field(default_factory=Counter)
 
 
@@ -201,6 +205,9 @@ def _index_dataset(
             found.excluded[f"{dataset_id}: {exclude.reason}"] += 1
             continue
         subject, certain = subject_of(dataset_id, r["recording_id"], rules.subject, table)
+        held_out = rules.held_out_for(r["recording_id"])
+        if held_out is not None:
+            found.held_out[held_out.benchmark] += 1
         indexed.add(r["recording_id"])
         found.recordings.append(
             {
@@ -209,7 +216,8 @@ def _index_dataset(
                 "recording_id": r["recording_id"],
                 "subject_id": subject,
                 "subject_certain": certain,
-                "split": split_of(subject),
+                "split": "held_out" if held_out is not None else split_of(subject),
+                "held_out_for": held_out.benchmark if held_out is not None else None,
                 "duration_s": r["duration_s"],
                 "start_time": r["start_time"],
                 "arrays": r["arrays"],

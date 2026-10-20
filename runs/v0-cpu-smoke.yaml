@@ -1,0 +1,55 @@
+# Model v0, a test of the whole chain on the CPU of the standard server: real data from
+# S3 through the test index, a very small network, a few hundred steps. It measures the
+# reading speed; the model is too small to mean anything.
+data:
+  store: s3://biosignal-data
+  index: smoke-2026-10-20
+  train_split: train
+  validation_split: validation
+  signal_types: null          # every channel
+  datasets: null              # every dataset of the index
+  cache_directory: /root/cache-smoke
+  cache_bytes: 21474836480    # 20 GiB
+  shuffle_buffer: 512
+  reads_in_flight: 8
+  workers: 3
+
+tokens:
+  max_tokens: 1024
+  samples_per_token: 64
+  max_channels: 16
+  rows: 4
+  mask_ratio: 0.5
+
+model:
+  width: 128
+  layers: 4
+  heads: 4
+  feed_forward: 512
+  min_wavelength_s: 0.01
+  max_wavelength_s: 10000.0
+  attention: dense
+
+optim:
+  learning_rate: 1.0e-3
+  min_learning_rate: 1.0e-4
+  warmup_steps: 50
+  steps: 300
+  weight_decay: 0.05
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+
+run:
+  name: v0-cpu-smoke
+  seed: 0
+  device: cpu
+  precision: fp32
+  log_every: 10
+  validate_every: 100
+  validation_batches: 5
+  checkpoint_every: 300
+  checkpoint_prefix: models/v0-cpu-smoke
+  wandb_project: biosignal-fm
+  wandb_entity: schnyox-s
+  wandb_mode: online

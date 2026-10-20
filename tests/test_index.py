@@ -242,3 +242,46 @@ def test_excluded_recordings_and_subjects_from_a_raw_table(
 
     assert (m.recordings, m.subjects, m.subjects_assumed) == (2, 1, 0)
     assert m.excluded == {"physionet/ephnogram: an excerpt of another recording": 1}
+
+
+def test_benchmark_test_records_are_held_out_of_every_split(
+    store: LocalStore, tmp_path: Path
+) -> None:
+    prefix = "standard/physionet/apnea-ecg/1.0.0"
+    rows = [
+        {"recording_id": rec, "format": "wfdb", "duration_s": 60.0, "arrays": ["100Hz"],
+         "n_channels": 1, "signals": f"signals/{rec}.zarr", "source_files": [],
+         "source_sha256": []}
+        for rec in ("a01", "a01r", "x01", "x01r")
+    ]  # fmt: skip
+    store.put_bytes(
+        f"{prefix}/recordings.parquet",
+        _parquet(pa.Table.from_pylist(rows, schema=tables.RECORDINGS)),
+    )
+    store.put_bytes(
+        f"{prefix}/channels.parquet", _parquet(pa.Table.from_pylist([], schema=tables.CHANNELS))
+    )
+    store.put_bytes(f"{prefix}/_manifest.json", b'{"raw_version": "1.0.0"}')
+    store.put_bytes(f"{prefix}/_SUCCESS", b"")
+    rules_path = tmp_path / "index.yaml"
+    rules_path.write_text(
+        "datasets:\n"
+        "  - id: physionet/apnea-ecg\n"
+        "    subject: {rule: pattern, pattern: '^([abcx]\\d{2})r?$', certain: false,\n"
+        "              source: 'https://physionet.org/content/apnea-ecg/1.0.0/'}\n"
+        "    held_out:\n"
+        "      - pattern: '^x\\d{2}r?$'\n"
+        "        benchmark: apnea\n"
+        "        source: https://physionet.org/content/apnea-ecg/1.0.0/\n"
+        "        evidence: a test set of 35 records (x01 through x35)\n"
+    )
+
+    m = build_index(
+        store, ["physionet/apnea-ecg"], IndexRules.load(rules_path), version="v"
+    ).manifest
+
+    assert m.held_out == {"apnea": 2}
+    rows_out = pq.read_table(store._path("index/v/recordings.parquet")).to_pylist()
+    split = {r["recording_id"]: (r["split"], r["held_out_for"]) for r in rows_out}
+    assert split["x01"] == split["x01r"] == ("held_out", "apnea")
+    assert split["a01"][0] in {"train", "validation", "test"} and split["a01"][1] is None

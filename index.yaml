@@ -46,6 +46,12 @@ datasets:
         A record and its respiration record (a01, a01r) are one night of one person. The
         page does not say whether the learning set (a, b, c) and the test set (x) share
         persons.
+    held_out:
+      - pattern: '^x\d{2}r?$'
+        benchmark: apnea-ecg per-minute apnea detection
+        source: https://physionet.org/content/apnea-ecg/1.0.0/
+        evidence: >-
+          a test set of 35 records (x01 through x35)
     exclude:
       - pattern: '^c05$'
         reason: a part of another recording of the dataset

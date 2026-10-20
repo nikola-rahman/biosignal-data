@@ -100,14 +100,33 @@ class ExcludeRule(_Model):
         return self
 
 
+class HoldOutRule(_Model):
+    """Recordings kept for a benchmark's test set: they get the split `held_out`, so that
+    no pretraining sees them. The source names the official test set."""
+
+    pattern: str  # a regex on the recording id
+    benchmark: str
+    source: HttpUrl
+    evidence: str
+
+    @model_validator(mode="after")
+    def _check(self) -> HoldOutRule:
+        re.compile(self.pattern)
+        return self
+
+
 class DatasetRules(_Model):
     id: str
     subject: SubjectRule | None = None
     exclude: list[ExcludeRule] = Field(default_factory=list)
+    held_out: list[HoldOutRule] = Field(default_factory=list)
     channels: list[ChannelRule] = Field(default_factory=list)
 
     def excluded(self, recording_id: str) -> ExcludeRule | None:
         return next((e for e in self.exclude if re.search(e.pattern, recording_id)), None)
+
+    def held_out_for(self, recording_id: str) -> HoldOutRule | None:
+        return next((h for h in self.held_out if re.search(h.pattern, recording_id)), None)
 
 
 @dataclass(frozen=True)
