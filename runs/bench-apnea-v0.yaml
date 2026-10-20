@@ -1,0 +1,20 @@
+# The apnea benchmark (official split) on the last checkpoint of the RTX 6000 test run.
+store: s3://biosignal-data
+checkpoint: models/v0-rtx6000-test-2/step-00012000.pt
+device: cuda
+settings:
+  # 2 min before and after the labelled minute: 5 min in all, as the strongest published
+  # methods use (their RR-interval inputs cover 1, 3 or 5 min around the minute).
+  context_s: 120.0
+  rows: 8
+  probe_l2: [1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]
+  probe_folds: 5
+  probe_steps: 100
+  supervised_epochs: 10
+  supervised_learning_rate: 3.0e-4
+  supervised_weight_decay: 0.05
+  supervised_examples_per_step: 32
+  seed: 0
+wandb_project: biosignal-fm
+wandb_entity: schnyox-s
+wandb_mode: online
