@@ -522,3 +522,19 @@ def test_small_recordings_share_one_part_and_old_parts_still_finish(
     # m1 (multi-segment) is not converted yet, as in the main test: no row
     assert [r["recording_id"] for r in recordings] == ["r1", "r2", "r3", "sub/s1"]
     assert not list(store.list(location.parts_prefix))
+
+
+@pytest.mark.parametrize(
+    "module",
+    ["biosignal_data.standard.convert", "biosignal_data.read", "biosignal_data.index",
+     "biosignal_data.training", "biosignal_data.quality"],
+)  # fmt: skip
+def test_each_module_imports_first_in_a_fresh_interpreter(module: str) -> None:
+    # importing biosignal_data.standard.convert first failed on an import cycle (2026-10-20)
+    import subprocess  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+
+    done = subprocess.run(
+        [sys.executable, "-c", f"import {module}"], check=False, capture_output=True, text=True
+    )
+    assert done.returncode == 0, done.stderr

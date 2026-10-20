@@ -24,8 +24,8 @@ import pyarrow.parquet as pq
 import zarr
 
 from biosignal_data.read.raw import complete_versions
-from biosignal_data.standard.convert import StandardManifest
 from biosignal_data.standard.layout import ROOT, StandardLocation
+from biosignal_data.standard.manifest import StandardManifest
 from biosignal_data.storage.stores import S3Settings, Store, open_store
 
 

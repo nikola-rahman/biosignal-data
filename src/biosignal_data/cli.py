@@ -67,13 +67,13 @@ from biosignal_data.ingest import AlreadyComplete, Plan, planned, verify
 from biosignal_data.read.raw import complete_versions, stored_versions
 from biosignal_data.standard.convert import (
     AlreadyStandard,
-    StandardManifest,
     StandardPlan,
     convert,
     iter_not_converted,
     plan_standard,
 )
 from biosignal_data.standard.layout import StandardLocation
+from biosignal_data.standard.manifest import StandardManifest
 from biosignal_data.storage.layout import VersionLocation
 from biosignal_data.storage.manifest import Manifest
 from biosignal_data.storage.stores import S3Settings, S3Store, Store, StoreFactory, open_store

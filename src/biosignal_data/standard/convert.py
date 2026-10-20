@@ -25,18 +25,17 @@ import threading
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 import pyarrow as pa
-from pydantic import BaseModel, ConfigDict
 
 from biosignal_data import __version__
 from biosignal_data.read.raw import RawDataset
 from biosignal_data.standard import arrays, tables
 from biosignal_data.standard.discover import Discovery, Unit, discover, may_be_annotations
 from biosignal_data.standard.layout import DONE, TABLES, StandardLocation
+from biosignal_data.standard.manifest import NotConverted, StandardManifest
 from biosignal_data.standard.sources import (
     EdfSource,
     Source,
@@ -50,39 +49,11 @@ from biosignal_data.storage.stores import Store
 from biosignal_data.text import plural
 
 log = logging.getLogger(__name__)
-SCHEMA_VERSION = 1
 HEADER_READS = 16  # WFDB headers read at the same time while planning (small files)
 
 
 class AlreadyStandard(RuntimeError):  # noqa: N818 - reads naturally at the call site
     pass
-
-
-class NotConverted(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    path: str
-    reason: str
-
-
-class StandardManifest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    schema_version: int = SCHEMA_VERSION
-    dataset_id: str
-    raw_version: str
-    raw_manifest_sha256: str
-    license: str | None
-    tool: str
-    created_at: datetime
-    completed_at: datetime
-    layout: dict[str, Any]
-    recordings: int
-    channels: int
-    events: int
-    files_used: int
-    problems: list[str]  # e.g. RECORDS entries without files
-    not_converted: list[NotConverted]
 
 
 class StandardProgress(Protocol):
