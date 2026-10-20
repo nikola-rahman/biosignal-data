@@ -154,6 +154,28 @@ class Packer:
         if count:
             yield self._batch(rows, count)
 
+    def pack(self, examples: list[Example]) -> tuple[Batch, list[tuple[int, int]]]:
+        """All `examples` in one batch, in order, and the (row, document) of each: for
+        reading the model's output of each example back (benchmarks). Raises if they do
+        not fit `rows` x `max_tokens`."""
+        rows: list[list[_Tokens]] = [[]]
+        where: list[tuple[int, int]] = []
+        used = 0
+        for example in examples:
+            tokens = self.tokens(example)
+            n = len(tokens.slot)
+            if n > self.max_tokens:
+                raise ValueError(f"an example of {n} tokens is longer than max_tokens")
+            if used + n > self.max_tokens:
+                rows.append([])
+                used = 0
+            if len(rows) > self.rows:
+                raise ValueError(f"{len(examples)} examples do not fit {self.rows} rows")
+            where.append((len(rows) - 1, len(rows[-1])))
+            rows[-1].append(tokens)
+            used += n
+        return self._batch(rows, len(examples)), where
+
     def tokens(self, example: Example) -> _Tokens:
         p = self.samples_per_token
         if len(example.signals) > self.max_channels:

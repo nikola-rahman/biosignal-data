@@ -1,6 +1,7 @@
 """Command-line interface: `biosignal-model --help`.
 
-    train   masked-token pretraining, with every setting from one YAML file
+    train      masked-token pretraining, with every setting from one YAML file
+    benchmark  score a checkpoint on a benchmark (apnea), with its official protocol
 
 S3 settings come from biosignal-data.yaml (`s3` section); keys from the
 BIOSIGNAL_ACCESS_KEY_ID / BIOSIGNAL_SECRET_ACCESS_KEY variables; the Weights & Biases key
@@ -50,6 +51,56 @@ def train_(
     typer.echo(
         " ".join(f"{k}={v:.4g}" for k, v in sorted(last.items()) if "/" in k and "_by_" not in k)
     )
+
+
+@app.command("benchmark")
+def benchmark(
+    name: Annotated[str, typer.Argument(help="The benchmark: apnea.")],
+    config: Annotated[Path, typer.Argument(help="The benchmark run's settings (YAML).")],
+    settings: Annotated[
+        Path | None, typer.Option(help="biosignal-data.yaml, for the S3 settings.")
+    ] = None,
+) -> None:
+    """Score a checkpoint: a linear probe on the frozen encoder, the same with random
+    weights, and the same architecture trained from zero. Results go to Weights & Biases
+    (no artifacts) and to the store, next to the checkpoint."""
+    import io  # noqa: PLC0415
+    import json  # noqa: PLC0415
+
+    import torch  # noqa: PLC0415
+    import wandb  # noqa: PLC0415
+
+    from biosignal_model.benchmarks import apnea  # noqa: PLC0415
+
+    if name != "apnea":
+        raise typer.BadParameter(f"unknown benchmark {name!r}; known: apnea")
+    run = apnea.BenchmarkConfig.load(config)
+    s3 = None
+    if run.store.startswith("s3://"):
+        try:
+            loaded, path = load_config(settings)
+            section = need(loaded.s3, "s3", path)
+        except ConfigError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(2) from exc
+        s3 = (section.endpoint, section.region, section.addressing)
+    store = StoreFactory(run.store, s3)()
+    data = store.get_bytes(run.checkpoint)
+    if data is None:
+        raise typer.BadParameter(f"{run.checkpoint} is not in {run.store}")
+    checkpoint = torch.load(io.BytesIO(data), map_location="cpu", weights_only=True)
+    described = run.model_dump(mode="json") | {"code_commit": _commit(), "step": checkpoint["step"]}
+    logged = wandb.init(
+        project=run.wandb_project, entity=run.wandb_entity, mode=run.wandb_mode,
+        job_type="benchmark", name=f"apnea {run.checkpoint}", save_code=False, config=described,
+    )  # fmt: skip
+    results = apnea.run(store, checkpoint, run.settings, torch.device(run.device))
+    logged.summary.update({f"apnea/{k}": v for k, v in results.items()})
+    logged.finish()
+    key = run.checkpoint.rsplit("/", 1)[0] + f"/benchmarks/apnea-step-{checkpoint['step']:08d}.json"
+    store.put_bytes(key, json.dumps(described | {"results": results}, indent=2).encode())
+    for k, v in sorted(results.items()):
+        typer.echo(f"{k}: {v:.4f}")
 
 
 def _commit() -> str:

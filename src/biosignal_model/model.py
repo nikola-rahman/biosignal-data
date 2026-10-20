@@ -66,6 +66,12 @@ class Encoder(nn.Module):
 
     def forward(self, x: Inputs) -> torch.Tensor:
         """The predicted samples of every token, [R, L, P], in the channel's scale."""
+        out: torch.Tensor = self.head(self.features(x))
+        return out
+
+    def features(self, x: Inputs) -> torch.Tensor:
+        """The representation of every token, [R, L, width], after the last block's norm:
+        what a probe or a task head reads."""
         observed = x.observed.to(x.values.dtype)
         h = self.samples(torch.cat([x.values * observed, observed], dim=-1))
         h = torch.where(x.hidden[..., None], self.hidden.to(h.dtype), h)
@@ -76,8 +82,8 @@ class Encoder(nn.Module):
         attend = _attention(x.document, self.config.attention)
         for block in self.blocks:
             h = block(h, rotary, attend)
-        out: torch.Tensor = self.head(self.norm(h))
-        return out
+        features: torch.Tensor = self.norm(h)
+        return features
 
 
 class Block(nn.Module):
