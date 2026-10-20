@@ -11,8 +11,14 @@ import wfdb
 import zarr
 
 from biosignal_data.ingest import ingest
-from biosignal_data.standard import arrays
-from biosignal_data.standard.convert import AlreadyStandard, convert, plan_standard
+from biosignal_data.standard import arrays, tables
+from biosignal_data.standard.convert import (
+    AlreadyStandard,
+    _batches,
+    convert,
+    convert_unit,
+    plan_standard,
+)
 from biosignal_data.standard.discover import discover
 from biosignal_data.standard.sources import Group
 from biosignal_data.storage.stores import LocalStore
@@ -101,7 +107,7 @@ def test_standard_version_is_exact_and_accounts_for_every_file(
     assert [u.id for u in plan.units] == ["m1", "r1", "r2", "r3", "sub/s1"]
     assert plan.discovery.problems == ["missing: listed in RECORDS, but no such header or EDF file"]
 
-    report = convert(plan, store, workers=2, work_dir=tmp_path / "work")
+    report = convert(plan, store, workers=2, part_bytes=1, work_dir=tmp_path / "work")
     assert report.complete and not report.failed and report.converted == 5
 
     prefix = "standard/physionet/mitdb/1.0.0"
@@ -180,15 +186,17 @@ def test_a_failed_recording_keeps_the_others_and_runs_again(
         raise OSError("simulated read failure")
 
     monkeypatch.setattr(convert_module, "EdfSource", broken)
-    report = convert(plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2,
-                     work_dir=tmp_path / "work")  # fmt: skip
+    report = convert(
+        plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2, part_bytes=1,
+        work_dir=tmp_path / "work",
+    )  # fmt: skip
     assert not report.complete and list(report.failed) == ["sub/s1"]
     assert not store.exists("standard/physionet/mitdb/1.0.0/_SUCCESS")
 
     monkeypatch.setattr(convert_module, "EdfSource", original)
     plan = plan_standard(store, "physionet/mitdb", "1.0.0")
     assert [u.id for u in plan.to_convert] == ["sub/s1"]
-    report = convert(plan, store, workers=2, work_dir=tmp_path / "work")
+    report = convert(plan, store, workers=2, part_bytes=1, work_dir=tmp_path / "work")
     assert report.complete and report.converted == 1 and report.skipped == 4
 
 
@@ -228,7 +236,8 @@ def test_cli_dry_run_then_convert_then_already(
 
     config = tmp_path / "biosignal-data.yaml"
     config.write_text(
-        f"standardize:\n  workers: 2\nstaging:\n  dir: {tmp_path / 'staging'}\n  keep: false\n"
+        f"standardize:\n  workers: 2\n  part_bytes: 1\n"
+        f"staging:\n  dir: {tmp_path / 'staging'}\n  keep: false\n"
     )
     args = ["standardize", "physionet/mitdb", "--dest", str(store.root), "--config", str(config)]
     runner = CliRunner()
@@ -258,7 +267,7 @@ def test_reader_opens_tables_and_reads_windows_in_physical_units(
 ) -> None:
     from biosignal_data.read import StandardDataset  # noqa: PLC0415
 
-    convert(plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2,
+    convert(plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2, part_bytes=1,
             work_dir=tmp_path / "work")  # fmt: skip
     ds = StandardDataset.open(store, "physionet/mitdb", "latest")
     assert ds.location.version == "1.0.0"
@@ -359,8 +368,10 @@ def test_a_recording_fails_when_two_readers_of_its_file_disagree(
             return data + 1 if self._wrong else data
 
     monkeypatch.setattr(convert_module, "EdfSource", OneReaderIsWrong)
-    report = convert(plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2,
-                     work_dir=tmp_path / "work")  # fmt: skip
+    report = convert(
+        plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2, part_bytes=1,
+        work_dir=tmp_path / "work",
+    )  # fmt: skip
     assert not report.complete
     assert list(report.failed) == ["sub/s1"]
     assert "two readers of the file differ" in report.failed["sub/s1"]
@@ -445,7 +456,7 @@ def test_a_view_is_listed_with_its_records_not_stored_twice(
     ingest(dataset, store, fetcher=FakeFetcher(dataset, files), workers=2)
     plan = plan_standard(store, "physionet/apnea-ecg", "1.0.0")
     assert sorted(u.id for u in plan.units) == ["a01", "a01r"]
-    report = convert(plan, store, workers=2, work_dir=tmp_path / "work")
+    report = convert(plan, store, workers=2, part_bytes=1, work_dir=tmp_path / "work")
     assert report.complete and report.converted == 2
     manifest = json.loads(
         store.get_bytes("standard/physionet/apnea-ecg/1.0.0/_manifest.json") or b""
@@ -467,14 +478,47 @@ def test_parts_written_before_problems_were_recorded_still_finish(
 
     convert_module.EdfSource = broken  # type: ignore[assignment,misc]
     try:
-        convert(plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2,
+        convert(plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2, part_bytes=1,
                 work_dir=tmp_path / "work")  # fmt: skip
     finally:
         convert_module.EdfSource = original  # type: ignore[misc]
-    done_key = "standard/physionet/mitdb/1.0.0/_parts/r1/done.json"
+    parts = "standard/physionet/mitdb/1.0.0/_parts/"
+    done_key = next(
+        k for k in store.list(parts)
+        if k.endswith("/done.json") and "r1" in json.loads(store.get_bytes(k) or b"")["units"]
+    )  # fmt: skip
     done = json.loads(store.get_bytes(done_key) or b"")
     del done["problems"]  # as the earlier code wrote it
     store.put_bytes(done_key, json.dumps(done).encode())
-    report = convert(plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2,
-                     work_dir=tmp_path / "work")  # fmt: skip
+    report = convert(
+        plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2, part_bytes=1,
+        work_dir=tmp_path / "work",
+    )  # fmt: skip
     assert report.complete
+
+
+def test_small_recordings_share_one_part_and_old_parts_still_finish(
+    store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
+) -> None:
+    plan = plan_standard(store, "physionet/mitdb", "1.0.0")
+    first = plan.units[0]
+    # an earlier run left the first record as a per-recording part (before 2026-10-20)
+    (tmp_path / "work").mkdir()
+    result = convert_unit(plan, store, first, tmp_path / "work")
+    location = plan.location
+    for name, table in result.parts.items():
+        store.put_bytes(location.part_key(first.id, f"{name}.parquet"), tables.to_parquet(table))
+    store.put_bytes(location.part_key(first.id, "done.json"), json.dumps(
+        {"unit": first.id, "tables": sorted(result.parts), "used": result.used,
+         "not_converted": [], "problems": []}).encode())  # fmt: skip
+
+    plan = plan_standard(store, "physionet/mitdb", "1.0.0")
+    assert first.id not in [u.id for u in plan.to_convert] and len(plan.to_convert) == 4
+    assert len(_batches(plan, plan.to_convert, 10**9)) == 1  # the other four share one part
+    report = convert(plan, store, workers=2, part_bytes=10**9, work_dir=tmp_path / "work")
+
+    assert report.complete and report.converted == 4 and report.skipped == 1
+    recordings = pq.read_table(store._path(location.table_key("recordings"))).to_pylist()
+    # m1 (multi-segment) is not converted yet, as in the main test: no row
+    assert [r["recording_id"] for r in recordings] == ["r1", "r2", "r3", "sub/s1"]
+    assert not list(store.list(location.parts_prefix))

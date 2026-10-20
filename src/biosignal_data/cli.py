@@ -849,6 +849,7 @@ def _standardize_one(
             plan,
             store,
             workers=settings.workers,
+            part_bytes=settings.part_bytes,
             work_dir=staging_dir.expanduser() / "standardize",
             progress=bar,
         )

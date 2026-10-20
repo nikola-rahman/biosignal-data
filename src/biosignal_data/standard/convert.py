@@ -45,7 +45,7 @@ from biosignal_data.standard.sources import (
     wfdb_annotations,
 )
 from biosignal_data.storage.layout import VersionLocation
-from biosignal_data.storage.manifest import Manifest, StoppedError, utcnow
+from biosignal_data.storage.manifest import Manifest, utcnow
 from biosignal_data.storage.stores import Store
 from biosignal_data.text import plural
 
@@ -151,15 +151,7 @@ def plan_standard(
             return dict(zip(paths, pool.map(read_text, paths), strict=True))
 
     discovery = discover((f.path for f in raw.files), read_text, read_texts)
-    done = (
-        set()
-        if complete
-        else {
-            key[len(location.parts_prefix) : -len("/" + DONE)]
-            for key in store.list(location.parts_prefix)
-            if key.endswith("/" + DONE)
-        }
-    )
+    done = set() if complete else set(_done_parts(store, location))
     plan = StandardPlan(
         raw, hashlib.sha256(data).hexdigest(), location, discovery, done, replace=complete
     )
@@ -175,18 +167,45 @@ def plan_standard(
     return plan
 
 
+def _done_parts(store: Store, location: StandardLocation) -> dict[str, str]:
+    """Each finished recording -> the part that holds it. A batch part lists its recordings
+    in its done.json; a part from before batches (2026-10-20) is one recording, named by
+    its folder."""
+    keys = [k for k in store.list(location.parts_prefix) if k.endswith("/" + DONE)]
+    found: dict[str, str] = {}
+    batches = []
+    for key in keys:
+        folder = key[len(location.parts_prefix) : -len("/" + DONE)]
+        if folder.startswith("batch-"):
+            batches.append((folder, key))
+        else:
+            found[folder] = folder
+    with ThreadPoolExecutor(max_workers=HEADER_READS) as pool:
+        for folder, data in zip(
+            (f for f, _ in batches),
+            pool.map(lambda fk: store.get_bytes(fk[1]), batches),
+            strict=True,
+        ):
+            if data is None:
+                raise RuntimeError(f"{location.parts_prefix}{folder}: done.json vanished")
+            for unit_id in json.loads(data)["units"]:
+                found[unit_id] = folder
+    return found
+
+
 def convert(
     plan: StandardPlan,
     store: Store,
     *,
     workers: int,
+    part_bytes: int,
     work_dir: Path,
     progress: StandardProgress | None = None,
     stop: threading.Event | None = None,
 ) -> StandardReport:
-    """Convert exactly `plan.to_convert`, `workers` at a time; complete the version when
-    every recording is done. Raw files are fetched to `work_dir`, one folder per
-    recording, removed when it is done."""
+    """Convert exactly `plan.to_convert`, `workers` batches at a time (see `_batches`);
+    complete the version when every recording is done. Raw files are fetched to
+    `work_dir`, one folder per recording, removed when it is done."""
     report = StandardReport(
         plan.raw.location.dataset_id,
         plan.raw.location.version,
@@ -201,31 +220,41 @@ def convert(
         progress.start(len(plan.units), len(plan.done))
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    def run(unit: Unit) -> None:
-        if stop is not None and stop.is_set():
-            raise StoppedError("stopped")
-        if progress:
-            progress.unit_started(unit.id)
-        convert_unit(plan, store, unit, work_dir)
+    lock = threading.Lock()
 
-    pool = ThreadPoolExecutor(max_workers=workers)
-    try:
-        futures = {pool.submit(run, u): u for u in plan.to_convert}
-        for future in as_completed(futures):
-            unit = futures[future]
+    def run(batch: list[Unit]) -> None:
+        """Convert a batch, recording by recording; record those that succeeded."""
+        results = []
+        for unit in batch:
+            if stop is not None and stop.is_set():
+                with lock:
+                    report.failed[unit.id] = "StoppedError: stopped"
+                continue
+            if progress:
+                progress.unit_started(unit.id)
             try:
-                future.result()
+                results.append(convert_unit(plan, store, unit, work_dir))
             except Exception as exc:  # noqa: BLE001 - recorded per recording, reported at the end
                 log.error("%s: %s", unit.id, exc)
-                report.failed[unit.id] = f"{type(exc).__name__}: {exc}"
+                with lock:
+                    report.failed[unit.id] = f"{type(exc).__name__}: {exc}"
                 if progress:
                     progress.unit_done(unit.id, ok=False)
                 continue
-            report.converted += 1
             if progress:
                 progress.unit_done(unit.id, ok=True)
+        if results:
+            _record_batch(store, plan.location, results)
+            with lock:
+                report.converted += len(results)
+
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
+        futures = [pool.submit(run, b) for b in _batches(plan, plan.to_convert, part_bytes)]
+        for future in as_completed(futures):
+            future.result()
     finally:
-        # On Ctrl+C: recordings not started yet are dropped; those running finish.
+        # On Ctrl+C: batches not started yet are dropped; those running finish.
         pool.shutdown(cancel_futures=True)
     if report.failed:
         log.error("%s failed; run again to retry them", plural(len(report.failed), "recording"))
@@ -236,8 +265,20 @@ def convert(
     return report
 
 
-def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -> None:
-    """Convert one recording and record it under `_parts/`."""
+@dataclass
+class UnitResult:
+    """One converted recording: its table rows and what it used, for its batch's part."""
+
+    unit: Unit
+    parts: dict[str, pa.Table]
+    used: list[str]
+    not_converted: list[NotConverted]
+    problems: list[str]
+
+
+def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -> UnitResult:
+    """Convert one recording: its signals are written to the store; its table rows are
+    returned, to be recorded with the other recordings of its batch."""
     folder = Path(tempfile.mkdtemp(prefix="unit-", dir=work_dir))
     try:
         raw = plan.raw
@@ -256,8 +297,7 @@ def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -
         except UnsupportedError as exc:
             main = unit.path + ".hea" if unit.format == "wfdb" else unit.path
             skipped = [NotConverted(path=p, reason=str(exc)) for p in (main, *unit.annotations)]
-            _record(store, location, unit, used=[], not_converted=skipped, parts={})
-            return
+            return UnitResult(unit, {}, [], skipped, [])
         try:
             events = list(source.events)
             used, skipped, problems = list(source.files), [], list(source.problems)
@@ -297,45 +337,61 @@ def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -
                 "channels": tables.channel_table(unit.id, source),
                 "events": tables.event_table(unit.id, events),
             }
-            _record(
-                store,
-                location,
-                unit,
-                used=used,
-                not_converted=skipped,
-                parts=parts,
-                problems=problems,
-            )
+            return UnitResult(unit, parts, used, skipped, problems)
         finally:
             source.close()
     finally:
         shutil.rmtree(folder, ignore_errors=True)
 
 
-def _record(
-    store: Store,
-    location: StandardLocation,
-    unit: Unit,
-    *,
-    used: list[str],
-    not_converted: list[NotConverted],
-    parts: dict[str, pa.Table],
-    problems: list[str] | None = None,
-) -> None:
-    for name, table in parts.items():
+def _record_batch(store: Store, location: StandardLocation, results: list[UnitResult]) -> None:
+    """One part for a batch of converted recordings: each table's rows of all of them, then
+    `done.json`, written last (a part without it is not done). One part per batch, not per
+    recording: many small recordings made tens of thousands of objects, and the S3 storage
+    answered 429 Too Many Requests (PTB-XL, 2026-10-20)."""
+    ids = [r.unit.id for r in results]
+    batch = "batch-" + hashlib.sha256("\n".join(ids).encode()).hexdigest()[:20]
+    names = sorted({name for r in results for name in r.parts})
+    for name in names:
+        table = pa.concat_tables(
+            [r.parts[name] for r in results if name in r.parts], promote_options="none"
+        )
         store.put_bytes(
-            location.part_key(unit.id, f"{name}.parquet"),
+            location.part_key(batch, f"{name}.parquet"),
             tables.to_parquet(table),
             "application/vnd.apache.parquet",
         )
     done = {
-        "unit": unit.id,
-        "tables": sorted(parts),
-        "used": used,
-        "not_converted": [n.model_dump() for n in not_converted],
-        "problems": problems or [],
+        "units": ids,
+        "tables": names,
+        "used": sorted({p for r in results for p in r.used}),
+        "not_converted": [n.model_dump() for r in results for n in r.not_converted],
+        "problems": [p for r in results for p in r.problems],
     }
-    store.put_bytes(location.part_key(unit.id, DONE), json.dumps(done).encode())
+    store.put_bytes(location.part_key(batch, DONE), json.dumps(done).encode())
+
+
+def _batches(plan: StandardPlan, units: list[Unit], part_bytes: int) -> list[list[Unit]]:
+    """`units` in batches, in order, each closed when its raw files reach `part_bytes`: many
+    small recordings share a part; a large one has its own."""
+    by_stem: dict[str, int] = {}
+    for entry in plan.raw.files:
+        stem = posixpath.splitext(entry.path)[0]
+        by_stem[stem] = by_stem.get(stem, 0) + entry.size
+    batches: list[list[Unit]] = []
+    current: list[Unit] = []
+    size = 0
+    for unit in units:
+        current.append(unit)
+        size += by_stem.get(
+            posixpath.splitext(unit.path)[0] if unit.format == "edf" else unit.path, 0
+        )
+        if size >= part_bytes:
+            batches.append(current)
+            current, size = [], 0
+    if current:
+        batches.append(current)
+    return batches
 
 
 def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
@@ -343,25 +399,32 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
     location = plan.location
     created = utcnow()
 
-    def load(unit: Unit) -> tuple[dict[str, Any], dict[str, pa.Table]]:
-        data = store.get_bytes(location.part_key(unit.id, DONE))
+    def load(part: str) -> tuple[dict[str, Any], dict[str, pa.Table]]:
+        data = store.get_bytes(location.part_key(part, DONE))
         if data is None:
-            raise RuntimeError(f"{unit.id} is not done")
+            raise RuntimeError(f"{part} is not done")
         done = json.loads(data)
         parts = {}
         for name in done["tables"]:
-            blob = store.get_bytes(location.part_key(unit.id, f"{name}.parquet"))
+            blob = store.get_bytes(location.part_key(part, f"{name}.parquet"))
             if blob is None:
-                raise RuntimeError(f"{unit.id}: the {name} part is missing")
+                raise RuntimeError(f"{part}: the {name} part is missing")
             parts[name] = tables.from_parquet(blob, name)
         return done, parts
 
+    holders = _done_parts(store, location)
+    missing = [u.id for u in plan.units if u.id not in holders]
+    if missing:
+        raise RuntimeError(f"{len(missing)} recordings are not done, e.g. {missing[0]}")
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        loaded = list(pool.map(load, plan.units))
+        loaded = list(pool.map(load, sorted({holders[u.id] for u in plan.units})))
+    order = {u.id: i for i, u in enumerate(plan.units)}
     joined = {
-        name: pa.concat_tables(
-            [parts[name] for _, parts in loaded if name in parts],
-            promote_options="none",
+        name: _in_unit_order(
+            pa.concat_tables(
+                [parts[name] for _, parts in loaded if name in parts], promote_options="none"
+            ),
+            order,
         )
         if any(name in parts for _, parts in loaded)
         else tables.SCHEMAS[name].empty_table()
@@ -410,6 +473,13 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
     store.put_bytes(location.success_key, b"", content_type="text/plain")
     store.delete_many(list(store.list(location.parts_prefix)))
     return manifest
+
+
+def _in_unit_order(table: pa.Table, order: dict[str, int]) -> pa.Table:
+    """The rows sorted by their recording's place in the plan, stably: the parts come in
+    any order, the tables always in the same one."""
+    keys = [(order[r], i) for i, r in enumerate(table.column("recording_id").to_pylist())]
+    return table.take(pa.array(sorted(range(table.num_rows), key=keys.__getitem__), pa.int64()))
 
 
 def _leftover_reason(

@@ -16,7 +16,9 @@ download:
                                # server that opens many (16 did, on 2026-10-19)
 
 standardize:
-  workers: 4                   # recordings converted at the same time
+  workers: 4                   # batches of recordings converted at the same time
+  part_bytes: 67108864         # 64 MiB: a batch closes when its raw files reach this, so many
+                               # small recordings share one part (fewer S3 requests)
 
 # biosignal-data quality: per-channel measurements of the standard layer.
 quality:
