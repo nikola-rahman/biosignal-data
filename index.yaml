@@ -110,6 +110,16 @@ datasets:
       certain: false
       source: https://physionet.org/content/challenge-2017/1.0.0/
       notes: The page gives no subjects for the 8,528 training recordings.
+    exclude:
+      - pattern: '^validation/'
+        reason: a copy of another recording of the dataset
+        source: https://physionet.org/content/challenge-2017/1.0.0/
+        evidence: >-
+          by running it on a small subset (validation set, 300 recordings) of the training
+          set
+        checked: >-
+          2026-10-20: each of the 300 validation records has the same samples as the
+          training record of the same name.
 
   - id: physionet/challenge-2018
     subject:
