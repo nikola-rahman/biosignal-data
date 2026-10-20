@@ -285,3 +285,49 @@ def test_benchmark_test_records_are_held_out_of_every_split(
     split = {r["recording_id"]: (r["split"], r["held_out_for"]) for r in rows_out}
     assert split["x01"] == split["x01r"] == ("held_out", "apnea")
     assert split["a01"][0] in {"train", "validation", "test"} and split["a01"][1] is None
+
+
+def test_a_benchmark_test_fold_from_a_table_is_held_out(store: LocalStore, tmp_path: Path) -> None:
+    prefix = "standard/physionet/ptb-xl/1.0.3"
+    ids = ["records500/00000/00001_hr", "records500/00000/00002_hr", "records500/00000/00003_hr"]
+    rows = [
+        {"recording_id": rec, "format": "wfdb", "duration_s": 10.0, "arrays": ["500Hz"],
+         "n_channels": 12, "signals": f"signals/{rec}.zarr", "source_files": [],
+         "source_sha256": []}
+        for rec in ids
+    ]  # fmt: skip
+    store.put_bytes(
+        f"{prefix}/recordings.parquet",
+        _parquet(pa.Table.from_pylist(rows, schema=tables.RECORDINGS)),
+    )
+    store.put_bytes(
+        f"{prefix}/channels.parquet", _parquet(pa.Table.from_pylist([], schema=tables.CHANNELS))
+    )
+    store.put_bytes(f"{prefix}/_manifest.json", b'{"raw_version": "1.0.3"}')
+    store.put_bytes(f"{prefix}/_SUCCESS", b"")
+    store.put_bytes(
+        "raw/physionet/ptb-xl/1.0.3/data/ptbxl_database.csv",
+        b"ecg_id,patient_id,strat_fold,filename_hr\n"
+        b"1,15709.0,3,records500/00000/00001_hr\n"
+        b"2,13243.0,10,records500/00000/00002_hr\n"
+        b"3,20372.0,9,records500/00000/00003_hr\n",
+    )
+    rules_path = tmp_path / "index.yaml"
+    rules_path.write_text(
+        "datasets:\n"
+        "  - id: physionet/ptb-xl\n"
+        "    held_out:\n"
+        "      - pattern: '^(records500/\\d{5}/\\d{5}_hr)$'\n"
+        "        table: {file: ptbxl_database.csv, delimiter: ',', recording_column: filename_hr,\n"
+        "                column: strat_fold, values: ['9', '10']}\n"
+        "        benchmark: ptb-xl\n"
+        "        source: https://physionet.org/content/ptb-xl/1.0.3/\n"
+        "        evidence: folds 9 and 10\n"
+    )
+
+    m = build_index(store, ["physionet/ptb-xl"], IndexRules.load(rules_path), version="v").manifest
+
+    assert m.held_out == {"ptb-xl": 2}
+    out = pq.read_table(store._path("index/v/recordings.parquet")).to_pylist()
+    assert {r["recording_id"]: r["split"] for r in out}["records500/00000/00002_hr"] == "held_out"
+    assert {r["recording_id"]: r["split"] for r in out}["records500/00000/00001_hr"] != "held_out"

@@ -195,6 +195,11 @@ def _index_dataset(
     table = None
     if rules.subject is not None and rules.subject.table is not None:
         table = _subject_table(store, raw, rules.subject.table)
+    held_out_tables = {
+        i: _column(store, raw, h.table.file, h.table.delimiter, h.table.recording_column,
+                   h.table.column)
+        for i, h in enumerate(rules.held_out) if h.table is not None
+    }  # fmt: skip
     indexed = set()
     for r in _read(store, location.table_key("recordings")).to_pylist():
         if not r["signals"]:
@@ -205,7 +210,7 @@ def _index_dataset(
             found.excluded[f"{dataset_id}: {exclude.reason}"] += 1
             continue
         subject, certain = subject_of(dataset_id, r["recording_id"], rules.subject, table)
-        held_out = rules.held_out_for(r["recording_id"])
+        held_out = rules.held_out_for(r["recording_id"], held_out_tables)
         if held_out is not None:
             found.held_out[held_out.benchmark] += 1
         indexed.add(r["recording_id"])
@@ -251,16 +256,28 @@ def _index_dataset(
 
 def _subject_table(store: Store, raw: VersionLocation, table: SubjectTable) -> dict[str, str]:
     """{recording: subject} from a table of the raw dataset."""
-    key = raw.data_key(table.file)
+    return _column(
+        store, raw, table.file, table.delimiter, table.recording_column, table.subject_column
+    )
+
+
+def _column(
+    store: Store, raw: VersionLocation, file: str, delimiter: str, key_column: str, column: str
+) -> dict[str, str]:
+    """{key: value} of two columns of a delimited table of the raw dataset; a key with
+    two different values is an error."""
+    key = raw.data_key(file)
     data = store.get_bytes(key)
     if data is None:
         raise FileNotFoundError(key)
-    rows = csv.DictReader(io.StringIO(data.decode("utf-8-sig")), delimiter=table.delimiter)
+    rows = csv.DictReader(io.StringIO(data.decode("utf-8-sig")), delimiter=delimiter)
     mapping: dict[str, str] = {}
     for row in rows:
-        recording, subject = row[table.recording_column], row[table.subject_column]
-        if mapping.setdefault(recording, subject) != subject:
-            raise ValueError(f"{key}: {recording!r} has two subjects")
+        if key_column not in row or column not in row:
+            raise ValueError(f"{key}: no column {key_column!r} or {column!r}")
+        recording, value = row[key_column], row[column]
+        if mapping.setdefault(recording, value) != value:
+            raise ValueError(f"{key}: {recording!r} has two values in {column!r}")
     return mapping
 
 

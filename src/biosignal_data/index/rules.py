@@ -100,17 +100,33 @@ class ExcludeRule(_Model):
         return self
 
 
+class HoldOutTable(_Model):
+    """A delimited text file of the raw dataset (under data/) that says which recordings
+    are in the benchmark's test set: those whose `column` holds one of `values`."""
+
+    file: str
+    delimiter: str
+    recording_column: str  # holds group 1 of the rule's pattern
+    column: str
+    values: list[str]
+
+
 class HoldOutRule(_Model):
     """Recordings kept for a benchmark's test set: they get the split `held_out`, so that
-    no pretraining sees them. The source names the official test set."""
+    no pretraining sees them. The source names the official test set. Either every
+    recording `pattern` matches, or, with `table`, those the table puts in the test set
+    (then group 1 of `pattern` is the recording's key in the table)."""
 
     pattern: str  # a regex on the recording id
+    table: HoldOutTable | None = None
     benchmark: str
     source: HttpUrl
     evidence: str
 
     @model_validator(mode="after")
     def _check(self) -> HoldOutRule:
+        if self.table is not None and re.compile(self.pattern).groups < 1:
+            raise ValueError("with `table`, `pattern` needs a group: the key in the table")
         re.compile(self.pattern)
         return self
 
@@ -125,8 +141,25 @@ class DatasetRules(_Model):
     def excluded(self, recording_id: str) -> ExcludeRule | None:
         return next((e for e in self.exclude if re.search(e.pattern, recording_id)), None)
 
-    def held_out_for(self, recording_id: str) -> HoldOutRule | None:
-        return next((h for h in self.held_out if re.search(h.pattern, recording_id)), None)
+    def held_out_for(
+        self, recording_id: str, tables: dict[int, dict[str, str]] | None = None
+    ) -> HoldOutRule | None:
+        """The rule that holds the recording out, if any. `tables`: for rules with a table,
+        rule position -> {recording key: column value}, read from the raw dataset."""
+        for i, rule in enumerate(self.held_out):
+            match = re.search(rule.pattern, recording_id)
+            if match is None:
+                continue
+            if rule.table is None:
+                return rule
+            if tables is None or i not in tables:
+                raise ValueError(f"{self.id}: a held_out rule with a table needs its table")
+            value = tables[i].get(match.group(1))
+            if value is None:
+                raise ValueError(f"{self.id}: {match.group(1)!r} is not in {rule.table.file}")
+            if value in rule.table.values:
+                return rule
+        return None
 
 
 @dataclass(frozen=True)
