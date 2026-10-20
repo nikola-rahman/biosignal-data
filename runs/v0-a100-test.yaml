@@ -1,0 +1,55 @@
+# Model v0 on one A100 (80 GB): a test of the whole chain on a GPU with real data from S3,
+# and the checkpoint for a first benchmark (apnea-ecg, whose test records are held out of
+# this index). It measures the GPU and data throughput; about 2 hours of pretraining.
+data:
+  store: s3://biosignal-data
+  index: gpu1-2026-10-20
+  train_split: train
+  validation_split: validation
+  signal_types: null          # every channel
+  datasets: null              # every dataset of the index
+  cache_directory: /workspace/cache
+  cache_bytes: 322122547200   # 300 GiB
+  shuffle_buffer: 2048
+  reads_in_flight: 16
+  workers: 12
+
+tokens:
+  max_tokens: 8192
+  samples_per_token: 64
+  max_channels: 32
+  rows: 8                     # 65,536 tokens a step
+  mask_ratio: 0.5
+
+model:
+  width: 512                  # about 27 M parameters
+  layers: 8
+  heads: 8
+  feed_forward: 1536
+  min_wavelength_s: 0.01
+  max_wavelength_s: 10000.0
+  attention: flex
+
+optim:
+  learning_rate: 6.0e-4
+  min_learning_rate: 6.0e-5
+  warmup_steps: 500
+  steps: 12000
+  weight_decay: 0.05
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+
+run:
+  name: v0-a100-test
+  seed: 0
+  device: cuda
+  precision: bf16
+  log_every: 20
+  validate_every: 1000
+  validation_batches: 20
+  checkpoint_every: 1000
+  checkpoint_prefix: models/v0-a100-test
+  wandb_project: biosignal-fm
+  wandb_entity: schnyox-s
+  wandb_mode: online
