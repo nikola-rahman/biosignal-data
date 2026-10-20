@@ -244,3 +244,41 @@ datasets:
         checked: >-
           2026-10-20: each of the 23 x_mitdb records (x_108 ... x_234) equals the first
           216,000 samples (10 min) of the record of the same number, both signals.
+
+  - id: physionet/ptb-xl
+    subject:
+      rule: table
+      pattern: '^(records500/\d{5}/\d{5}_hr)$'
+      table:
+        file: ptbxl_database.csv
+        delimiter: ','
+        recording_column: filename_hr
+        subject_column: patient_id
+      certain: true
+      source: https://physionet.org/content/ptb-xl/1.0.3/
+      evidence: Each record is identified by a unique ecg_id . The corresponding patient is encoded via patient_id .
+      notes: 21,799 records from 18,869 patients (checked in ptbxl_database.csv, 2026-10-20).
+    exclude:
+      - pattern: '^records100/'
+        reason: a lower-rate copy of another recording of the dataset
+        source: https://physionet.org/content/ptb-xl/1.0.3/
+        evidence: >-
+          For the user’s convenience we also release a downsampled versions of the waveform
+          data at a sampling frequency of 100Hz ( records100/ ).
+    held_out:
+      - pattern: '^(records500/\d{5}/\d{5}_hr)$'
+        table:
+          file: ptbxl_database.csv
+          delimiter: ','
+          recording_column: filename_hr
+          column: strat_fold
+          values: ['9', '10']
+        benchmark: ptb-xl (folds 1-8 train, 9 validation, 10 test; Strodthoff et al. 2021)
+        source: https://physionet.org/content/ptb-xl/1.0.3/
+        evidence: >-
+          recommended 10-fold train-test splits ( strat_fold ) obtained via stratified
+          sampling while respecting patient assignments, i.e. all records of a particular
+          patient were assigned to the same fold.
+        notes: >-
+          Checked in ptbxl_database.csv (2026-10-20): no patient is in two folds; fold 9 has
+          2,183 records, fold 10 has 2,198.

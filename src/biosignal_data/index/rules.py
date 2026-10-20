@@ -122,6 +122,7 @@ class HoldOutRule(_Model):
     benchmark: str
     source: HttpUrl
     evidence: str
+    notes: str | None = None
 
     @model_validator(mode="after")
     def _check(self) -> HoldOutRule:
