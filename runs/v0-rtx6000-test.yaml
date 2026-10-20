@@ -1,4 +1,4 @@
-# Model v0 on one A100 (80 GB): a test of the whole chain on a GPU with real data from S3,
+# Model v0 on one RTX 6000 Ada (48 GB, 12 CPU cores): a test of the whole chain on a GPU with real data from S3,
 # and the checkpoint for a first benchmark (apnea-ecg, whose test records are held out of
 # this index). It measures the GPU and data throughput; about 2 hours of pretraining.
 data:
@@ -9,10 +9,10 @@ data:
   signal_types: null          # every channel
   datasets: null              # every dataset of the index
   cache_directory: /workspace/cache
-  cache_bytes: 322122547200   # 300 GiB
+  cache_bytes: 214748364800   # 200 GiB (274 GB free on the pod)
   shuffle_buffer: 2048
   reads_in_flight: 16
-  workers: 12
+  workers: 10                 # of 12 cores: the rest for the training process
 
 tokens:
   max_tokens: 8192
@@ -41,7 +41,7 @@ optim:
   grad_clip: 1.0
 
 run:
-  name: v0-a100-test
+  name: v0-rtx6000-test
   seed: 0
   device: cuda
   precision: bf16
@@ -49,7 +49,7 @@ run:
   validate_every: 1000
   validation_batches: 20
   checkpoint_every: 1000
-  checkpoint_prefix: models/v0-a100-test
+  checkpoint_prefix: models/v0-rtx6000-test
   wandb_project: biosignal-fm
   wandb_entity: schnyox-s
   wandb_mode: online
