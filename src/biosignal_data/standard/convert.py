@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import posixpath
 import shutil
 import tempfile
@@ -199,7 +200,8 @@ def convert(
 
     pool = ThreadPoolExecutor(max_workers=workers)
     try:
-        futures = [pool.submit(run, b) for b in _batches(plan, plan.to_convert, part_bytes)]
+        batches = _batches(plan, plan.to_convert, part_bytes, workers)
+        futures = [pool.submit(run, b) for b in batches]
         for future in as_completed(futures):
             future.result()
     finally:
@@ -374,9 +376,14 @@ def _record_batch(
     store.put_bytes(location.part_key(batch, DONE), json.dumps(done).encode())
 
 
-def _batches(plan: StandardPlan, units: list[Unit], part_bytes: int) -> list[list[Unit]]:
-    """`units` in batches, in order, each closed when its raw files reach `part_bytes`: many
-    small recordings share a part; a large one has its own."""
+def _batches(
+    plan: StandardPlan, units: list[Unit], part_bytes: int, workers: int
+) -> list[list[Unit]]:
+    """`units` in batches, in order, each closed when its raw files reach `part_bytes` (many
+    small recordings share a part; a large one has its own) or when it holds a `workers`-th
+    of the units, so that every worker has a batch: challenge-2017 (0.17 GB) made only 3
+    batches of 64 MiB, and 3 of 16 workers did all of it (2026-10-20)."""
+    most = max(1, math.ceil(len(units) / max(1, workers)))
     by_stem: dict[str, int] = {}
     for entry in plan.raw.files:
         stem = posixpath.splitext(entry.path)[0]
@@ -389,7 +396,7 @@ def _batches(plan: StandardPlan, units: list[Unit], part_bytes: int) -> list[lis
         size += by_stem.get(
             posixpath.splitext(unit.path)[0] if unit.format == "edf" else unit.path, 0
         )
-        if size >= part_bytes:
+        if size >= part_bytes or len(current) >= most:
             batches.append(current)
             current, size = [], 0
     if current:

@@ -232,6 +232,18 @@ def test_two_records_joined_on_one_records_line_are_both_found() -> None:
     ]
 
 
+def test_every_worker_gets_a_batch_of_a_small_dataset(
+    store: LocalStore, raw: dict[str, np.ndarray]
+) -> None:
+    from biosignal_data.standard.convert import _batches  # noqa: PLC0415
+
+    plan = plan_standard(store, "physionet/mitdb", "1.0.0")
+    assert len(_batches(plan, plan.units, 10**12, 1)) == 1  # one worker: one batch
+    batches = _batches(plan, plan.units, 10**12, 3)  # far below part_bytes
+    assert [len(b) for b in batches] == [2, 2, 1]
+    assert [u for b in batches for u in b] == plan.units  # in order, none left out
+
+
 @pytest.mark.parametrize(
     ("channels", "length", "itemsize", "step", "per_block"),
     [
