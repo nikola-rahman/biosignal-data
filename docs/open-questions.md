@@ -65,6 +65,14 @@ that these stay open:
 
 ## Backlog
 
+- **Many tiny recordings (needed before MIMIC-IV-ECG, 800,000 ECGs).** One object per
+  published file (raw) and one Zarr group per recording (standard) cost about 10 S3
+  requests per recording: PTB-XL (43,596 recordings of 10 s) converts at about 100 a
+  minute, and the storage limits requests per IP address. Two halves, designed together:
+  (1) raw: an explicit catalog option to store the source's official archive (e.g.
+  PhysioNet's ZIP) as one object, every member checked against SHA256SUMS.txt and listed
+  in the manifest, single members read by range requests; (2) standard: many small
+  recordings packed into one Zarr group or shard.
 - **Mixture weights for pretraining.** The loader now reads every recording once per
   epoch, so each dataset counts by its size: in the test index (9 datasets) capslpdb is 77 %
   of the training tokens, adfecgdb 0.02 % (3 recordings of 5 min). The weight of each
