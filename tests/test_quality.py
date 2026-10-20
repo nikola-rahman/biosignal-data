@@ -13,7 +13,7 @@ from zarr.codecs import BloscCodec
 from biosignal_data.quality import AlreadyMeasured, iter_rows, measure
 from biosignal_data.quality.compute import _Channel, measure_recording
 from biosignal_data.standard import tables
-from biosignal_data.storage.stores import LocalStore
+from biosignal_data.storage.stores import LocalStore, StoreFactory
 
 RATE = 10.0
 
@@ -106,7 +106,8 @@ def test_measure_writes_a_complete_version_and_does_not_measure_twice(
     store.put_bytes(f"{prefix}/_manifest.json", b'{"raw_version": "1.0"}')
     store.put_bytes(f"{prefix}/_SUCCESS", b"")
 
-    m = measure(store, "d/x", flat_s=2.0, percentile_sample=100, seed=0, workers=2,
+    factory = StoreFactory(str(store.root), None)
+    m = measure(store, factory, "d/x", flat_s=2.0, percentile_sample=100, seed=0, workers=2,
                 replace=False)  # fmt: skip
 
     assert (m.recordings, m.channels, m.standard_version) == (1, 3, "1.0")
@@ -114,5 +115,5 @@ def test_measure_writes_a_complete_version_and_does_not_measure_twice(
     assert {r["name"] for r in rows} == {"C3", "NIBP", "F4"}
     assert not list(store.list("quality/d/x/1.0/_parts/"))
     with pytest.raises(AlreadyMeasured, match="--replace"):
-        measure(store, "d/x", flat_s=2.0, percentile_sample=100, seed=0, workers=2,
+        measure(store, factory, "d/x", flat_s=2.0, percentile_sample=100, seed=0, workers=2,
                 replace=False)  # fmt: skip

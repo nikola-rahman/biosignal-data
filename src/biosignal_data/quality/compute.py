@@ -29,9 +29,10 @@ import io
 import json
 import logging
 import math
+import multiprocessing
 import zlib
 from collections.abc import Callable, Iterator
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -48,7 +49,7 @@ from biosignal_data.standard.layout import ROOT as STANDARD_ROOT
 from biosignal_data.standard.layout import StandardLocation
 from biosignal_data.storage.layout import MANIFEST, SUCCESS, VersionLocation, safe_relpath
 from biosignal_data.storage.manifest import utcnow
-from biosignal_data.storage.stores import Store
+from biosignal_data.storage.stores import Store, StoreFactory
 
 log = logging.getLogger(__name__)
 ROOT = "quality"
@@ -287,8 +288,28 @@ def measure_recording(
     return rows
 
 
+def _measure_part(
+    factory: StoreFactory,
+    location: QualityLocation,
+    signals_key: str,
+    recording_id: str,
+    channels: list[dict[str, Any]],
+    settings: tuple[float, int, int],
+) -> None:
+    """One recording, in a worker process: measure it and write its part."""
+    store = factory()
+    flat_s, percentile_sample, seed = settings
+    group = zarr.open_group(store=store.zarr_store(signals_key, read_only=True), mode="r")
+    rows = measure_recording(
+        group, recording_id, channels, flat_s=flat_s, percentile_sample=percentile_sample,
+        seed=seed,
+    )  # fmt: skip
+    store.put_bytes(location.part_key(recording_id), _parquet(rows))
+
+
 def measure(
     store: Store,
+    factory: StoreFactory,
     dataset_id: str,
     *,
     flat_s: float,
@@ -298,7 +319,9 @@ def measure(
     replace: bool,
     progress: Callable[[int, int], None] | None = None,
 ) -> QualityManifest:
-    """Measure the newest complete standard version of `dataset_id`; resumes from parts."""
+    """Measure the newest complete standard version of `dataset_id`; resumes from parts.
+    `workers` processes measure one recording each (the counting is Python and NumPy, so
+    threads would share one core); `factory` opens the store in each of them."""
     versions = complete_versions(store, dataset_id, STANDARD_ROOT)
     if not versions:
         raise FileNotFoundError(f"{dataset_id}: no complete standard version")
@@ -323,18 +346,14 @@ def measure(
     ]  # fmt: skip
     done = sum(1 for r in recordings if r["signals"]) - len(todo)
 
-    def one(recording_id: str) -> None:
-        group = zarr.open_group(
-            store=store.zarr_store(standard.signals_key(recording_id), read_only=True), mode="r"
-        )
-        rows = measure_recording(
-            group, recording_id, by_recording.get(recording_id, []), flat_s=flat_s,
-            percentile_sample=percentile_sample, seed=seed,
-        )  # fmt: skip
-        store.put_bytes(location.part_key(recording_id), _parquet(rows))
-
-    with ThreadPoolExecutor(workers) as pool:
-        futures = [pool.submit(one, r) for r in todo]
+    settings = (flat_s, percentile_sample, seed)
+    context = multiprocessing.get_context("spawn")  # a forked copy of zarr's event loop hangs
+    with ProcessPoolExecutor(workers, mp_context=context) as pool:
+        futures = [
+            pool.submit(_measure_part, factory, location, standard.signals_key(r), r,
+                        by_recording.get(r, []), settings)
+            for r in todo
+        ]  # fmt: skip
         for future in as_completed(futures):
             future.result()
             done += 1

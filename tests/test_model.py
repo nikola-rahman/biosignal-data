@@ -8,12 +8,12 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from biosignal_data.storage.stores import LocalStore  # noqa: E402
+from biosignal_data.storage.stores import LocalStore, StoreFactory  # noqa: E402
 from biosignal_data.training import Selection  # noqa: E402
 from biosignal_data.training.loader import Channel, Example, Origin, Signal  # noqa: E402
 from biosignal_model.batch import SIGNAL_TYPES, Packer  # noqa: E402
 from biosignal_model.model import Encoder, ModelConfig, masked_loss  # noqa: E402
-from biosignal_model.train import StoreFactory, TrainConfig, train  # noqa: E402
+from biosignal_model.train import TrainConfig, train  # noqa: E402
 from tests.test_training_loader import _index  # noqa: E402
 
 

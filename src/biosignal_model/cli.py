@@ -17,7 +17,8 @@ from typing import Annotated
 import typer
 
 from biosignal_data.config import ConfigError, load_config, need
-from biosignal_model.train import StoreFactory, TrainConfig, train
+from biosignal_data.storage.stores import StoreFactory
+from biosignal_model.train import TrainConfig, train
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help=__doc__)
 REPO = Path(__file__).resolve().parents[2]

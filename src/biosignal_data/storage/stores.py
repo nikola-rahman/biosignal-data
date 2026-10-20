@@ -411,3 +411,18 @@ def open_store(uri: str, s3: S3Settings | None = None, parallel_uploads: int = 1
     if parsed.scheme in ("", "file"):
         return LocalStore(Path(parsed.path if parsed.scheme == "file" else uri))
     raise ValueError(f"unsupported store URI {uri!r}; use s3://bucket/prefix or a local path")
+
+
+class StoreFactory:
+    """Opens the store in each process (a store holds connections and does not cross
+    processes): `s3` is (endpoint, region, addressing) for an s3:// URI, the keys come
+    from the environment of the process."""
+
+    def __init__(self, uri: str, s3: tuple[str, str, Literal["path", "virtual"]] | None):
+        self.uri = uri
+        self.s3 = s3
+
+    def __call__(self) -> Store:
+        if self.s3 is None:
+            return open_store(self.uri)
+        return open_store(self.uri, S3Settings.from_env(*self.s3))

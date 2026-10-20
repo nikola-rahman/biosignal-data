@@ -76,7 +76,7 @@ from biosignal_data.standard.convert import (
 from biosignal_data.standard.layout import StandardLocation
 from biosignal_data.storage.layout import VersionLocation
 from biosignal_data.storage.manifest import Manifest
-from biosignal_data.storage.stores import S3Settings, S3Store, Store, open_store
+from biosignal_data.storage.stores import S3Settings, S3Store, Store, StoreFactory, open_store
 from biosignal_data.text import plural
 
 ROOT = "raw"  # the layer folder inside the destination
@@ -233,6 +233,14 @@ def _store(dest: str, config: Config, config_path: Path, parallel_uploads: int =
         return open_store(dest, settings, parallel_uploads)
     except ValueError as exc:
         raise _fail(str(exc)) from exc
+
+
+def _factory(dest: str, config: Config, config_path: Path) -> StoreFactory:
+    """Opens --dest again in each worker process (keys from the environment)."""
+    if not dest.startswith("s3://"):
+        return StoreFactory(dest, None)
+    s3 = _need(config.s3, "s3", config_path)
+    return StoreFactory(dest, (s3.endpoint, s3.region, s3.addressing))
 
 
 def _describe_store(store: Store) -> str:
@@ -921,7 +929,8 @@ def quality(
     for d in datasets:
         try:
             m = measure(
-                store, d.id, flat_s=settings.flat_s, percentile_sample=settings.percentile_sample,
+                store, _factory(dest, cfg, cfg_path), d.id, flat_s=settings.flat_s,
+                percentile_sample=settings.percentile_sample,
                 seed=settings.seed, workers=settings.workers, replace=replace,
             )  # fmt: skip
         except AlreadyMeasured as exc:

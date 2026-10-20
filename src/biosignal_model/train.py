@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict
 from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 
 from biosignal_data.index.build import ROOT as INDEX_ROOT
-from biosignal_data.storage.stores import S3Settings, Store, open_store
+from biosignal_data.storage.stores import Store, StoreFactory
 from biosignal_data.training.loader import ExampleSource, Selection
 from biosignal_model.batch import SIGNAL_TYPES, Analysis, Batch, Inputs, Packer
 from biosignal_model.model import Encoder, ModelConfig, masked_loss
@@ -126,19 +126,6 @@ class TrainConfig(_Section):
             max_channels=self.tokens.max_channels,
             **self.model.model_dump(),
         )
-
-
-class StoreFactory:
-    """Opens the store in each process (a store does not cross processes)."""
-
-    def __init__(self, uri: str, s3: tuple[str, str, Literal["path", "virtual"]] | None):
-        self.uri = uri
-        self.s3 = s3
-
-    def __call__(self) -> Store:
-        if self.s3 is None:
-            return open_store(self.uri)
-        return open_store(self.uri, S3Settings.from_env(*self.s3))
 
 
 class BatchStream(IterableDataset[Batch]):
