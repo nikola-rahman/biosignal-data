@@ -3,7 +3,7 @@
     quality/<repository>/<dataset>/<standard version>/
         channels.parquet   one row per channel (below)
         _manifest.json     the standard version measured, the settings, the counts
-        _parts/<recording>.parquet   progress of an unfinished run (removed on success)
+        _parts/<group>.parquet   progress of an unfinished run (removed on success)
         _SUCCESS
 
 It measures and never deletes: which channels go into training is a setting of each run.
@@ -25,6 +25,7 @@ A row per channel:
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
@@ -40,11 +41,11 @@ from typing import Any
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-import zarr
 from pydantic import BaseModel, ConfigDict
 
 from biosignal_data import __version__
 from biosignal_data.read.raw import complete_versions
+from biosignal_data.standard import blocks
 from biosignal_data.standard.layout import ROOT as STANDARD_ROOT
 from biosignal_data.standard.layout import StandardLocation
 from biosignal_data.storage.layout import MANIFEST, SUCCESS, VersionLocation, safe_relpath
@@ -110,8 +111,9 @@ class QualityLocation:
     def prefix(self) -> str:
         return VersionLocation(self.dataset_id, self.version, ROOT).prefix
 
-    def part_key(self, recording_id: str) -> str:
-        return f"{self.prefix}/_parts/{safe_relpath(recording_id)}.parquet"
+    def part_key(self, group: str) -> str:
+        """The rows of one group of recordings, measured together."""
+        return f"{self.prefix}/_parts/{safe_relpath(group)}.parquet"
 
     @property
     def table_key(self) -> str:
@@ -248,7 +250,7 @@ def _limits(channel: dict[str, Any]) -> tuple[int, int, str]:
 
 
 def measure_recording(
-    group: zarr.Group,
+    read: Callable[[str], Iterator[np.ndarray]],
     recording_id: str,
     channels: list[dict[str, Any]],
     *,
@@ -256,12 +258,10 @@ def measure_recording(
     percentile_sample: int,
     seed: int,
 ) -> list[dict[str, Any]]:
-    """The rows of one recording: each array read once, a shard at a time."""
+    """The rows of one recording: each array read once, a block at a time. `read(array)`
+    gives the array's blocks in time order, each (channels, samples)."""
     rows = []
     for array_name in sorted({c["array"] for c in channels}):
-        array = group[array_name]
-        if not isinstance(array, zarr.Array):
-            raise TypeError(f"{recording_id}/{array_name} is not an array")
         mine = sorted((c for c in channels if c["array"] == array_name), key=lambda c: c["index"])
         rate = float(mine[0]["sampling_rate"])
         counters = []
@@ -274,10 +274,7 @@ def measure_recording(
                     np.random.default_rng([seed, _stable(recording_id, array_name, c["index"])]),
                 ))
             )  # fmt: skip
-        total = int(array.shape[1])
-        step = int(array.shards[1]) if array.shards is not None else total
-        for start in range(0, total, max(1, step)):
-            block = np.asarray(array[:, start : start + step])
+        for block in read(array_name):
             for c, _, counter in counters:
                 counter.add(block[c["index"]])
         for c, limits_from, counter in counters:
@@ -288,23 +285,84 @@ def measure_recording(
     return rows
 
 
+@dataclass(frozen=True)
+class _Task:
+    """Recordings measured together by one worker: about one object of blocks."""
+
+    name: str
+    recordings: tuple[tuple[str, dict[str, blocks.ArrayBlocks], list[dict[str, Any]]], ...]
+
+
+def _tasks(
+    recordings: list[str],
+    index: dict[tuple[str, str], blocks.ArrayBlocks],
+    by_recording: dict[str, list[dict[str, Any]]],
+) -> list[_Task]:
+    """Recordings in groups of about OBJECT_BYTES of blocks, in their order (which is the
+    order of their blocks in the objects)."""
+    arrays: dict[str, dict[str, blocks.ArrayBlocks]] = {}
+    for (rid, name), found in index.items():
+        arrays.setdefault(rid, {})[name] = found
+    tasks, current, size = [], [], 0
+    for rid in recordings:
+        mine = arrays.get(rid, {})
+        current.append((rid, mine, by_recording.get(rid, [])))
+        size += sum(b.nbytes for a in mine.values() for b in a.blocks)
+        if size >= blocks.OBJECT_BYTES:
+            tasks.append(current)
+            current, size = [], 0
+    if current:
+        tasks.append(current)
+    return [
+        _Task("group-" + hashlib.sha256("\n".join(r for r, _, _ in t).encode()).hexdigest()[:20],
+              tuple(t))
+        for t in tasks
+    ]  # fmt: skip
+
+
+SMALL = 8 * 2**20  # recordings with fewer bytes of blocks are read together, one request
+
+
 def _measure_part(
     factory: StoreFactory,
     location: QualityLocation,
-    signals_key: str,
-    recording_id: str,
-    channels: list[dict[str, Any]],
+    standard_prefix: str,
+    task: _Task,
     settings: tuple[float, int, int],
 ) -> None:
-    """One recording, in a worker process: measure it and write its part."""
+    """One group of recordings, in a worker process: measure them and write its part. The
+    blocks of small recordings are read together (about one request per object); a large
+    recording is read a block at a time, so memory stays bounded."""
     store = factory()
     flat_s, percentile_sample, seed = settings
-    group = zarr.open_group(store=store.zarr_store(signals_key, read_only=True), mode="r")
-    rows = measure_recording(
-        group, recording_id, channels, flat_s=flat_s, percentile_sample=percentile_sample,
-        seed=seed,
-    )  # fmt: skip
-    store.put_bytes(location.part_key(recording_id), _parquet(rows))
+
+    def get_range(name: str, offset: int, length: int) -> bytes:
+        return store.get_range(f"{standard_prefix}/{name}", offset, length)
+
+    def size(arrays: dict[str, blocks.ArrayBlocks]) -> int:
+        return sum(b.nbytes for a in arrays.values() for b in a.blocks)
+
+    small = [b for _, arrays, _ in task.recordings if size(arrays) < SMALL
+             for a in arrays.values() for b in a.blocks]  # fmt: skip
+    prefetched = blocks.fetch(get_range, small, threads=4)
+
+    def block(ref: blocks.BlockRef) -> bytes:
+        if ref in prefetched:
+            return prefetched[ref]
+        return get_range(ref.object, ref.offset, ref.nbytes)
+
+    rows = []
+    for recording_id, arrays, channels in task.recordings:
+
+        def read(name: str, arrays: dict[str, blocks.ArrayBlocks] = arrays) -> Iterator[np.ndarray]:
+            for ref in arrays[name].blocks:
+                yield blocks.unpack(ref, block(ref))
+
+        rows += measure_recording(
+            read, recording_id, channels, flat_s=flat_s, percentile_sample=percentile_sample,
+            seed=seed,
+        )  # fmt: skip
+    store.put_bytes(location.part_key(task.name), _parquet(rows))
 
 
 def measure(
@@ -337,31 +395,31 @@ def measure(
         raise FileNotFoundError(standard.manifest_key)
     recordings = _table(store, standard.table_key("recordings"))
     channels = _table(store, standard.table_key("channels"))
+    index = blocks.index(pq.read_table(io.BytesIO(_bytes(store, standard.table_key("blocks")))))
     by_recording: dict[str, list[dict[str, Any]]] = {}
     for c in channels:
         by_recording.setdefault(c["recording_id"], []).append(c)
-    # One listing, not a request per recording: thousands of small requests at once made
-    # the storage answer 429 Too Many Requests (challenge-2017, 2026-10-20).
+    with_signals = [r["recording_id"] for r in recordings if r["signals"]]
+    tasks = _tasks(with_signals, index, by_recording)
+    # One listing, not a request per part: thousands of small requests at once made the
+    # storage answer 429 Too Many Requests (challenge-2017, 2026-10-20).
     stored = set(store.list(f"{location.prefix}/_parts/"))
-    todo = [
-        r["recording_id"] for r in recordings
-        if r["signals"] and location.part_key(r["recording_id"]) not in stored
-    ]  # fmt: skip
-    done = sum(1 for r in recordings if r["signals"]) - len(todo)
+    todo = [t for t in tasks if location.part_key(t.name) not in stored]
+    done = sum(len(t.recordings) for t in tasks) - sum(len(t.recordings) for t in todo)
+    total = len(with_signals)
 
     settings = (flat_s, percentile_sample, seed)
-    context = multiprocessing.get_context("spawn")  # a forked copy of zarr's event loop hangs
+    context = multiprocessing.get_context("spawn")  # a forked worker shares the parent's TLS
     with ProcessPoolExecutor(workers, mp_context=context) as pool:
-        futures = [
-            pool.submit(_measure_part, factory, location, standard.signals_key(r), r,
-                        by_recording.get(r, []), settings)
-            for r in todo
-        ]  # fmt: skip
+        futures = {
+            pool.submit(_measure_part, factory, location, standard.prefix, t, settings): t
+            for t in todo
+        }
         for future in as_completed(futures):
             future.result()
-            done += 1
+            done += len(futures[future].recordings)
             if progress:
-                progress(done, done + sum(1 for f in futures if not f.done()))
+                progress(done, total)
     parts = sorted(k for k in store.list(f"{location.prefix}/_parts/") if k.endswith(".parquet"))
     tables = [pq.read_table(io.BytesIO(store.get_bytes(k) or b"")) for k in parts]
     table = pa.concat_tables(tables).cast(CHANNELS) if tables else CHANNELS.empty_table()
@@ -370,7 +428,8 @@ def measure(
         dataset_id=dataset_id, standard_version=standard.version,
         standard_manifest_sha256=_sha256(manifest_bytes), tool=f"biosignal-data {__version__}",
         flat_s=flat_s, percentile_sample=percentile_sample, seed=seed,
-        channels=table.num_rows, recordings=len(parts), completed_at=utcnow(),
+        channels=table.num_rows, recordings=len(set(table.column("recording_id").to_pylist())),
+        completed_at=utcnow(),
     )  # fmt: skip
     store.put_bytes(f"{location.prefix}/{MANIFEST}", manifest.model_dump_json(indent=2).encode())
     store.put_bytes(f"{location.prefix}/{SUCCESS}", b"", content_type="text/plain")
@@ -384,11 +443,15 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _table(store: Store, key: str) -> list[dict[str, Any]]:
+def _bytes(store: Store, key: str) -> bytes:
     data = store.get_bytes(key)
     if data is None:
         raise FileNotFoundError(key)
-    rows: list[dict[str, Any]] = pq.read_table(io.BytesIO(data)).to_pylist()
+    return data
+
+
+def _table(store: Store, key: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = pq.read_table(io.BytesIO(_bytes(store, key))).to_pylist()
     return rows
 
 

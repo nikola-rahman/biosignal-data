@@ -25,7 +25,6 @@ from s3transfer.manager import TransferConfig, TransferManager
 from s3transfer.subscribers import BaseSubscriber
 
 if TYPE_CHECKING:
-    import zarr.abc.store
     from mypy_boto3_s3 import S3Client
     from mypy_boto3_s3.type_defs import ObjectIdentifierTypeDef
 
@@ -42,14 +41,11 @@ MAX_PARTS = 10_000
 PARTS_IN_MEMORY = 2
 PARTS_IN_FLIGHT = 4
 DELETE_REQUESTS = 8  # delete requests of 1,000 keys sent at the same time
-# Zarr reads through s3fs: without limits one request that never answers stopped a reader
-# for good (2026-10-20: a check of challenge-2018 waited 80 minutes on one read). Each
-# request gets these timeouts and retries; each Zarr call (a shard is 64 MiB at most) is
-# stopped with an error after ZARR_CALL_TIMEOUT_S, so that a caller can try again.
+# Without limits one request that never answers stopped a reader for good (2026-10-20: a
+# check of challenge-2018 waited 80 minutes on one read). Every request gets these timeouts;
+# botocore tries again (adaptive retries) on a timeout, a connection error or a throttle.
 S3_CONNECT_TIMEOUT_S = 10
 S3_READ_TIMEOUT_S = 60
-S3_MAX_ATTEMPTS = 5
-ZARR_CALL_TIMEOUT_S = 300
 
 
 @dataclass(frozen=True)
@@ -73,6 +69,7 @@ class Store(Protocol):
     def put_stream(self, key: str, stream: BinaryIO, size: int | None) -> None: ...
     def put_bytes(self, key: str, data: bytes, content_type: str = ...) -> None: ...
     def get_bytes(self, key: str) -> bytes | None: ...
+    def get_range(self, key: str, offset: int, length: int) -> bytes: ...
     def open(self, key: str) -> BinaryIO: ...
     def delete(self, key: str) -> None: ...
     def delete_many(self, keys: list[str]) -> None: ...
@@ -80,7 +77,6 @@ class Store(Protocol):
     def sizes(self, prefix: str) -> dict[str, int]: ...
     def unfinished(self, prefix: str) -> tuple[Unfinished, ...]: ...
     def discard(self, item: Unfinished) -> None: ...
-    def zarr_store(self, key: str, *, read_only: bool) -> zarr.abc.store.Store: ...
 
 
 @dataclass(frozen=True)
@@ -123,6 +119,8 @@ class S3Settings:
                 signature_version="s3v4",
                 s3={"addressing_style": self.addressing},
                 retries={"max_attempts": 10, "mode": "adaptive"},
+                connect_timeout=S3_CONNECT_TIMEOUT_S,
+                read_timeout=S3_READ_TIMEOUT_S,
                 max_pool_connections=connections,
             ),
         )
@@ -208,6 +206,14 @@ class S3Store:
             raise
         return obj["Body"].read()
 
+    def get_range(self, key: str, offset: int, length: int) -> bytes:
+        """Bytes [offset, offset + length) of an object: one ranged GET."""
+        obj = self.client.get_object(
+            Bucket=self.bucket, Key=self._key(key), Range=f"bytes={offset}-{offset + length - 1}"
+        )
+        data: bytes = obj["Body"].read()
+        return data
+
     def open(self, key: str) -> BinaryIO:
         obj = self.client.get_object(Bucket=self.bucket, Key=self._key(key))
         return obj["Body"]  # type: ignore[return-value]
@@ -276,33 +282,6 @@ class S3Store:
             Bucket=self.bucket, Key=self._key(item.key), UploadId=item.upload_id
         )
 
-    def zarr_store(self, key: str, *, read_only: bool) -> zarr.abc.store.Store:
-        """A Zarr store for the Zarr hierarchy at `key`, reached with the same settings."""
-        if self.settings is None:
-            raise ValueError("S3Store.zarr_store needs the store's settings, not only a client")
-        import zarr  # noqa: PLC0415 - Zarr loads only when used
-        from zarr.storage import FsspecStore  # noqa: PLC0415
-
-        zarr.config.set({"async.timeout": ZARR_CALL_TIMEOUT_S})
-        s3 = self.settings
-        return FsspecStore.from_url(
-            f"s3://{self.bucket}/{self._key(key)}",
-            read_only=read_only,
-            storage_options={
-                "key": s3.access_key_id,
-                "secret": s3.secret_access_key,
-                "endpoint_url": s3.endpoint,
-                "client_kwargs": {"region_name": s3.region},
-                "config_kwargs": {
-                    "s3": {"addressing_style": s3.addressing},
-                    "signature_version": "s3v4",
-                    "connect_timeout": S3_CONNECT_TIMEOUT_S,
-                    "read_timeout": S3_READ_TIMEOUT_S,
-                    "retries": {"max_attempts": S3_MAX_ATTEMPTS, "mode": "adaptive"},
-                },
-            },
-        )
-
 
 class LocalStore:
     """A folder on disk with the same layout. Useful for tests and for staging small sets."""
@@ -346,6 +325,11 @@ class LocalStore:
         path = self._path(key)
         return path.read_bytes() if path.is_file() else None
 
+    def get_range(self, key: str, offset: int, length: int) -> bytes:
+        with self._path(key).open("rb") as f:
+            f.seek(offset)
+            return f.read(length)
+
     def open(self, key: str) -> BinaryIO:
         return self._path(key).open("rb")
 
@@ -384,11 +368,6 @@ class LocalStore:
 
     def discard(self, item: Unfinished) -> None:
         self._path(item.key).unlink(missing_ok=True)
-
-    def zarr_store(self, key: str, *, read_only: bool) -> zarr.abc.store.Store:
-        from zarr.storage import LocalStore as ZarrLocalStore  # noqa: PLC0415
-
-        return ZarrLocalStore(self._path(key), read_only=read_only)
 
 
 class _KnownSize(BaseSubscriber):

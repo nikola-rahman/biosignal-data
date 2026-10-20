@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
 
 import numpy as np
 import pytest
@@ -31,11 +30,8 @@ class _Dataset:
         ]
         self.events = SimpleNamespace(to_pylist=lambda: rows)
 
-    def signals(self, record: str) -> dict[str, Any]:
-        return {"100Hz": SimpleNamespace(shape=(1, self.ecg[record].size))}
-
-    def window(self, record: str, array: str, start_s: float, duration_s: float) -> np.ndarray:
-        assert (array, start_s, duration_s) == ("100Hz", 0.0, self.ecg[record].size / 100)
+    def read(self, record: str, array: str, *, physical: bool) -> np.ndarray:
+        assert (array, physical) == ("100Hz", True)
         return self.ecg[record][None]
 
 

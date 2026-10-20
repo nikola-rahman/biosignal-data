@@ -2,17 +2,16 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-import zarr
-from zarr.codecs import BloscCodec
 
 from biosignal_data.quality import AlreadyMeasured, iter_rows, measure
 from biosignal_data.quality.compute import _Channel, measure_recording
-from biosignal_data.standard import tables
+from biosignal_data.standard import blocks, tables
 from biosignal_data.storage.stores import LocalStore, StoreFactory
 
 RATE = 10.0
@@ -43,23 +42,16 @@ def _signals() -> tuple[np.ndarray, list[dict[str, object]]]:
     return data, channels
 
 
-def _group(store: LocalStore, key: str, data: np.ndarray) -> None:
-    group = zarr.open_group(store=store.zarr_store(key, read_only=False), mode="w")
-    array = group.create_array(
-        "10Hz", shape=data.shape, dtype=data.dtype, chunks=(3, 100), shards=(3, 300),
-        compressors=[BloscCodec(cname="zstd", clevel=1)],
-    )  # fmt: skip
-    array[:] = data
+def _blocks(data: np.ndarray) -> list[np.ndarray]:
+    """The array in blocks of 30 s (runs cross blocks)."""
+    return [data[:, s : s + 300] for s in range(0, data.shape[1], 300)]
 
 
-def test_the_rows_count_flat_runs_invalid_samples_limits_and_broken_calibrations(
-    store: LocalStore,
-) -> None:
+def test_the_rows_count_flat_runs_invalid_samples_limits_and_broken_calibrations() -> None:
     data, channels = _signals()
-    _group(store, "g.zarr", data)
-    group = zarr.open_group(store=store.zarr_store("g.zarr", read_only=True), mode="r")
     rows = {r["name"]: r for r in measure_recording(
-        group, "r1", channels, flat_s=2.0, percentile_sample=100, seed=0)}  # fmt: skip
+        lambda _: iter(_blocks(data)), "r1", channels, flat_s=2.0, percentile_sample=100,
+        seed=0)}  # fmt: skip
     c3, nibp, f4 = rows["C3"], rows["NIBP"], rows["F4"]
     assert (c3["samples"], c3["invalid"], c3["nonfinite"]) == (1000, 10, 0)
     assert c3["longest_flat_s"] == 50.0 and not c3["constant"]
@@ -93,13 +85,15 @@ def _parquet(rows: list[dict[str, object]], schema: pa.Schema) -> bytes:
 
 
 def test_measure_writes_a_complete_version_and_does_not_measure_twice(
-    store: LocalStore,
+    store: LocalStore, tmp_path: Path
 ) -> None:
     data, channels = _signals()
-    prefix = "standard/d/x/1.0"
-    _group(store, f"{prefix}/signals/r1.zarr", data)
+    prefix = "standard-blocks/d/x/1.0"
+    blocks.store_arrays(
+        store, prefix, {("r1", "10Hz"): data}, tmp_path, block_samples={"10Hz": 300}
+    )
     recordings = [{"recording_id": "r1", "format": "edf", "duration_s": 100.0,
-                   "arrays": ["10Hz"], "n_channels": 3, "signals": "signals/r1.zarr",
+                   "arrays": ["10Hz"], "n_channels": 3, "signals": True,
                    "source_files": [], "source_sha256": []}]  # fmt: skip
     store.put_bytes(f"{prefix}/recordings.parquet", _parquet(recordings, tables.RECORDINGS))
     store.put_bytes(f"{prefix}/channels.parquet", _parquet(channels, tables.CHANNELS))

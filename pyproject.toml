@@ -31,8 +31,7 @@ dependencies = [
     # The standard layer.
     "edfio>=0.4.18", # EDF/BDF digital samples, exactly as stored
     "pyarrow>=16", # Parquet tables
-    "s3fs>=2024.6", # S3 access for Zarr
-    "zarr>=3.1.3", # signal arrays
+    "numcodecs>=0.13", # Blosc (zstd, bit shuffle): the lossless codec of the sample blocks
 ]
 
 [project.optional-dependencies]
@@ -87,7 +86,7 @@ plugins = ["pydantic.mypy"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["nemar.*", "dandi.*", "huggingface_hub.*", "kaggle.*", "kagglesdk.*", "mne.*", "mne_bids.*", "wfdb.*", "pynwb.*", "h5py.*", "scipy.*", "pandas.*", "moto.*", "pyarrow.*", "pyedflib.*", "s3fs.*", "edfio.*"]
+module = ["nemar.*", "dandi.*", "huggingface_hub.*", "kaggle.*", "kagglesdk.*", "mne.*", "mne_bids.*", "wfdb.*", "pynwb.*", "h5py.*", "scipy.*", "pandas.*", "moto.*", "pyarrow.*", "pyedflib.*", "edfio.*", "numcodecs.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

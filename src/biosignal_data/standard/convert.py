@@ -6,10 +6,12 @@
 
 Guarantees:
 - Every recording is converted from raw files that are checked against the SHA-256 of the
-  raw manifest; every shard is decoded again before upload and compared with the source,
-  and uploaded with its MD5, which the storage checks.
-- A run can be stopped and run again: each recording finished is recorded under `_parts/`
-  (its rows and a `done.json` written last), and is not converted again.
+  raw manifest, by two independent readers that must agree; every block is decoded again
+  and compared with the source before it is kept, and every object is uploaded with its
+  MD5, which the storage checks.
+- A run can be stopped and run again: each batch of recordings finished is recorded under
+  `_parts/` (its objects first, then its rows and a `done.json` written last), and is not
+  converted again.
 - The tables, `_manifest.json` and then `_SUCCESS` are written only when every recording
   is done. Every raw file is then either used or listed as not converted, with the reason.
 """
@@ -33,7 +35,7 @@ import pyarrow as pa
 
 from biosignal_data import __version__
 from biosignal_data.read.raw import RawDataset
-from biosignal_data.standard import arrays, tables
+from biosignal_data.standard import blocks, tables
 from biosignal_data.standard.discover import Discovery, Unit, discover, may_be_annotations
 from biosignal_data.standard.layout import DONE, TABLES, StandardLocation
 from biosignal_data.standard.manifest import NotConverted, StandardManifest
@@ -140,24 +142,12 @@ def plan_standard(
 
 
 def _done_parts(store: Store, location: StandardLocation) -> dict[str, str]:
-    """Each finished recording -> the part that holds it. A batch part lists its recordings
-    in its done.json; a part from before batches (2026-10-20) is one recording, named by
-    its folder."""
+    """Each finished recording -> the batch part that holds it (from its done.json)."""
     keys = [k for k in store.list(location.parts_prefix) if k.endswith("/" + DONE)]
+    folders = [k[len(location.parts_prefix) : -len("/" + DONE)] for k in keys]
     found: dict[str, str] = {}
-    batches = []
-    for key in keys:
-        folder = key[len(location.parts_prefix) : -len("/" + DONE)]
-        if folder.startswith("batch-"):
-            batches.append((folder, key))
-        else:
-            found[folder] = folder
     with ThreadPoolExecutor(max_workers=HEADER_READS) as pool:
-        for folder, data in zip(
-            (f for f, _ in batches),
-            pool.map(lambda fk: store.get_bytes(fk[1]), batches),
-            strict=True,
-        ):
+        for folder, data in zip(folders, pool.map(store.get_bytes, keys), strict=True):
             if data is None:
                 raise RuntimeError(f"{location.parts_prefix}{folder}: done.json vanished")
             for unit_id in json.loads(data)["units"]:
@@ -195,30 +185,7 @@ def convert(
     lock = threading.Lock()
 
     def run(batch: list[Unit]) -> None:
-        """Convert a batch, recording by recording; record those that succeeded."""
-        results = []
-        for unit in batch:
-            if stop is not None and stop.is_set():
-                with lock:
-                    report.failed[unit.id] = "StoppedError: stopped"
-                continue
-            if progress:
-                progress.unit_started(unit.id)
-            try:
-                results.append(convert_unit(plan, store, unit, work_dir))
-            except Exception as exc:  # noqa: BLE001 - recorded per recording, reported at the end
-                log.error("%s: %s", unit.id, exc)
-                with lock:
-                    report.failed[unit.id] = f"{type(exc).__name__}: {exc}"
-                if progress:
-                    progress.unit_done(unit.id, ok=False)
-                continue
-            if progress:
-                progress.unit_done(unit.id, ok=True)
-        if results:
-            _record_batch(store, plan.location, results)
-            with lock:
-                report.converted += len(results)
+        _convert_batch(plan, store, batch, work_dir, report, lock, progress, stop)
 
     pool = ThreadPoolExecutor(max_workers=workers)
     try:
@@ -237,6 +204,67 @@ def convert(
     return report
 
 
+def _convert_batch(
+    plan: StandardPlan,
+    store: Store,
+    batch: list[Unit],
+    work_dir: Path,
+    report: StandardReport,
+    lock: threading.Lock,
+    progress: StandardProgress | None,
+    stop: threading.Event | None,
+) -> None:
+    """Convert a batch, recording by recording, into the batch's own objects; upload them
+    and record the recordings that succeeded (called from worker threads)."""
+    name = "batch-" + hashlib.sha256("\n".join(u.id for u in batch).encode()).hexdigest()[:20]
+    folder = Path(tempfile.mkdtemp(prefix="objects-", dir=work_dir))
+    try:
+        writer = blocks.ObjectWriter(folder, name)
+        results = []
+        for unit in batch:
+            if stop is not None and stop.is_set():
+                with lock:
+                    report.failed[unit.id] = "StoppedError: stopped"
+                continue
+            if progress:
+                progress.unit_started(unit.id)
+            try:
+                result = convert_unit(plan, store, unit, work_dir)
+            except Exception as exc:  # noqa: BLE001 - recorded per recording, reported at the end
+                log.error("%s: %s", unit.id, exc)
+                with lock:
+                    report.failed[unit.id] = f"{type(exc).__name__}: {exc}"
+                if progress:
+                    progress.unit_done(unit.id, ok=False)
+                continue
+            _keep(writer, result)
+            results.append(result)
+            if progress:
+                progress.unit_done(unit.id, ok=True)
+        if results:
+            for key, path in writer.objects:
+                store.put_bytes(
+                    plan.location.object_key(key), path.read_bytes(), "application/octet-stream"
+                )
+            _record_batch(store, plan.location, name, results)
+            with lock:
+                report.converted += len(results)
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def _keep(writer: blocks.ObjectWriter, result: UnitResult) -> None:
+    """Put a converted recording's blocks into the batch's objects (only now: a recording
+    that failed adds none), and its rows into its `blocks` table."""
+    rows = []
+    for row, blob in result.blocks:
+        obj, offset = writer.add(blob)
+        rows.append(row | {"object": obj, "offset": offset})
+    result.blocks = []
+    if rows:
+        result.parts["blocks"] = pa.Table.from_pylist(rows, schema=blocks.BLOCKS)
+
+
 @dataclass
 class UnitResult:
     """One converted recording: its table rows and what it used, for its batch's part."""
@@ -246,11 +274,12 @@ class UnitResult:
     used: list[str]
     not_converted: list[NotConverted]
     problems: list[str]
+    blocks: list[tuple[dict[str, Any], bytes]] = field(default_factory=list)  # until kept
 
 
 def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -> UnitResult:
-    """Convert one recording: its signals are written to the store; its table rows are
-    returned, to be recorded with the other recordings of its batch."""
+    """Convert one recording: its blocks (checked, compressed) and its table rows are
+    returned, to be stored with the other recordings of its batch."""
     folder = Path(tempfile.mkdtemp(prefix="unit-", dir=work_dir))
     try:
         raw = plan.raw
@@ -263,7 +292,6 @@ def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -
                 return WfdbSource(unit.path, fetch, raw.has)
             return EdfSource(unit.path, fetch)
 
-        location = plan.location
         try:
             source = open_source()
         except UnsupportedError as exc:
@@ -286,41 +314,36 @@ def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -
                         raise
                     reason = f"tried as a WFDB annotation file: {type(exc).__name__}: {exc}"
                     skipped.append(NotConverted(path=path, reason=reason))
-            signals = None
+            encoded: list[tuple[dict[str, Any], bytes]] = []
+            sha256: dict[tuple[str, int], str] = {}
             if source.groups:
-                key = location.signals_key(unit.id)
-                attributes = {
-                    "recording_id": unit.id,
-                    "dataset_id": location.dataset_id,
-                    "raw_version": location.version,
-                    "format": source.format,
-                }
                 check = open_source()  # a second, independent reader of the same files
                 try:
-                    arrays.write_signals(source, check, store, key, work_dir, attributes)
+                    encoded, sha256 = blocks.encode_source(unit.id, source, check)
                 finally:
                     check.close()
-                signals = key[len(location.prefix) + 1 :]
             files = {p: raw.entry(p).sha256 for p in used}
             parts = {
-                "recordings": tables.recording_table(unit.id, source, signals, files),
-                "channels": tables.channel_table(unit.id, source),
+                "recordings": tables.recording_table(unit.id, source, bool(source.groups), files),
+                "channels": tables.channel_table(unit.id, source, sha256),
                 "events": tables.event_table(unit.id, events),
             }
-            return UnitResult(unit, parts, used, skipped, problems)
+            return UnitResult(unit, parts, used, skipped, problems, encoded)
         finally:
             source.close()
     finally:
         shutil.rmtree(folder, ignore_errors=True)
 
 
-def _record_batch(store: Store, location: StandardLocation, results: list[UnitResult]) -> None:
-    """One part for a batch of converted recordings: each table's rows of all of them, then
-    `done.json`, written last (a part without it is not done). One part per batch, not per
-    recording: many small recordings made tens of thousands of objects, and the S3 storage
-    answered 429 Too Many Requests (PTB-XL, 2026-10-20)."""
+def _record_batch(
+    store: Store, location: StandardLocation, batch: str, results: list[UnitResult]
+) -> None:
+    """One part for a batch of converted recordings (its objects are already stored): each
+    table's rows of all of them, then `done.json`, written last (a part without it is not
+    done). One part per batch, not per recording: many small recordings made tens of
+    thousands of objects, and the S3 storage answered 429 Too Many Requests (PTB-XL,
+    2026-10-20)."""
     ids = [r.unit.id for r in results]
-    batch = "batch-" + hashlib.sha256("\n".join(ids).encode()).hexdigest()[:20]
     names = sorted({name for r in results for name in r.parts})
     for name in names:
         table = pa.concat_tables(
@@ -404,6 +427,12 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
         store.put_bytes(
             location.table_key(name), tables.to_parquet(table), "application/vnd.apache.parquet"
         )
+    # Objects of batches that stopped before their done.json are in no table: removed.
+    kept = {location.object_key(o) for o in joined["blocks"].column("object").to_pylist()}
+    stale = [k for k in store.list(location.object_key(blocks.DATA) + "/") if k not in kept]
+    if stale:
+        log.warning("%s: removing %d objects of unfinished batches", location.prefix, len(stale))
+        store.delete_many(stale)
 
     used = set(plan.discovery.lists) | {p for done, _ in loaded for p in done["used"]}
     skipped = {n["path"]: n["reason"] for done, _ in loaded for n in done["not_converted"]}
@@ -429,14 +458,12 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
         tool=f"biosignal-data {__version__}",
         created_at=created,
         completed_at=utcnow(),
-        layout=arrays.settings(),
+        layout=blocks.settings(),
         recordings=joined["recordings"].num_rows,
         channels=joined["channels"].num_rows,
         events=joined["events"].num_rows,
         files_used=len(used),
-        # Parts from before problems were recorded (2026-10-19) have none to give.
-        problems=plan.discovery.problems
-        + [p for done, _ in loaded for p in done.get("problems", [])],
+        problems=plan.discovery.problems + [p for done, _ in loaded for p in done["problems"]],
         not_converted=[NotConverted(path=p, reason=r) for p, r in sorted(skipped.items())],
     )
     store.put_bytes(location.manifest_key, manifest.model_dump_json(indent=2).encode())

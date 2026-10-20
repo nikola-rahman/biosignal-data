@@ -35,10 +35,11 @@ at most `max_tokens` tokens of `samples_per_token` samples in each example. The 
 is a random part of a full one, so the cuts differ from epoch to epoch. Every sample of
 every selected channel is in exactly one example per epoch; nothing is left out.
 
-How it reads: a recording is read through a local disk cache of whole shards (64 MiB at
-most), several recordings at the same time (`reads_in_flight`), because one read from the
-S3 storage takes 80-240 ms. Examples go through a shuffle buffer. Memory is bounded: two
-buffers of `shuffle_buffer` examples, and one span per read.
+How it reads: the block index of each standard version is loaded once (blocks.parquet);
+a span is one ranged request per block it touches (blocks hold at most 8 MiB), through a
+local disk cache of blocks, several recordings at the same time (`reads_in_flight`),
+because one read from the S3 storage takes 80-240 ms. Examples go through a shuffle
+buffer. Memory is bounded: two buffers of `shuffle_buffer` examples, and one span per read.
 
 `parts`: the blocks are dealt round-robin over the parts (data loader workers times
 distributed ranks), after a shuffle that depends on `seed` and `epoch` only.
@@ -60,12 +61,12 @@ from typing import Any
 
 import numpy as np
 import pyarrow.parquet as pq
-import zarr
 
 from biosignal_data.index.build import ROOT as INDEX_ROOT
+from biosignal_data.standard import blocks
 from biosignal_data.storage.layout import SUCCESS
 from biosignal_data.storage.stores import Store
-from biosignal_data.training.cache import WholeObjectCache
+from biosignal_data.training.cache import BlockCache
 
 log = logging.getLogger(__name__)
 
@@ -91,9 +92,20 @@ class Recording:
     dataset_id: str
     recording_id: str
     subject_id: str
-    signals: str  # the key of the recording's Zarr group, from the store root
+    standard: str  # the standard version folder, from the store root
     channels: tuple[Channel, ...]  # the selected ones
     duration_s: float  # from the index: how many blocks the recording has
+    arrays: tuple[tuple[str, blocks.ArrayBlocks], ...]  # the stored blocks of each array
+
+    def array_blocks(self, array: str) -> blocks.ArrayBlocks:
+        for name, found in self.arrays:
+            if name == array:
+                return found
+        raise KeyError(f"{self.dataset_id}/{self.recording_id}: no array {array!r}")
+
+    @property
+    def name(self) -> str:
+        return f"{self.dataset_id}/{self.recording_id}"
 
 
 @dataclass(frozen=True)
@@ -184,16 +196,23 @@ class Selection:
                     c["invalid_value"], c["name"], c["signal_type"], c["unit"],
                 )
             )  # fmt: skip
-        found = tuple(
-            Recording(
-                dataset_id, recording_id, recordings[dataset_id, recording_id]["subject_id"],
-                recordings[dataset_id, recording_id]["signals"],
-                tuple(sorted(chosen, key=lambda c: (c.array, c.index))),
-                _duration(recordings[dataset_id, recording_id]),
+        indexes = {
+            folder: blocks.index(
+                pq.read_table(io.BytesIO(_bytes(store, f"{folder}/{blocks.TABLE}.parquet")))
             )
-            for (dataset_id, recording_id), chosen in sorted(channels.items())
-        )  # fmt: skip
-        return cls(index, split, found)
+            for folder in sorted({recordings[key]["standard"] for key in channels})
+        }
+
+        def make(key: tuple[str, str], chosen: list[Channel]) -> Recording:
+            row = recordings[key]
+            arrays = sorted({c.array for c in chosen})
+            return Recording(
+                key[0], key[1], row["subject_id"], row["standard"],
+                tuple(sorted(chosen, key=lambda c: (c.array, c.index))), _duration(row),
+                tuple((a, indexes[row["standard"]][key[1], a]) for a in arrays),
+            )  # fmt: skip
+
+        return cls(index, split, tuple(make(k, chosen) for k, chosen in sorted(channels.items())))
 
 
 class ExampleSource:
@@ -225,6 +244,7 @@ class ExampleSource:
         self.selection = selection
         self._store_factory = store_factory
         self._store: Store | None = None
+        self._cache: BlockCache | None = None
         self.cache_directory = cache_directory
         self.cache_bytes = cache_bytes
         self.max_tokens = max_tokens
@@ -240,6 +260,7 @@ class ExampleSource:
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
         state["_store"] = None  # each process makes its own
+        state["_cache"] = None
         return state
 
     def blocks_of(self, epoch: int, part: int, parts: int) -> list[Block]:
@@ -294,7 +315,7 @@ class ExampleSource:
                 item = out.get()
                 if isinstance(item, _Done):
                     if item.error is not None:
-                        raise ReadError(item.recording.signals) from item.error
+                        raise ReadError(item.recording.name) from item.error
                     done += 1
                     continue
                 buffer.append(item)
@@ -312,9 +333,9 @@ class ExampleSource:
         rng = random.Random(  # noqa: S311 - not secret
             f"{self.seed}/{epoch}/{recording.dataset_id}/{recording.recording_id}/{block.index}"
         )
-        root = self._group(recording)
-        arrays = {name: _array(root, name) for name in {c.array for c in recording.channels}}
-        lengths = {c: int(arrays[c.array].shape[1]) for c in recording.channels}
+        names = {c.array for c in recording.channels}
+        arrays = {name: recording.array_blocks(name) for name in names}
+        lengths = {c: arrays[c.array].length for c in recording.channels}
         recording_end = max(lengths[c] / c.sampling_rate for c in recording.channels)
         t = block.index * self.block_s
         end_s = recording_end if block.last else min(recording_end, t + self.block_s)
@@ -330,7 +351,7 @@ class ExampleSource:
                 duration *= 1.0 - rng.random()
                 first = False
             stop_s = min(t + duration, end_s)
-            read = self._read(arrays, channels, t, stop_s)
+            read = self._read(recording, arrays, channels, t, stop_s)
             for group in groups:
                 chosen = [c for c in group if read[c].values.size]  # a span can be too short
                 if not chosen:
@@ -353,7 +374,8 @@ class ExampleSource:
 
     def _read(
         self,
-        arrays: dict[str, zarr.Array[Any]],
+        recording: Recording,
+        arrays: dict[str, blocks.ArrayBlocks],
         channels: list[Channel],
         start_s: float,
         stop_s: float,
@@ -364,44 +386,44 @@ class ExampleSource:
             mine = [c for c in channels if c.array == name]
             rate = mine[0].sampling_rate
             first = _first_sample(start_s, mine[0])
-            last = min(int(arrays[name].shape[1]), _first_sample(stop_s, mine[0]))
-            stored = _read_with_retries(arrays[name], first, last)
+            last = min(arrays[name].length, _first_sample(stop_s, mine[0]))
+            stored = blocks.span(arrays[name], first, last, self._getter(recording))
             for c in mine:
                 found[c] = Signal(_values(stored[c.index], c), rate, first / rate - start_s)
         return found
 
-    def _group(self, recording: Recording) -> zarr.Group:
+    def _getter(self, recording: Recording) -> Callable[[blocks.BlockRef], bytes]:
+        """A block's compressed bytes, through the local cache."""
         if self._store is None:
             self._store = self._store_factory()
-        cached = WholeObjectCache(
-            self._store.zarr_store(recording.signals, read_only=True),
-            self.cache_directory, recording.signals, self.cache_bytes,
-        )  # fmt: skip
-        return zarr.open_group(store=cached, mode="r")
+        if self._cache is None:
+            self._cache = BlockCache(self.cache_directory, self.cache_bytes)
+        store, cache = self._store, self._cache
 
+        def get(ref: blocks.BlockRef) -> bytes:
+            key = f"{recording.standard}/{ref.object}"
 
-def _array(root: zarr.Group, name: str) -> zarr.Array[Any]:
-    found = root[name]
-    if not isinstance(found, zarr.Array):
-        raise TypeError(f"{name} is not an array")
-    return found
+            def download() -> bytes:
+                return _read_with_retries(lambda: store.get_range(key, ref.offset, ref.nbytes), key)
+
+            return cache.get(key, ref.offset, download)
+
+        return get
 
 
 READ_ATTEMPTS = 3
 
 
-def _read_with_retries(array: zarr.Array[Any], first: int, last: int) -> np.ndarray:
-    """Samples [first, last) of every row; a read that times out or fails in transport is
-    tried again, up to READ_ATTEMPTS times (see storage.stores: ZARR_CALL_TIMEOUT_S)."""
+def _read_with_retries(read: Callable[[], bytes], what: str) -> bytes:
+    """One ranged read; one that times out or fails in transport is tried again, up to
+    READ_ATTEMPTS times (botocore also retries each request; see storage.stores)."""
     for attempt in range(1, READ_ATTEMPTS + 1):
         try:
-            return np.asarray(array[:, first:last])
+            return read()
         except (TimeoutError, OSError) as exc:
             if attempt == READ_ATTEMPTS:
                 raise
-            log.warning(
-                "read of %s [%d:%d] failed (%s); trying again", array.path, first, last, exc
-            )
+            log.warning("read of %s failed (%s); trying again", what, exc)
     raise AssertionError("unreachable")
 
 
@@ -451,9 +473,13 @@ def _take(buffer: list[Example], rng: random.Random) -> Example:
     return buffer.pop()
 
 
-def _table(store: Store, key: str) -> list[dict[str, Any]]:
+def _bytes(store: Store, key: str) -> bytes:
     data = store.get_bytes(key)
     if data is None:
         raise FileNotFoundError(key)
-    rows: list[dict[str, Any]] = pq.read_table(io.BytesIO(data)).to_pylist()
+    return data
+
+
+def _table(store: Store, key: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = pq.read_table(io.BytesIO(_bytes(store, key))).to_pylist()
     return rows

@@ -119,9 +119,7 @@ def minutes(dataset: StandardDataset, records: list[str], context_s: float) -> M
 
 def _ecg(dataset: StandardDataset, record: str) -> np.ndarray:
     """The whole ECG of a record (its one channel at 100 Hz), in physical values."""
-    array = dataset.signals(record)["100Hz"]
-    length_s = int(array.shape[1]) / 100.0  # type: ignore[union-attr]
-    values: np.ndarray = dataset.window(record, "100Hz", 0.0, length_s)[0]
+    values: np.ndarray = dataset.read(record, "100Hz", physical=True)[0]
     return values
 
 

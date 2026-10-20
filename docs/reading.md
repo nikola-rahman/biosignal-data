@@ -68,11 +68,13 @@ ds.recordings.to_pandas()  # one row per recording: start, duration, arrays, raw
 ds.channels.to_pandas()  # name, unit, sampling rate, scale, offset per channel
 ds.events.to_pandas()  # annotations: onset, duration, label, text
 
-group = ds.signals("100")  # zarr.Group, read from the store as needed
-group["360Hz"].shape  # (channels, samples), the stored integers
+x = ds.read("100", "360Hz")  # (channels, samples), the stored integers
 window = ds.window("100", "360Hz", start_s=600.0, duration_s=30.0)  # physical units
+many = ds.read_many([("100", "360Hz"), ("101", "360Hz")], threads=8)  # whole recordings
 ```
 
-Only the chunks a window needs are read. `physical=False` gives the stored integers. In
+Only the blocks a window needs are read, one ranged request each; `read_many` reads the
+blocks of one object together, so a whole dataset costs about one request per object.
+`window` gives physical units, `read` the stored integers (`physical=True` converts). In
 physical units, samples stored as the channel's invalid value and channels without a scale
 are NaN. The format is described in [standard-layer.md](standard-layer.md).

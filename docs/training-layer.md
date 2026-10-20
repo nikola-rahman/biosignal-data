@@ -1,8 +1,8 @@
 # The training layer
 
 The training layer is a view: it is computed while a model trains, and only its index is
-stored. The signals stay in the standard layer; a data loader reads windows from its Zarr
-arrays and applies the transforms of the experiment (window length, sampling rate,
+stored. The signals stay in the standard layer; a data loader reads windows from its
+blocks and applies the transforms of the experiment (window length, sampling rate,
 normalization, tokenization). A change to those is a change of code, not a rewrite of data.
 
 ## The index (stored)
@@ -89,10 +89,11 @@ epoch. Every sample of every selected channel is in exactly one example per epoc
 The token budget and the token size are settings of the model, given to the sampler; the
 tokenizer itself is part of the model.
 
-**How it reads.** The shards of a recording (64 MiB at most) are read whole through a
-local disk cache (`WholeObjectCache`); several recordings are read at the same time,
-because one read from the S3 storage takes 80-240 ms; examples go through a shuffle
-buffer. Memory stays bounded, whatever the length of a recording. The recordings are dealt
+**How it reads.** The block index of each standard version (`blocks.parquet`) is loaded
+once. A span is one ranged read per block it touches (8 MiB at most before compression),
+through a local disk cache of blocks (`BlockCache`); several recordings are read at the
+same time, because one read from the S3 storage takes 80-240 ms; examples go through a
+shuffle buffer. Memory stays bounded, whatever the length of a recording. The recordings are dealt
 over `parts` (data loader workers times distributed ranks) after a shuffle fixed by `seed`
 and `epoch`. `TorchExamples` in `biosignal_data.training.torch_dataset` wraps a source as
 a PyTorch `IterableDataset` (install the `train` extra).

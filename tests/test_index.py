@@ -96,17 +96,17 @@ def _parquet(table: pa.Table) -> bytes:
 def test_the_index_points_at_the_standard_layer_with_subjects_splits_and_types(
     store: LocalStore, tmp_path: Path
 ) -> None:
-    prefix = "standard/physionet/chbmit/1.0.0"
+    prefix = "standard-blocks/physionet/chbmit/1.0.0"
     recordings = pa.Table.from_pylist(
         [
             {"recording_id": "chb01/chb01_01", "format": "edf", "duration_s": 3600.0,
-             "arrays": ["256Hz"], "n_channels": 2, "signals": "signals/chb01/chb01_01.zarr",
+             "arrays": ["256Hz"], "n_channels": 2, "signals": True,
              "source_files": [], "source_sha256": []},
             {"recording_id": "chb21/chb21_01", "format": "edf", "duration_s": 3600.0,
-             "arrays": ["256Hz"], "n_channels": 2, "signals": "signals/chb21/chb21_01.zarr",
+             "arrays": ["256Hz"], "n_channels": 2, "signals": True,
              "source_files": [], "source_sha256": []},
             {"recording_id": "chb02/notes", "format": "edf", "duration_s": None, "arrays": [],
-             "n_channels": 0, "signals": None, "source_files": [], "source_sha256": []},
+             "n_channels": 0, "signals": False, "source_files": [], "source_sha256": []},
         ],
         schema=tables.RECORDINGS,
     )  # fmt: skip
@@ -149,7 +149,7 @@ def test_the_index_points_at_the_standard_layer_with_subjects_splits_and_types(
     rows = pq.read_table(store._path("index/2026-10-20/recordings.parquet")).to_pylist()
     assert {r["subject_id"] for r in rows} == {"physionet/chbmit:chb01"}  # one person
     assert len({r["split"] for r in rows}) == 1  # a person is in one split only
-    assert rows[0]["signals"] == f"{prefix}/signals/chb01/chb01_01.zarr"
+    assert rows[0]["standard"] == prefix
     types = pq.read_table(store._path("index/2026-10-20/channels.parquet")).to_pylist()
     assert [(c["name"], c["signal_type"]) for c in types][:2] == [
         ("FP1-F7", "eeg"),
@@ -196,10 +196,10 @@ def test_an_exclude_rule_needs_evidence_or_a_check(tmp_path: Path) -> None:
 def test_excluded_recordings_and_subjects_from_a_raw_table(
     store: LocalStore, tmp_path: Path
 ) -> None:
-    prefix = "standard/physionet/ephnogram/1.0.0"
+    prefix = "standard-blocks/physionet/ephnogram/1.0.0"
     rows = [
         {"recording_id": rec, "format": "wfdb", "duration_s": 60.0, "arrays": ["8000Hz"],
-         "n_channels": 1, "signals": f"signals/{rec}.zarr", "source_files": [],
+         "n_channels": 1, "signals": True, "source_files": [],
          "source_sha256": []}
         for rec in ("WFDB/ECGPCG0001", "WFDB/ECGPCG0002", "WFDB/x_ECGPCG0002")
     ]  # fmt: skip
@@ -247,10 +247,10 @@ def test_excluded_recordings_and_subjects_from_a_raw_table(
 def test_benchmark_test_records_are_held_out_of_every_split(
     store: LocalStore, tmp_path: Path
 ) -> None:
-    prefix = "standard/physionet/apnea-ecg/1.0.0"
+    prefix = "standard-blocks/physionet/apnea-ecg/1.0.0"
     rows = [
         {"recording_id": rec, "format": "wfdb", "duration_s": 60.0, "arrays": ["100Hz"],
-         "n_channels": 1, "signals": f"signals/{rec}.zarr", "source_files": [],
+         "n_channels": 1, "signals": True, "source_files": [],
          "source_sha256": []}
         for rec in ("a01", "a01r", "x01", "x01r")
     ]  # fmt: skip
@@ -288,11 +288,11 @@ def test_benchmark_test_records_are_held_out_of_every_split(
 
 
 def test_a_benchmark_test_fold_from_a_table_is_held_out(store: LocalStore, tmp_path: Path) -> None:
-    prefix = "standard/physionet/ptb-xl/1.0.3"
+    prefix = "standard-blocks/physionet/ptb-xl/1.0.3"
     ids = ["records500/00000/00001_hr", "records500/00000/00002_hr", "records500/00000/00003_hr"]
     rows = [
         {"recording_id": rec, "format": "wfdb", "duration_s": 10.0, "arrays": ["500Hz"],
-         "n_channels": 12, "signals": f"signals/{rec}.zarr", "source_files": [],
+         "n_channels": 12, "signals": True, "source_files": [],
          "source_sha256": []}
         for rec in ids
     ]  # fmt: skip

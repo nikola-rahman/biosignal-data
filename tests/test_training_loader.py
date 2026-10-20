@@ -10,10 +10,9 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-import zarr
-from zarr.codecs import BloscCodec
 
 from biosignal_data.index.build import CHANNELS, RECORDINGS
+from biosignal_data.standard.blocks import store_arrays
 from biosignal_data.storage.stores import LocalStore
 from biosignal_data.training import Example, ExampleSource, ReadError, Selection
 
@@ -31,25 +30,20 @@ def _parquet(rows: list[dict[str, object]], schema: pa.Schema) -> bytes:
     return out.getvalue()
 
 
+FOLDER = "standard-blocks/d/x/1.0"
+
+
 def _index(store: LocalStore, seconds: dict[str, float]) -> dict[tuple[str, str], np.ndarray]:
-    """Recordings with two arrays (100 Hz and 10 Hz), in shards of 10 s. Returns the
+    """Recordings with two arrays (100 Hz and 10 Hz), in blocks of 10 s. Returns the
     expected values of each (recording, channel name)."""
     rng = np.random.default_rng(1)
-    expected, recordings, channels = {}, [], []
+    expected, recordings, channels, arrays = {}, [], [], {}
     for i, (recording, length_s) in enumerate(seconds.items()):
-        key = f"standard/d/x/1.0/signals/{recording}.zarr"
-        group = zarr.open_group(store=store.zarr_store(key, read_only=False), mode="w")
         for array_name, rate, chans in ARRAYS:
             n = round(length_s * rate)
             stored = rng.integers(-1000, 1000, (len(chans), n)).astype(np.int16)
             stored[:, 3] = INVALID
-            per_shard = round(10 * rate)
-            array = group.create_array(
-                array_name, shape=stored.shape, dtype=stored.dtype,
-                chunks=(len(chans), per_shard // 4), shards=(len(chans), per_shard),
-                compressors=[BloscCodec(cname="zstd", clevel=1)],
-            )  # fmt: skip
-            array[:] = stored
+            arrays[recording, array_name] = stored
             for index, (name, kind, scale) in enumerate(chans):
                 values = stored[index].astype(np.float32)
                 if scale is not None:
@@ -68,8 +62,11 @@ def _index(store: LocalStore, seconds: dict[str, float]) -> dict[tuple[str, str]
              "subject_id": f"d/x:s{i}", "subject_certain": True,
              "split": "test" if recording == "held-out" else "train",
              "duration_s": length_s, "start_time": None, "arrays": ["100Hz", "10Hz"],
-             "signals": key}
+             "standard": FOLDER}
         )  # fmt: skip
+    store_arrays(
+        store, FOLDER, arrays, store.root.parent, block_samples={"100Hz": 1000, "10Hz": 100}
+    )
     store.put_bytes("index/i1/recordings.parquet", _parquet(recordings, RECORDINGS))
     store.put_bytes("index/i1/channels.parquet", _parquet(channels, CHANNELS))
     store.put_bytes("index/i1/_SUCCESS", b"")
@@ -167,8 +164,11 @@ def test_stopping_early_and_a_failed_read(store: LocalStore, tmp_path: Path) -> 
     examples = _source(store, tmp_path, selection, shuffle_buffer=2).examples(0, 0, 1)
     next(examples)
     examples.close()  # the reading threads stop; this does not hang
-    store.put_bytes("standard/d/x/1.0/signals/r2.zarr/100Hz/c/0/1", b"damaged")
-    with pytest.raises(ReadError, match=re.escape("r2.zarr")):
+    r2 = selection.recordings[2].array_blocks("100Hz").blocks[1]  # another block's bytes
+    data = bytearray(store.get_bytes(f"{FOLDER}/{r2.object}") or b"")
+    data[r2.offset : r2.offset + 8] = b"damaged!"
+    store.put_bytes(f"{FOLDER}/{r2.object}", bytes(data))
+    with pytest.raises(ReadError, match=re.escape("d/x/r2")):
         list(_source(store, tmp_path, selection, cache_directory=tmp_path / "c2").examples(0, 0, 1))
 
 
@@ -207,17 +207,15 @@ def test_a_read_that_times_out_is_tried_again() -> None:
     from biosignal_data.training import loader  # noqa: PLC0415
 
     class Flaky:
-        path = "x"
-
         def __init__(self, fails: int) -> None:
             self.fails = fails
 
-        def __getitem__(self, key: object) -> np.ndarray:
+        def __call__(self) -> bytes:
             if self.fails:
                 self.fails -= 1
                 raise TimeoutError("no answer")
-            return np.zeros((2, 5))
+            return b"block"
 
-    assert loader._read_with_retries(Flaky(2), 0, 5).shape == (2, 5)  # type: ignore[arg-type]
+    assert loader._read_with_retries(Flaky(2), "x") == b"block"
     with pytest.raises(TimeoutError):
-        loader._read_with_retries(Flaky(3), 0, 5)  # type: ignore[arg-type]
+        loader._read_with_retries(Flaky(3), "x")

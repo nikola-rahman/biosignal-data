@@ -103,14 +103,15 @@ Details and the manifest schema: [`docs/raw-layer.md`](docs/raw-layer.md).
 
 ## The standard layer
 
-`biosignal-data standardize <id> --dest s3://<bucket>` converts a raw version: signals as
-Zarr v3 arrays at their native sampling rates with the exact stored values, metadata as
-Parquet tables, every raw file either used or listed with the reason it was not.
+`biosignal-data standardize <id> --dest s3://<bucket>` converts a raw version: samples at
+their native sampling rates with the exact stored values, as compressed blocks in objects
+of at most 64 MiB with one block index; metadata as Parquet tables; every raw file either
+used or listed with the reason it was not.
 
 ```
-s3://<bucket>/standard/<repository>/<dataset>/<raw version>/
-    recordings.parquet, channels.parquet, events.parquet
-    signals/<recording>.zarr/<rate>Hz
+s3://<bucket>/standard-blocks/<repository>/<dataset>/<raw version>/
+    recordings.parquet, channels.parquet, events.parquet, blocks.parquet
+    data/<batch>-<n>.bin
     _manifest.json, _SUCCESS
 ```
 

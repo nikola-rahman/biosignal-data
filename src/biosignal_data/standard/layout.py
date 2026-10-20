@@ -2,9 +2,10 @@
 
 <root>/<repository>/<dataset>/<raw version>/
     recordings.parquet, channels.parquet, events.parquet
-    signals/<recording>.zarr/
+    blocks.parquet        where each block of samples is (see standard/blocks.py)
+    data/<batch>-<n>.bin  the blocks, in objects of at most 64 MiB
     _manifest.json
-    _parts/<unit>/...     progress of an unfinished run (removed on success)
+    _parts/<batch>/...    progress of an unfinished run (removed on success)
     _SUCCESS
 """
 
@@ -14,8 +15,10 @@ from dataclasses import dataclass
 
 from biosignal_data.storage.layout import MANIFEST, SUCCESS, VersionLocation, safe_relpath
 
-ROOT = "standard"
-TABLES = ("recordings", "channels", "events")
+# A new root for the block layout (2026-10-20); "standard" holds the earlier one, a Zarr
+# group per recording.
+ROOT = "standard-blocks"
+TABLES = ("recordings", "channels", "events", "blocks")
 PARTS = "_parts"
 DONE = "done.json"
 
@@ -33,9 +36,9 @@ class StandardLocation:
     def table_key(self, table: str) -> str:
         return f"{self.prefix}/{table}.parquet"
 
-    def signals_key(self, recording_id: str) -> str:
-        """The Zarr group of one recording."""
-        return f"{self.prefix}/signals/{safe_relpath(recording_id)}.zarr"
+    def object_key(self, name: str) -> str:
+        """An object of blocks, by its name in blocks.parquet (`data/...`)."""
+        return f"{self.prefix}/{safe_relpath(name)}"
 
     @property
     def parts_prefix(self) -> str:

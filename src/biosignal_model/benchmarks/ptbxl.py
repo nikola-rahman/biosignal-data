@@ -29,7 +29,6 @@ import csv
 import io
 import random
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -60,7 +59,7 @@ class PtbxlSettings(BaseModel):
     rate: Literal[100, 500]
     tasks: list[Literal["all", "diagnostic", "subdiagnostic", "superdiagnostic", "form", "rhythm"]]
     rows: int  # rows of the model's max_tokens in one batch
-    read_threads: int  # records read from the store at the same time
+    read_threads: int  # requests to the store at the same time
     probe_l2: list[float]
     probe_steps: int
     finetune_epochs: int  # the best epoch on fold 9 is the one scored
@@ -144,12 +143,18 @@ def load(store: Store, settings: PtbxlSettings, log: Log) -> tuple[Records, list
     for c in channels:
         by_record.setdefault(c["recording_id"], []).append(c)
 
-    def read(row: dict[str, str]) -> Example:
+    started = time.monotonic()
+    stored = dataset.read_many(
+        [(row[column], array) for row in rows], threads=settings.read_threads, physical=True
+    )
+    log({"load/records": float(len(stored)), "load/seconds": time.monotonic() - started})
+
+    def example(row: dict[str, str]) -> Example:
         record = row[column]
         mine = sorted(
             (c for c in by_record[record] if c["array"] == array), key=lambda c: c["index"]
         )
-        values = dataset.window(record, array, 0.0, 10.0)
+        values = stored[record, array]
         signals = tuple(
             Signal(values[c["index"]].astype(np.float32), float(settings.rate), 0.0) for c in mine
         )
@@ -162,17 +167,7 @@ def load(store: Store, settings: PtbxlSettings, log: Log) -> tuple[Records, list
             signals, Origin(DATASET, record, f"{DATASET}:{row['patient_id']}", 0.0, origin_channels)
         )
 
-    examples = []
-    started = time.monotonic()
-    with ThreadPoolExecutor(settings.read_threads) as pool:
-        for example in pool.map(read, rows):
-            examples.append(example)
-            if len(examples) % 1000 == 0 or len(examples) == len(rows):
-                seconds = time.monotonic() - started
-                log({
-                    "load/records": float(len(examples)), "load/of": float(len(rows)),
-                    "load/records_per_s": len(examples) / seconds, "load/seconds": seconds,
-                })  # fmt: skip
+    examples = [example(row) for row in rows]
     return Records(
         ids=[r[column] for r in rows],
         examples=examples,
@@ -296,6 +291,10 @@ def end_to_end(
 
     val = [i for i in range(len(records.ids)) if records.folds[i] in VALIDATION]
     test = [i for i in range(len(records.ids)) if records.folds[i] in TEST]
+    # A fixed part of folds 1-8, as large as fold 9, scored in eval mode each epoch: its
+    # loss next to the fold-9 loss shows overfitting on one scale.
+    rng_eval = random.Random(s.seed)  # noqa: S311 - not secret
+    train_eval = sorted(rng_eval.sample(train, min(len(train), len(val))))
     best_val, best_test, best_epoch, labels_n = -1.0, 0.0, 0, 0
     step = 0
     for epoch in range(1, s.finetune_epochs + 1):
@@ -318,10 +317,13 @@ def end_to_end(
                 window = []
         losses += window
         seconds = time.monotonic() - started
-        auc_val, _ = macro_auc(y[val], predict(val))
+        p_val = predict(val)
+        auc_val, _ = macro_auc(y[val], p_val)
         record = {
             f"{prefix}/epoch": float(epoch),
             f"{prefix}/epoch_train_loss": float(np.mean(losses)),
+            f"{prefix}/epoch_train_eval_loss": _bce(y[train_eval], predict(train_eval)),
+            f"{prefix}/epoch_validation_loss": _bce(y[val], p_val),
             f"{prefix}/epoch_validation_macro_auc": auc_val,
             f"{prefix}/epoch_seconds": seconds,
             f"{prefix}/examples_per_s": len(train) / seconds,
@@ -334,6 +336,12 @@ def end_to_end(
         log(record)
     return {"macro_auc": best_test, "labels": float(labels_n), "epoch": float(best_epoch),
             "validation_macro_auc": best_val}  # fmt: skip
+
+
+def _bce(y: np.ndarray, p: np.ndarray) -> float:
+    """Mean binary cross-entropy of probabilities `p` (as in training, over all labels)."""
+    p = np.clip(p.astype(np.float64), 1e-7, 1 - 1e-7)
+    return float(-(y * np.log(p) + (1 - y) * np.log(1 - p)).mean())
 
 
 def run(

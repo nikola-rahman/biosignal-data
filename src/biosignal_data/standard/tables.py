@@ -13,6 +13,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from biosignal_data.standard.blocks import BLOCKS
 from biosignal_data.standard.sources import Event, Source
 
 RECORDINGS = pa.schema(
@@ -23,8 +24,8 @@ RECORDINGS = pa.schema(
         ("duration_s", pa.float64()),
         ("arrays", pa.list_(pa.string())),  # array names in the Zarr group, e.g. "250Hz"
         ("n_channels", pa.int32()),
-        ("signals", pa.string()),  # the Zarr group, relative to the version folder; empty
-        # for a recording whose signals the source does not publish (only its annotations)
+        ("signals", pa.bool_()),  # it has samples (in blocks.parquet); false for a recording
+        # whose signals the source does not publish (only its annotations)
         ("source_files", pa.list_(pa.string())),  # raw files it was made from
         ("source_sha256", pa.list_(pa.string())),
         ("source_header", pa.string()),  # the header text, as written
@@ -43,6 +44,7 @@ CHANNELS = pa.schema(
         ("scale", pa.float64()),  # physical = stored * scale + offset
         ("offset", pa.float64()),
         ("invalid_value", pa.int64()),
+        ("sha256", pa.string()),  # of the stored samples (little-endian), for exact checks
         ("source", pa.string()),
     ]
 )
@@ -60,11 +62,11 @@ EVENTS = pa.schema(
         ("source", pa.string()),
     ]
 )
-SCHEMAS = {"recordings": RECORDINGS, "channels": CHANNELS, "events": EVENTS}
+SCHEMAS = {"recordings": RECORDINGS, "channels": CHANNELS, "events": EVENTS, "blocks": BLOCKS}
 
 
 def recording_table(
-    recording_id: str, source: Source, signals: str | None, files: dict[str, str]
+    recording_id: str, source: Source, signals: bool, files: dict[str, str]
 ) -> pa.Table:
     """`files`: every raw file the recording was made from, with its SHA-256."""
     return pa.Table.from_pylist(
@@ -86,7 +88,10 @@ def recording_table(
     )
 
 
-def channel_table(recording_id: str, source: Source) -> pa.Table:
+def channel_table(
+    recording_id: str, source: Source, sha256: dict[tuple[str, int], str]
+) -> pa.Table:
+    """`sha256`: (array, index) -> the SHA-256 of the channel's stored samples."""
     return pa.Table.from_pylist(
         [
             {
@@ -101,6 +106,7 @@ def channel_table(recording_id: str, source: Source) -> pa.Table:
                 "scale": c.scale,
                 "offset": c.offset,
                 "invalid_value": c.invalid_value,
+                "sha256": sha256.get((g.name, i)),
                 "source": _json(c.source),
             }
             for g in source.groups

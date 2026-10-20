@@ -8,19 +8,16 @@ import pyarrow.parquet as pq
 import pyedflib
 import pytest
 import wfdb
-import zarr
 
 from biosignal_data.ingest import ingest
-from biosignal_data.standard import arrays, tables
+from biosignal_data.read.standard import StandardDataset
+from biosignal_data.standard import blocks
 from biosignal_data.standard.convert import (
     AlreadyStandard,
-    _batches,
     convert,
-    convert_unit,
     plan_standard,
 )
 from biosignal_data.standard.discover import discover
-from biosignal_data.standard.sources import Group
 from biosignal_data.storage.stores import LocalStore
 from tests.conftest import FakeFetcher, make_dataset
 
@@ -100,16 +97,16 @@ def raw(store: LocalStore, tmp_path: Path) -> dict[str, np.ndarray]:
     return {"ecg": ecg, "x": x, "eeg": eeg, "slow": slow}
 
 
-def test_a_new_attempt_removes_what_an_earlier_one_left_in_a_group(
+def test_objects_of_unfinished_batches_are_removed_at_the_end(
     store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
 ) -> None:
-    stale = "standard/physionet/mitdb/1.0.0/signals/r1.zarr/200Hz/c/0/99"
-    store.put_bytes(stale, b"from an earlier attempt")
+    stale = "standard-blocks/physionet/mitdb/1.0.0/data/batch-earlier-0000.bin"
+    store.put_bytes(stale, b"from a batch that stopped before its done.json")
     plan = plan_standard(store, "physionet/mitdb", "1.0.0")
     report = convert(plan, store, workers=1, part_bytes=1, work_dir=tmp_path / "work")
     assert report.complete
     assert not store.exists(stale)
-    assert list((tmp_path / "work").iterdir()) == []  # the local groups are removed
+    assert list((tmp_path / "work").iterdir()) == []  # the local objects are removed
 
 
 def test_standard_version_is_exact_and_accounts_for_every_file(
@@ -122,27 +119,25 @@ def test_standard_version_is_exact_and_accounts_for_every_file(
     report = convert(plan, store, workers=2, part_bytes=1, work_dir=tmp_path / "work")
     assert report.complete and not report.failed and report.converted == 5
 
-    prefix = "standard/physionet/mitdb/1.0.0"
-    root = zarr.open_group(
-        store=store.zarr_store(f"{prefix}/signals/r1.zarr", read_only=True), mode="r"
-    )
-    assert sorted(root.array_keys()) == ["100Hz", "200Hz"]
-    np.testing.assert_array_equal(root["200Hz"][:], raw["ecg"][None, :])
-    np.testing.assert_array_equal(root["100Hz"][:], raw["x"][None, :])
-    assert root["200Hz"].dtype == np.int16
-    assert root.attrs["recording_id"] == "r1"
-
-    edf = zarr.open_group(
-        store=store.zarr_store(f"{prefix}/signals/sub/s1.zarr", read_only=True), mode="r"
-    )
-    np.testing.assert_array_equal(edf["256Hz"][:], raw["eeg"][None, :])
-    np.testing.assert_array_equal(edf["1Hz"][:], raw["slow"][None, :])
+    prefix = "standard-blocks/physionet/mitdb/1.0.0"
+    ds = StandardDataset.open(store, "physionet/mitdb", "1.0.0")
+    np.testing.assert_array_equal(ds.read("r1", "200Hz"), raw["ecg"][None, :])
+    np.testing.assert_array_equal(ds.read("r1", "100Hz"), raw["x"][None, :])
+    assert ds.read("r1", "200Hz").dtype == np.int16
+    np.testing.assert_array_equal(ds.read("sub/s1", "256Hz"), raw["eeg"][None, :])
+    np.testing.assert_array_equal(ds.read("sub/s1", "1Hz"), raw["slow"][None, :])
+    np.testing.assert_array_equal(ds.read("r1", "200Hz", 17, 61), raw["ecg"][None, 17:61])
+    many = ds.read_many([("r1", "200Hz"), ("sub/s1", "256Hz")], threads=2)
+    np.testing.assert_array_equal(many["sub/s1", "256Hz"], raw["eeg"][None, :])
+    # small recordings share objects: every block is in one of a few objects
+    objects = set(ds._table("blocks").column("object").to_pylist())
+    assert objects == {k[len(prefix) + 1 :] for k in store.list(f"{prefix}/data/")}
 
     recordings = pq.read_table(store._path(f"{prefix}/recordings.parquet")).to_pylist()
     assert [r["recording_id"] for r in recordings] == ["r1", "r2", "r3", "sub/s1"]
-    assert (recordings[2]["n_channels"], recordings[2]["signals"]) == (0, None)
+    assert (recordings[2]["n_channels"], recordings[2]["signals"]) == (0, False)
     r1, r2 = recordings[0], recordings[1]
-    assert (r2["n_channels"], r2["signals"], r2["arrays"]) == (0, None, [])
+    assert (r2["n_channels"], r2["signals"], r2["arrays"]) == (0, False, [])
     assert r2["source_files"] == ["r2.hea", "r2.atr"] and r2["duration_s"] == 10.0
     assert r1["source_files"] == ["r1.hea", "r1.dat", "r1.atr"]
     assert r1["start_time"].isoformat() == "2003-02-01T10:20:30"
@@ -203,7 +198,7 @@ def test_a_failed_recording_keeps_the_others_and_runs_again(
         work_dir=tmp_path / "work",
     )  # fmt: skip
     assert not report.complete and list(report.failed) == ["sub/s1"]
-    assert not store.exists("standard/physionet/mitdb/1.0.0/_SUCCESS")
+    assert not store.exists("standard-blocks/physionet/mitdb/1.0.0/_SUCCESS")
 
     monkeypatch.setattr(convert_module, "EdfSource", original)
     plan = plan_standard(store, "physionet/mitdb", "1.0.0")
@@ -238,21 +233,57 @@ def test_two_records_joined_on_one_records_line_are_both_found() -> None:
 
 
 @pytest.mark.parametrize(
-    ("rate", "channels", "length", "step", "chunk"),
+    ("channels", "length", "itemsize", "step", "per_block"),
     [
-        (256.0, 23, 921_600, 1, 7680),  # one 30 s epoch is already 353 KB
-        (1.0, 3, 28_800, 1, 30 * 365),  # 30 samples per epoch: grown to 64 KiB
-        (200.0, 1, 100, 2, 100),  # shorter than one chunk
+        (23, 2_000_000, 2, 1, 182_361),  # EEG: 8 MiB / (23 x 2 bytes)
+        (12, 1000, 2, 1, 1000),  # a 10 s ECG: one block
+        (2, 10**8, 4, 3, 1_048_575),  # whole WFDB frames of 3 samples
     ],
 )
-def test_chunks_are_whole_epochs_of_at_least_64_kib(
-    rate: float, channels: int, length: int, step: int, chunk: int
+def test_blocks_hold_at_most_8_mib_in_whole_frames(
+    channels: int, length: int, itemsize: int, step: int, per_block: int
 ) -> None:
-    group = Group(rate, np.dtype("int16"), length, tuple([None] * channels), step)  # type: ignore[list-item]
-    shape = arrays.layout(group)
-    assert shape.chunk == chunk
-    assert shape.shard % shape.chunk == 0
-    assert shape.shard * channels * 2 <= max(arrays.MAX_SHARD_BYTES, shape.chunk * channels * 2)
+    cuts = blocks.spans(length, channels, itemsize, step)
+    assert cuts[0] == (0, min(per_block, length)) and cuts[-1][1] == length
+    assert all(b - a <= per_block and a % step == 0 for a, b in cuts)
+    assert all(cuts[i][1] == cuts[i + 1][0] for i in range(len(cuts) - 1))  # no gaps
+    assert per_block * channels * itemsize <= blocks.BLOCK_BYTES
+
+
+def test_objects_are_closed_before_64_mib_and_ranges_of_one_object_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(blocks, "OBJECT_BYTES", 100)
+    writer = blocks.ObjectWriter(tmp_path, "b")
+    placed = [writer.add(bytes([i]) * 40) for i in range(5)]  # 40, 80 | 40, 80 | 40
+    assert [p[0] for p in placed] == ["data/b-0000.bin"] * 2 + ["data/b-0001.bin"] * 2 + [
+        "data/b-0002.bin"
+    ]
+    assert [p[1] for p in placed] == [0, 40, 0, 40, 0]
+    files = dict(writer.objects)
+    requests: list[tuple[str, int, int]] = []
+
+    def get_range(name: str, offset: int, length: int) -> bytes:
+        requests.append((name, offset, length))
+        return files[name].read_bytes()[offset : offset + length]
+
+    refs = [
+        blocks.BlockRef(name, offset, 40, 0, 40, 1, "|u1", blocks.checksum(bytes([i]) * 40))
+        for i, (name, offset) in enumerate(placed)
+    ]
+    found = blocks.fetch(get_range, refs, threads=2)
+    assert all(found[r] == bytes([i]) * 40 for i, r in enumerate(refs))
+    assert sorted(requests) == [  # one request per object, not per block
+        ("data/b-0000.bin", 0, 80), ("data/b-0001.bin", 0, 80), ("data/b-0002.bin", 0, 40)
+    ]  # fmt: skip
+
+
+def test_a_damaged_block_is_found_by_its_checksum() -> None:
+    blob = blocks.encode(np.arange(100, dtype=np.int16).reshape(2, 50))
+    ref = blocks.BlockRef("o", 0, len(blob), 0, 50, 2, "<i2", blocks.checksum(blob))
+    np.testing.assert_array_equal(blocks.unpack(ref, blob), np.arange(100).reshape(2, 50))
+    with pytest.raises(blocks.CorruptBlockError):
+        blocks.unpack(ref, blob[:-1] + bytes([blob[-1] ^ 1]))
 
 
 def test_cli_dry_run_then_convert_then_already(
@@ -273,7 +304,7 @@ def test_cli_dry_run_then_convert_then_already(
     assert dry.exit_code == 0, dry.output
     assert "5 recordings (1 EDF, 4 WFDB), 2 annotation files; 5 to convert" in dry.output
     assert "newest complete raw version 1.0.0" in dry.output
-    assert not store.exists("standard/physionet/mitdb/1.0.0/_SUCCESS")
+    assert not store.exists("standard-blocks/physionet/mitdb/1.0.0/_SUCCESS")
 
     done = runner.invoke(app, args)
     assert done.exit_code == 0, done.output
@@ -283,11 +314,12 @@ def test_cli_dry_run_then_convert_then_already(
     assert "already complete (--replace makes it again)" in runner.invoke(app, args).output
     again = runner.invoke(app, [*args, "--replace", "--dry-run"])
     assert "(complete; --replace makes it again)" in again.output
-    assert store.exists("standard/physionet/mitdb/1.0.0/_SUCCESS")  # a dry run changes nothing
+    # a dry run changes nothing
+    assert store.exists("standard-blocks/physionet/mitdb/1.0.0/_SUCCESS")
     replaced = runner.invoke(app, [*args, "--replace"])
     assert replaced.exit_code == 0, replaced.output
     assert "4 recordings, 4 channels, 5 events" in replaced.output
-    assert store.exists("standard/physionet/mitdb/1.0.0/_SUCCESS")
+    assert store.exists("standard-blocks/physionet/mitdb/1.0.0/_SUCCESS")
 
 
 def test_reader_opens_tables_and_reads_windows_in_physical_units(
@@ -487,16 +519,15 @@ def test_a_view_is_listed_with_its_records_not_stored_twice(
     report = convert(plan, store, workers=2, part_bytes=1, work_dir=tmp_path / "work")
     assert report.complete and report.converted == 2
     manifest = json.loads(
-        store.get_bytes("standard/physionet/apnea-ecg/1.0.0/_manifest.json") or b""
+        store.get_bytes("standard-blocks/physionet/apnea-ecg/1.0.0/_manifest.json") or b""
     )
     reasons = {n["path"]: n["reason"] for n in manifest["not_converted"]}
     assert reasons["a01er.hea"].startswith("a view of a01, a01r: its header shows")
 
 
-def test_parts_written_before_problems_were_recorded_still_finish(
+def test_small_recordings_share_one_part_and_a_stopped_run_continues(
     store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
 ) -> None:
-    # autonomic-aging-cardiovascular: 1,120 parts from earlier code had no "problems" key.
     from biosignal_data.standard import convert as convert_module  # noqa: PLC0415
 
     original = convert_module.EdfSource
@@ -505,51 +536,24 @@ def test_parts_written_before_problems_were_recorded_still_finish(
         raise OSError("simulated read failure")
 
     convert_module.EdfSource = broken  # type: ignore[assignment,misc]
-    try:
-        convert(plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2, part_bytes=1,
-                work_dir=tmp_path / "work")  # fmt: skip
+    try:  # the EDF recording fails; the WFDB ones are done
+        first = convert(plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2,
+                        part_bytes=10**9, work_dir=tmp_path / "work")  # fmt: skip
     finally:
         convert_module.EdfSource = original  # type: ignore[misc]
-    parts = "standard/physionet/mitdb/1.0.0/_parts/"
-    done_key = next(
-        k for k in store.list(parts)
-        if k.endswith("/done.json") and "r1" in json.loads(store.get_bytes(k) or b"")["units"]
-    )  # fmt: skip
-    done = json.loads(store.get_bytes(done_key) or b"")
-    del done["problems"]  # as the earlier code wrote it
-    store.put_bytes(done_key, json.dumps(done).encode())
-    report = convert(
-        plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2, part_bytes=1,
-        work_dir=tmp_path / "work",
-    )  # fmt: skip
-    assert report.complete
-
-
-def test_small_recordings_share_one_part_and_old_parts_still_finish(
-    store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
-) -> None:
-    plan = plan_standard(store, "physionet/mitdb", "1.0.0")
-    first = plan.units[0]
-    # an earlier run left the first record as a per-recording part (before 2026-10-20)
-    (tmp_path / "work").mkdir()
-    result = convert_unit(plan, store, first, tmp_path / "work")
-    location = plan.location
-    for name, table in result.parts.items():
-        store.put_bytes(location.part_key(first.id, f"{name}.parquet"), tables.to_parquet(table))
-    store.put_bytes(location.part_key(first.id, "done.json"), json.dumps(
-        {"unit": first.id, "tables": sorted(result.parts), "used": result.used,
-         "not_converted": [], "problems": []}).encode())  # fmt: skip
+    assert not first.complete and list(first.failed) == ["sub/s1"]
 
     plan = plan_standard(store, "physionet/mitdb", "1.0.0")
-    assert first.id not in [u.id for u in plan.to_convert] and len(plan.to_convert) == 4
-    assert len(_batches(plan, plan.to_convert, 10**9)) == 1  # the other four share one part
+    assert [u.id for u in plan.to_convert] == ["sub/s1"]
     report = convert(plan, store, workers=2, part_bytes=10**9, work_dir=tmp_path / "work")
-
-    assert report.complete and report.converted == 4 and report.skipped == 1
+    assert report.complete and report.converted == 1 and report.skipped == 4
+    location = plan.location
     recordings = pq.read_table(store._path(location.table_key("recordings"))).to_pylist()
     # m1 (multi-segment) is not converted yet, as in the main test: no row
     assert [r["recording_id"] for r in recordings] == ["r1", "r2", "r3", "sub/s1"]
     assert not list(store.list(location.parts_prefix))
+    ds = StandardDataset.open(store, "physionet/mitdb", "1.0.0")
+    np.testing.assert_array_equal(ds.read("sub/s1", "256Hz"), raw["eeg"][None, :])
 
 
 @pytest.mark.parametrize(

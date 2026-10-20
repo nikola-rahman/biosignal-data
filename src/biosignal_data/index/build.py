@@ -6,8 +6,9 @@
         _manifest.json       the standard versions used, the rules, the counts, unknown names
         _SUCCESS
 
-The signals themselves are not copied: the index points at the Zarr arrays of the standard
-layer, which a data loader reads (see training/). An index is immutable once complete.
+The samples themselves are not copied: the index points at the standard version of each
+recording, whose blocks a data loader reads (see training/). An index is immutable once
+complete.
 """
 
 from __future__ import annotations
@@ -58,7 +59,7 @@ RECORDINGS = pa.schema(
         ("duration_s", pa.float64()),
         ("start_time", pa.timestamp("us")),
         ("arrays", pa.list_(pa.string())),
-        ("signals", pa.string()),  # the Zarr group, from the store root
+        ("standard", pa.string()),  # the standard version folder, from the store root
     ]
 )
 CHANNELS = pa.schema(
@@ -226,7 +227,7 @@ def _index_dataset(
                 "duration_s": r["duration_s"],
                 "start_time": r["start_time"],
                 "arrays": r["arrays"],
-                "signals": f"{location.prefix}/{r['signals']}",
+                "standard": location.prefix,
             }
         )
     for c in _read(store, location.table_key("channels")).to_pylist():

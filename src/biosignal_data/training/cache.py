@@ -1,35 +1,19 @@
-"""A local disk cache for the Zarr arrays of the standard layer, by whole objects.
+"""A local disk cache of the blocks of the standard layer.
 
-The first read of an object (a shard, 64 MiB at most) downloads all of it and writes it
-to `<directory>/<namespace>/<key>` (a temporary file renamed into place, so a crash never
-leaves part of an object); every byte range after that is served from the complete local
-copy. A standard version never changes, so a cached object never goes stale.
-
-Why not an existing cache: tested on 2026-10-20 with sharded arrays, zarr's
-`experimental.cache_store.CacheStore` stores a requested byte range under the key of the
-whole object and then returns wrong samples for other ranges, without an error; fsspec's
-`simplecache` and `filecache` fail on ranges counted from the end of an object (a shard's
-index); `blockcache` is correct but did not speed up repeated reads.
+The first read of a block downloads its compressed bytes (one ranged request) and writes
+them to `<directory>/<object key>.<offset>` (a temporary file renamed into place, so a
+crash never leaves part of a block); later reads come from the local copy. A standard
+version never changes, so a cached block never goes stale.
 """
 
 from __future__ import annotations
 
-import asyncio
+import contextlib
 import os
 import threading
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable
 from pathlib import Path
-
-from zarr.abc.store import (
-    ByteRequest,
-    OffsetByteRequest,
-    RangeByteRequest,
-    Store,
-    SuffixByteRequest,
-)
-from zarr.core.buffer import Buffer, BufferPrototype
-from zarr.storage import WrapperStore
 
 from biosignal_data.storage.layout import safe_relpath
 
@@ -44,62 +28,35 @@ def _written(directory: Path, size: int) -> int:
         return _WRITTEN[directory]
 
 
-class WholeObjectCache(WrapperStore[Store]):
-    """Wraps a read-only store. `namespace` keeps the objects of one Zarr group apart
-    from those of another (the key of the group in the standard layer). When the cache
-    holds more than `max_bytes`, the objects used longest ago are deleted.
+class BlockCache:
+    """Blocks by (object key, offset). When the cache holds more than `max_bytes`, the
+    blocks used longest ago are deleted.
 
     Finding what to delete means looking at every file of the cache, and the cache holds
-    many (tens of thousands for the PhysioNet sets), so it is done only after this process
-    has written 1/100 of `max_bytes` since the last time; the count is kept per process, in
-    `_WRITTEN`, for all the caches it opens. With N processes the cache can go over
-    `max_bytes` by at most N/100 of it before old objects are deleted."""
+    many, so it is done only after this process has written 1/100 of `max_bytes` since the
+    last time; the count is kept per process, in `_WRITTEN`, for all the caches it opens.
+    With N processes the cache can go over `max_bytes` by at most N/100 of it before old
+    blocks are deleted."""
 
-    def __init__(self, store: Store, directory: Path, namespace: str, max_bytes: int) -> None:
-        super().__init__(store)
+    def __init__(self, directory: Path, max_bytes: int) -> None:
         self._directory = directory
-        self._root = directory / safe_relpath(namespace)
         self._max_bytes = max_bytes
 
-    async def get(
-        self, key: str, prototype: BufferPrototype, byte_range: ByteRequest | None = None
-    ) -> Buffer | None:
-        path = self._root / safe_relpath(key)
-        if path.is_file():
-            os.utime(path)  # used now: evicted last
-        else:
-            whole = await self._store.get(key, prototype)
-            if whole is None:
-                return None
-            data = whole.to_bytes()
-            await asyncio.to_thread(_write_atomic, path, data)
+    def get(self, key: str, offset: int, download: Callable[[], bytes]) -> bytes:
+        """The block at `offset` of object `key`; `download` reads it when not cached."""
+        path = self._directory / f"{safe_relpath(key)}.{offset}"
+        try:
+            data = path.read_bytes()
+        except FileNotFoundError:
+            data = download()
+            _write_atomic(path, data)
             if _written(self._directory, len(data)) > self._max_bytes // 100:
                 _WRITTEN[self._directory] = 0
-                await asyncio.to_thread(evict, self._directory, self._max_bytes)
-        data = await asyncio.to_thread(read_range, path, byte_range)
-        return prototype.buffer.from_bytes(data)
-
-    async def get_partial_values(
-        self, prototype: BufferPrototype, key_ranges: Iterable[tuple[str, ByteRequest | None]]
-    ) -> list[Buffer | None]:
-        return [await self.get(key, prototype, byte_range) for key, byte_range in key_ranges]
-
-
-def read_range(path: Path, byte_range: ByteRequest | None) -> bytes:
-    with path.open("rb") as f:
-        if byte_range is None:
-            return f.read()
-        if isinstance(byte_range, RangeByteRequest):
-            f.seek(byte_range.start)
-            return f.read(byte_range.end - byte_range.start)
-        if isinstance(byte_range, OffsetByteRequest):
-            f.seek(byte_range.offset)
-            return f.read()
-        if isinstance(byte_range, SuffixByteRequest):
-            size = os.fstat(f.fileno()).st_size
-            f.seek(max(0, size - byte_range.suffix))
-            return f.read()
-    raise TypeError(f"unknown byte range {byte_range!r}")
+                evict(self._directory, self._max_bytes)
+            return data
+        with contextlib.suppress(FileNotFoundError):  # evicted by another process meanwhile
+            os.utime(path)  # used now: evicted last
+        return data
 
 
 def _write_atomic(path: Path, data: bytes) -> None:
