@@ -1,0 +1,335 @@
+"""Benchmark: ECG statements on PTB-XL, with the protocol of Strodthoff et al. 2021.
+
+"Deep Learning for ECG Analysis: Benchmarks and Insights from PTB-XL" (arXiv 2004.13701),
+and its code (github.com/helme/ecg_ptbxl_benchmarking, utils.compute_label_aggregations
+and select_data): for each task the labels of a record are the statements of its
+`scp_codes` (every key, whatever its likelihood) that belong to the task, from
+`scp_statements.csv`:
+
+- `all`: every statement; `diagnostic`: the diagnostic ones; `subdiagnostic` and
+  `superdiagnostic`: their `diagnostic_subclass` and `diagnostic_class`; `form` and
+  `rhythm`: the statements of those groups.
+
+A record without a label of the task is left out of it. Folds (`strat_fold`, no patient in
+two folds): 1-8 train, 9 validation, 10 test. Metric: macro-AUC on fold 10, over the labels
+with both classes there. The paper's main tables use the 100 Hz records (`rate: 100`);
+`rate: 500` uses the original 500 Hz records, a different input from the published one.
+
+For one checkpoint and each task: `finetune` (the pretrained encoder and a linear head,
+every weight trained on folds 1-8, the epoch chosen on fold 9), `supervised` (the same from
+random weights), and `probe` / `random` (a logistic regression per label on the frozen
+encoder's mean feature, its L2 chosen on fold 9). Folds 9 and 10 are held out of
+pretraining (index.yaml).
+"""
+
+from __future__ import annotations
+
+import ast
+import csv
+import io
+import random
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from typing import Any, Literal
+
+import numpy as np
+import torch
+import torch.nn.functional as F  # noqa: N812 - the usual name
+from pydantic import BaseModel, ConfigDict
+from scipy.stats import rankdata
+
+from biosignal_data.read.standard import StandardDataset
+from biosignal_data.storage.layout import VersionLocation
+from biosignal_data.storage.stores import Store
+from biosignal_data.training.loader import Channel, Example, Origin, Signal
+from biosignal_model.batch import Packer
+from biosignal_model.model import Encoder, ModelConfig
+
+DATASET = "physionet/ptb-xl"
+TASKS = ("all", "diagnostic", "subdiagnostic", "superdiagnostic", "form", "rhythm")
+TRAIN, VALIDATION, TEST = (1, 2, 3, 4, 5, 6, 7, 8), (9,), (10,)
+
+
+class PtbxlSettings(BaseModel):
+    """Every setting of the benchmark; none has a default."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rate: Literal[100, 500]
+    tasks: list[Literal["all", "diagnostic", "subdiagnostic", "superdiagnostic", "form", "rhythm"]]
+    rows: int  # rows of the model's max_tokens in one batch
+    read_threads: int  # records read from the store at the same time
+    probe_l2: list[float]
+    probe_steps: int
+    finetune_epochs: int  # the best epoch on fold 9 is the one scored
+    finetune_learning_rate: float
+    finetune_weight_decay: float
+    finetune_examples_per_step: int
+    seed: int
+
+
+@dataclass
+class Records:
+    """The records of one rate: their examples, folds and statements, in one order."""
+
+    ids: list[str]
+    examples: list[Example]
+    folds: np.ndarray
+    statements: list[list[str]]  # the keys of scp_codes
+
+
+def labels(
+    records: Records, statements: list[dict[str, str]], task: str
+) -> tuple[np.ndarray, list[str], np.ndarray]:
+    """(multi-hot [n, classes], class names, mask of the records the task keeps), as the
+    authors' compute_label_aggregations and select_data with min_samples 0."""
+    by_code = {s[""]: s for s in statements}
+
+    def is_(code: str, group: str) -> bool:
+        return code in by_code and by_code[code].get(group) in ("1", "1.0")
+
+    per_record: list[set[str]] = []
+    for codes in records.statements:
+        if task == "all":
+            found = set(codes)
+        elif task == "diagnostic":
+            found = {c for c in codes if is_(c, "diagnostic")}
+        elif task in ("subdiagnostic", "superdiagnostic"):
+            column = "diagnostic_subclass" if task == "subdiagnostic" else "diagnostic_class"
+            found = {
+                by_code[c][column] for c in codes if is_(c, "diagnostic") and by_code[c][column]
+            }
+        else:  # form, rhythm
+            found = {c for c in codes if is_(c, task)}
+        per_record.append(found)
+    classes = sorted(set().union(*per_record))
+    keep = np.array([bool(f) for f in per_record])
+    y = np.array([[c in f for c in classes] for f in per_record], dtype=np.float32)
+    return y, classes, keep
+
+
+def macro_auc(y: np.ndarray, p: np.ndarray) -> tuple[float, int]:
+    """The mean ROC AUC over the labels with both classes in `y` (ties get average ranks),
+    and how many labels that is."""
+    aucs = []
+    for k in range(y.shape[1]):
+        positive = y[:, k] == 1
+        n_pos, n_neg = int(positive.sum()), int((~positive).sum())
+        if n_pos == 0 or n_neg == 0:
+            continue
+        ranks = rankdata(p[:, k])
+        aucs.append((ranks[positive].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
+    return float(np.mean(aucs)), len(aucs)
+
+
+def load(store: Store, settings: PtbxlSettings) -> tuple[Records, list[dict[str, str]]]:
+    """Every record of the chosen rate, read once into memory, and the statement table."""
+    dataset = StandardDataset.open(store, DATASET, "latest")
+    raw = VersionLocation(DATASET, dataset.manifest.raw_version)
+
+    def table(name: str) -> list[dict[str, str]]:
+        data = store.get_bytes(raw.data_key(name))
+        if data is None:
+            raise FileNotFoundError(raw.data_key(name))
+        return list(csv.DictReader(io.StringIO(data.decode("utf-8-sig"))))
+
+    rows = table("ptbxl_database.csv")
+    statements = table("scp_statements.csv")
+    column = "filename_lr" if settings.rate == 100 else "filename_hr"
+    array = f"{settings.rate}Hz"
+    channels = dataset.channels.to_pylist()
+    by_record: dict[str, list[dict[str, Any]]] = {}
+    for c in channels:
+        by_record.setdefault(c["recording_id"], []).append(c)
+
+    def read(row: dict[str, str]) -> Example:
+        record = row[column]
+        mine = sorted(
+            (c for c in by_record[record] if c["array"] == array), key=lambda c: c["index"]
+        )
+        values = dataset.window(record, array, 0.0, 10.0)
+        signals = tuple(
+            Signal(values[c["index"]].astype(np.float32), float(settings.rate), 0.0) for c in mine
+        )
+        origin_channels = tuple(
+            Channel(array, c["index"], float(settings.rate), c["scale"], c["offset"],
+                    c["invalid_value"], c["name"], "ecg", c["unit"])
+            for c in mine
+        )  # fmt: skip
+        return Example(
+            signals, Origin(DATASET, record, f"{DATASET}:{row['patient_id']}", 0.0, origin_channels)
+        )
+
+    with ThreadPoolExecutor(settings.read_threads) as pool:
+        examples = list(pool.map(read, rows))
+    return Records(
+        ids=[r[column] for r in rows],
+        examples=examples,
+        folds=np.array([int(r["strat_fold"]) for r in rows]),
+        statements=[list(ast.literal_eval(r["scp_codes"])) for r in rows],
+    ), statements
+
+
+def _packer(model: ModelConfig, max_tokens: int, rows: int) -> Packer:
+    return Packer(
+        datasets=[DATASET], max_tokens=max_tokens, samples_per_token=model.samples_per_token,
+        max_channels=model.max_channels, rows=rows, mask_ratio=0.0, seed=0,
+    )  # fmt: skip
+
+
+def _pooled(
+    model: Encoder, examples: list[Example], packer: Packer, device: torch.device
+) -> torch.Tensor:
+    """The mean feature over all tokens of each example, [len(examples), width]."""
+    batch, where = packer.pack(examples)
+    x = batch.inputs.to(device)
+    with torch.autocast(device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"):
+        features = model.features(x).float()
+    return torch.stack([features[row][x.document[row] == doc].mean(0) for row, doc in where])
+
+
+def _batches(n: int, packer: Packer, examples: list[Example], rows: int) -> list[list[int]]:
+    """Indices in groups that fit one batch (every example of a rate has the same size)."""
+    tokens = len(packer.tokens(examples[0]).slot)
+    per_batch = max(1, (packer.max_tokens // tokens) * rows)
+    return [list(range(k, min(n, k + per_batch))) for k in range(0, n, per_batch)]
+
+
+@torch.no_grad()
+def embed(
+    model: Encoder, examples: list[Example], max_tokens: int, rows: int, device: torch.device
+) -> np.ndarray:
+    model.eval()
+    packer = _packer(model.config, max_tokens, rows)
+    parts = [
+        _pooled(model, [examples[i] for i in ids], packer, device).cpu()
+        for ids in _batches(len(examples), packer, examples, rows)
+    ]
+    return torch.cat(parts).numpy()
+
+
+def _fit(x: torch.Tensor, y: torch.Tensor, l2: float, steps: int) -> torch.Tensor:
+    """Weights [d + 1, classes] of one logistic regression per label (bias not penalized)."""
+    w = torch.zeros(x.shape[1] + 1, y.shape[1], dtype=torch.float64, requires_grad=True)
+    optimizer = torch.optim.LBFGS([w], max_iter=steps, line_search_fn="strong_wolfe")
+
+    def closure() -> torch.Tensor:
+        optimizer.zero_grad()
+        logits = x @ w[:-1] + w[-1]
+        loss = F.binary_cross_entropy_with_logits(logits, y) + l2 * (w[:-1] ** 2).sum()
+        loss.backward()  # type: ignore[no-untyped-call]
+        return loss
+
+    optimizer.step(closure)  # type: ignore[no-untyped-call]
+    return w.detach()
+
+
+def probe(
+    features: np.ndarray, y: np.ndarray, folds: np.ndarray, s: PtbxlSettings
+) -> dict[str, float]:
+    """L2 chosen on fold 9 by macro-AUC, then one fit on folds 1-8, scored on fold 10."""
+    train, val, test = (np.isin(folds, f) for f in (TRAIN, VALIDATION, TEST))
+    mean, std = features[train].mean(0), features[train].std(0) + 1e-8
+    x = torch.from_numpy((features - mean) / std).double()
+    yt = torch.from_numpy(y).double()
+    best, best_auc = s.probe_l2[0], -1.0
+    for l2 in s.probe_l2:
+        w = _fit(x[train], yt[train], l2, s.probe_steps)
+        auc, _ = macro_auc(y[val], (x[val] @ w[:-1] + w[-1]).numpy())
+        if auc > best_auc:
+            best, best_auc = l2, auc
+    w = _fit(x[train], yt[train], best, s.probe_steps)
+    auc, n = macro_auc(y[test], (x[test] @ w[:-1] + w[-1]).numpy())
+    return {"macro_auc": auc, "labels": float(n), "l2": best, "validation_macro_auc": best_auc}
+
+
+def end_to_end(
+    config: ModelConfig, records: Records, y: np.ndarray, max_tokens: int, s: PtbxlSettings,
+    device: torch.device, start: dict[str, torch.Tensor] | None,
+) -> dict[str, float]:  # fmt: skip
+    """The encoder and a linear head, every weight trained on folds 1-8; the epoch with the
+    best macro-AUC on fold 9 is scored on fold 10. `start`: pretrained weights, or None."""
+    torch.manual_seed(s.seed)
+    model = Encoder(config).to(device)
+    if start is not None:
+        model.load_state_dict(start)
+    head = torch.nn.Linear(config.width, y.shape[1]).to(device)
+    optimizer = torch.optim.AdamW(
+        [*model.parameters(), *head.parameters()],
+        lr=s.finetune_learning_rate, weight_decay=s.finetune_weight_decay,
+    )  # fmt: skip
+    packer = _packer(config, max_tokens, s.rows)
+    train = [i for i in range(len(records.ids)) if records.folds[i] in TRAIN]
+    rng = random.Random(s.seed)  # noqa: S311 - not secret
+
+    def predict(indices: list[int]) -> np.ndarray:
+        model.eval()
+        out = []
+        with torch.no_grad():
+            for ids in _batches(len(indices), packer, records.examples, s.rows):
+                chosen = [records.examples[indices[i]] for i in ids]
+                out.append(
+                    torch.sigmoid(head(_pooled(model, chosen, packer, device))).float().cpu()
+                )
+        return torch.cat(out).numpy()
+
+    val = [i for i in range(len(records.ids)) if records.folds[i] in VALIDATION]
+    test = [i for i in range(len(records.ids)) if records.folds[i] in TEST]
+    best_val, best_test, best_epoch, labels_n = -1.0, 0.0, 0, 0
+    for epoch in range(1, s.finetune_epochs + 1):
+        model.train()
+        rng.shuffle(train)
+        for k in range(0, len(train), s.finetune_examples_per_step):
+            ids = train[k : k + s.finetune_examples_per_step]
+            pooled = _pooled(model, [records.examples[i] for i in ids], packer, device)
+            target = torch.from_numpy(y[ids]).to(device)
+            loss = F.binary_cross_entropy_with_logits(head(pooled), target)
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()  # type: ignore[no-untyped-call]
+            optimizer.step()
+        auc_val, _ = macro_auc(y[val], predict(val))
+        if auc_val > best_val:  # fold 10 is scored for the epoch fold 9 chooses
+            best_val, best_epoch = auc_val, epoch
+            best_test, labels_n = macro_auc(y[test], predict(test))
+    return {"macro_auc": best_test, "labels": float(labels_n), "epoch": float(best_epoch),
+            "validation_macro_auc": best_val}  # fmt: skip
+
+
+def run(
+    store: Store, checkpoint: dict[str, Any], settings: PtbxlSettings, device: torch.device
+) -> dict[str, float]:
+    """All scores of one checkpoint, as a flat dict for logging: `<task>/<method>/<name>`."""
+    from biosignal_model.train import TrainConfig  # noqa: PLC0415 - avoids a cycle
+
+    train_config = TrainConfig.model_validate(checkpoint["config"])
+    config = train_config.model_settings()
+    max_tokens = train_config.tokens.max_tokens
+    records, statements = load(store, settings)
+    pretrained = Encoder(config).to(device)
+    pretrained.load_state_dict(checkpoint["model"])
+    torch.manual_seed(settings.seed)
+    untrained = Encoder(config).to(device)
+    features = {
+        "probe": embed(pretrained, records.examples, max_tokens, settings.rows, device),
+        "random": embed(untrained, records.examples, max_tokens, settings.rows, device),
+    }
+    results: dict[str, float] = {
+        "records": float(len(records.ids)),
+        "rate_hz": float(settings.rate),
+    }
+    for task in settings.tasks:
+        y, classes, keep = labels(records, statements, task)
+        kept = Records(
+            [records.ids[i] for i in np.flatnonzero(keep)],
+            [records.examples[i] for i in np.flatnonzero(keep)],
+            records.folds[keep], [records.statements[i] for i in np.flatnonzero(keep)],
+        )  # fmt: skip
+        results[f"{task}/classes"] = float(len(classes))
+        results[f"{task}/records"] = float(keep.sum())
+        for name, f in features.items():
+            scores = probe(f[keep], y[keep], records.folds[keep], settings)
+            results |= {f"{task}/{name}/{k}": v for k, v in scores.items()}
+        for name, start in (("finetune", checkpoint["model"]), ("supervised", None)):
+            scores = end_to_end(config, kept, y[keep], max_tokens, settings, device, start)
+            results |= {f"{task}/{name}/{k}": v for k, v in scores.items()}
+    return results

@@ -29,13 +29,13 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 import torch
 import torch.nn.functional as F  # noqa: N812 - the usual name
 from pydantic import BaseModel, ConfigDict
+from scipy.stats import rankdata
 
 from biosignal_data.read.standard import StandardDataset
 from biosignal_data.storage.stores import Store
@@ -195,9 +195,7 @@ def _fit_logistic(x: torch.Tensor, y: torch.Tensor, l2: float, steps: int) -> to
 def _scores(labels: np.ndarray, p: np.ndarray) -> dict[str, float]:
     predicted = p >= 0.5
     apnea, normal = labels == 1, labels == 0
-    order = np.argsort(p, kind="stable")
-    ranks = np.empty(len(p))
-    ranks[order] = np.arange(1, len(p) + 1)
+    ranks = rankdata(p)  # ties get their average rank
     auc = (ranks[apnea].sum() - apnea.sum() * (apnea.sum() + 1) / 2) / (apnea.sum() * normal.sum())
     return {
         "accuracy": float((predicted == apnea).mean()),
@@ -309,23 +307,3 @@ def run(
         scores = end_to_end(config, learn, test, max_tokens, settings, device, start)
         results |= {f"{name}/{k}": v for k, v in scores.items()}
     return results
-
-
-class BenchmarkConfig(BaseModel):
-    """One benchmark run: which checkpoint, the benchmark's settings, where to log."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    store: str
-    checkpoint: str  # its key in the store, e.g. models/<run>/step-00012000.pt
-    device: str
-    settings: ApneaSettings
-    wandb_project: str
-    wandb_entity: str
-    wandb_mode: Literal["online", "offline", "disabled"]
-
-    @classmethod
-    def load(cls, path: Path) -> BenchmarkConfig:
-        import yaml  # noqa: PLC0415
-
-        return cls.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))

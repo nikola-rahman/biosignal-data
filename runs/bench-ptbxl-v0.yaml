@@ -1,0 +1,20 @@
+# The PTB-XL benchmark (Strodthoff et al. 2021 protocol) at 100 Hz, as in the paper's main
+# tables, for a checkpoint of the RTX 6000 run. The checkpoint is set when it is chosen.
+store: s3://biosignal-data
+checkpoint: models/v0-rtx6000-c/step-00012000.pt
+device: cuda
+settings:
+  rate: 100
+  tasks: [all, diagnostic, subdiagnostic, superdiagnostic, form, rhythm]
+  rows: 8
+  read_threads: 32
+  probe_l2: [1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]
+  probe_steps: 100
+  finetune_epochs: 20
+  finetune_learning_rate: 3.0e-4
+  finetune_weight_decay: 0.05
+  finetune_examples_per_step: 64
+  seed: 0
+wandb_project: biosignal-fm
+wandb_entity: schnyox-s
+wandb_mode: online

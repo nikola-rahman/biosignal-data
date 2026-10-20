@@ -59,3 +59,11 @@ For one checkpoint it reports:
 **apnea**: PhysioNet apnea-ecg, a label (apnea or not) for each minute of one ECG lead at
 100 Hz; learning set a01-a20, b01-b05, c01-c10, test set x01-x35 (PhysioNet/CinC
 Challenge 2000). Scores over all test minutes: accuracy, sensitivity, specificity, AUC.
+
+**ptbxl**: PTB-XL, 12-lead ECG of 10 s, the protocol of Strodthoff et al. 2021 (arXiv
+2004.13701) and its code: the labels of each task (`all`, `diagnostic`, `subdiagnostic`,
+`superdiagnostic`, `form`, `rhythm`) from the records' `scp_codes`; folds 1-8 train, 9
+validation (settings and the epoch are chosen here), 10 test; macro-AUC on fold 10. The
+paper's main tables use 100 Hz (`rate: 100`); `rate: 500` is the original, a different
+input from the published one. No patient is in two folds, and folds 9 and 10 are held out
+of pretraining.

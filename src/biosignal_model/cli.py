@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
@@ -56,7 +56,7 @@ def train_(
 
 @app.command("benchmark")
 def benchmark(
-    name: Annotated[str, typer.Argument(help="The benchmark: apnea.")],
+    name: Annotated[str, typer.Argument(help="The benchmark: apnea or ptbxl.")],
     config: Annotated[Path, typer.Argument(help="The benchmark run's settings (YAML).")],
     settings: Annotated[
         Path | None, typer.Option(help="biosignal-data.yaml, for the S3 settings.")
@@ -71,11 +71,16 @@ def benchmark(
     import torch  # noqa: PLC0415
     import wandb  # noqa: PLC0415
 
-    from biosignal_model.benchmarks import apnea  # noqa: PLC0415
+    from biosignal_model.benchmarks import BenchmarkRun, apnea, ptbxl  # noqa: PLC0415
 
-    if name != "apnea":
-        raise typer.BadParameter(f"unknown benchmark {name!r}; known: apnea")
-    run = apnea.BenchmarkConfig.load(config)
+    modules: dict[str, Any] = {
+        "apnea": (apnea, apnea.ApneaSettings), "ptbxl": (ptbxl, ptbxl.PtbxlSettings),
+    }  # fmt: skip
+    if name not in modules:
+        raise typer.BadParameter(f"unknown benchmark {name!r}; known: {', '.join(modules)}")
+    module, settings_class = modules[name]
+    run = BenchmarkRun.load(config)
+    bench_settings = settings_class.model_validate(run.settings)
     s3 = None
     if run.store.startswith("s3://"):
         try:
@@ -93,12 +98,14 @@ def benchmark(
     described = run.model_dump(mode="json") | {"code_commit": _commit(), "step": checkpoint["step"]}
     logged = wandb.init(
         project=run.wandb_project, entity=run.wandb_entity, mode=run.wandb_mode,
-        job_type="benchmark", name=f"apnea {run.checkpoint}", save_code=False, config=described,
+        job_type="benchmark", name=f"{name} {run.checkpoint}", save_code=False, config=described,
     )  # fmt: skip
-    results = apnea.run(store, checkpoint, run.settings, torch.device(run.device))
-    logged.summary.update({f"apnea/{k}": v for k, v in results.items()})
+    results = module.run(store, checkpoint, bench_settings, torch.device(run.device))
+    logged.summary.update({f"{name}/{k}": v for k, v in results.items()})
     logged.finish()
-    key = run.checkpoint.rsplit("/", 1)[0] + f"/benchmarks/apnea-step-{checkpoint['step']:08d}.json"
+    key = (
+        run.checkpoint.rsplit("/", 1)[0] + f"/benchmarks/{name}-step-{checkpoint['step']:08d}.json"
+    )
     store.put_bytes(key, json.dumps(described | {"results": results}, indent=2).encode())
     for k, v in sorted(results.items()):
         typer.echo(f"{k}: {v:.4f}")
