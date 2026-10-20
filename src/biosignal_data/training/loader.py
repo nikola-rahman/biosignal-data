@@ -4,7 +4,7 @@ from biosignal_data.training import ExampleSource, Selection
 selection = Selection.load(store, "2026-10-20", split="train", signal_types=None)
 source = ExampleSource(
     selection, store_factory, cache_directory=Path("/data/cache"), cache_bytes=200 * 2**30,
-    max_tokens=8192, samples_per_token=64, max_channels=32, shuffle_buffer=4096,
+    max_tokens=8192, samples_per_token=64, max_channels=32, block_s=1800.0, shuffle_buffer=4096,
     reads_in_flight=8, seed=0,
 )
 for example in source.examples(epoch=0, part=0, parts=1):
@@ -21,8 +21,14 @@ recording are in `origin`, which a data loader for the model must drop.
 Float32 keeps each value to within 1/2**24 of itself: far finer than one step of the
 recorder (the `scale`) for every value a 16-bit or 24-bit recorder makes.
 
-How a recording becomes examples, for one epoch: a time cursor moves from the start to
-the end of the recording. At each step the selected channels are put in random order and
+The unit of work is a block of `block_s` seconds of one recording; the blocks of all
+recordings are shuffled together each epoch, so that every phase of an epoch has the
+same mix (reading whole recordings put the long ones at the end of each epoch, and the
+model forgot the short ones meanwhile). An example never spans two blocks, so `block_s`
+also bounds the longest example.
+
+How a block becomes examples, for one epoch: a time cursor moves from the start to the
+end of the block. At each step the selected channels are put in random order and
 cut into groups of random size (1 to `max_channels`); each group is one example over the
 same time span. The span is as long as the group with the most samples per second allows:
 at most `max_tokens` tokens of `samples_per_token` samples in each example. The first span
@@ -34,7 +40,7 @@ most), several recordings at the same time (`reads_in_flight`), because one read
 S3 storage takes 80-240 ms. Examples go through a shuffle buffer. Memory is bounded: two
 buffers of `shuffle_buffer` examples, and one span per read.
 
-`parts`: the recordings are dealt round-robin over the parts (data loader workers times
+`parts`: the blocks are dealt round-robin over the parts (data loader workers times
 distributed ranks), after a shuffle that depends on `seed` and `epoch` only.
 """
 
@@ -84,6 +90,17 @@ class Recording:
     subject_id: str
     signals: str  # the key of the recording's Zarr group, from the store root
     channels: tuple[Channel, ...]  # the selected ones
+    duration_s: float  # from the index: how many blocks the recording has
+
+
+@dataclass(frozen=True)
+class Block:
+    """The unit of work: [index * block_s, (index + 1) * block_s) of one recording; the
+    last block of a recording runs to its end."""
+
+    recording: Recording
+    index: int
+    last: bool
 
 
 @dataclass(frozen=True)
@@ -169,6 +186,7 @@ class Selection:
                 dataset_id, recording_id, recordings[dataset_id, recording_id]["subject_id"],
                 recordings[dataset_id, recording_id]["signals"],
                 tuple(sorted(chosen, key=lambda c: (c.array, c.index))),
+                _duration(recordings[dataset_id, recording_id]),
             )
             for (dataset_id, recording_id), chosen in sorted(channels.items())
         )  # fmt: skip
@@ -190,6 +208,7 @@ class ExampleSource:
         max_tokens: int,
         samples_per_token: int,
         max_channels: int,
+        block_s: float,
         shuffle_buffer: int,
         reads_in_flight: int,
         seed: int,
@@ -208,6 +227,9 @@ class ExampleSource:
         self.max_tokens = max_tokens
         self.samples_per_token = samples_per_token
         self.max_channels = max_channels
+        if block_s <= 0:
+            raise ValueError("block_s is more than 0")
+        self.block_s = block_s
         self.shuffle_buffer = shuffle_buffer
         self.reads_in_flight = reads_in_flight
         self.seed = seed
@@ -217,19 +239,25 @@ class ExampleSource:
         state["_store"] = None  # each process makes its own
         return state
 
-    def recordings_of(self, epoch: int, part: int, parts: int) -> list[Recording]:
-        """The recordings that `part` of `parts` reads in `epoch`, in reading order."""
+    def blocks_of(self, epoch: int, part: int, parts: int) -> list[Block]:
+        """The blocks that `part` of `parts` reads in `epoch`, in reading order: the blocks
+        of all recordings, shuffled together, so that every phase of an epoch has the same
+        mix of datasets (a long recording is spread over the whole epoch, not read at its
+        end)."""
         if not 0 <= part < parts:
             raise ValueError(f"part {part} is not in 0..{parts - 1}")
-        order = list(self.selection.recordings)
+        order = []
+        for recording in self.selection.recordings:
+            n = max(1, math.ceil(recording.duration_s / self.block_s))
+            order += [Block(recording, i, i == n - 1) for i in range(n)]
         random.Random(f"{self.seed}/{epoch}").shuffle(order)  # noqa: S311 - not secret
         return order[part::parts]
 
     def examples(self, epoch: int, part: int, parts: int) -> Iterator[Example]:
-        """The examples of `recordings_of(epoch, part, parts)`, shuffled. Which examples
+        """The examples of `blocks_of(epoch, part, parts)`, shuffled. Which examples
         come is fixed by `seed` and `epoch`; their order also depends on which read ends
         first."""
-        recordings = self.recordings_of(epoch, part, parts)
+        blocks = self.blocks_of(epoch, part, parts)
         rng = random.Random(f"{self.seed}/{epoch}/{part}")  # noqa: S311 - not secret
         out: queue.Queue[Example | _Done] = queue.Queue(maxsize=self.shuffle_buffer)
         stop = threading.Event()
@@ -243,23 +271,23 @@ class ExampleSource:
                 return True
             return False
 
-        def read(recording: Recording) -> None:
+        def read(block: Block) -> None:
             try:
-                for example in self.cut(recording, epoch):
+                for example in self.cut(block, epoch):
                     if not put(example):
                         return
             except Exception as exc:  # noqa: BLE001 - raised again in the reading thread
-                put(_Done(recording, exc))
+                put(_Done(block.recording, exc))
                 return
-            put(_Done(recording, None))
+            put(_Done(block.recording, None))
 
         pool = ThreadPoolExecutor(self.reads_in_flight)
         buffer: list[Example] = []
         try:
-            for recording in recordings:
-                pool.submit(read, recording)
+            for block in blocks:
+                pool.submit(read, block)
             done = 0
-            while done < len(recordings):
+            while done < len(blocks):
                 item = out.get()
                 if isinstance(item, _Done):
                     if item.error is not None:
@@ -275,16 +303,19 @@ class ExampleSource:
             stop.set()
             pool.shutdown(wait=True, cancel_futures=True)
 
-    def cut(self, recording: Recording, epoch: int) -> Iterator[Example]:
-        """All examples of one recording in `epoch`, in time order."""
+    def cut(self, block: Block, epoch: int) -> Iterator[Example]:
+        """All examples of one block in `epoch`, in time order."""
+        recording = block.recording
         rng = random.Random(  # noqa: S311 - not secret
-            f"{self.seed}/{epoch}/{recording.dataset_id}/{recording.recording_id}"
+            f"{self.seed}/{epoch}/{recording.dataset_id}/{recording.recording_id}/{block.index}"
         )
         root = self._group(recording)
         arrays = {name: _array(root, name) for name in {c.array for c in recording.channels}}
         lengths = {c: int(arrays[c.array].shape[1]) for c in recording.channels}
-        end_s = max(lengths[c] / c.sampling_rate for c in recording.channels)
-        t, first = 0.0, True
+        recording_end = max(lengths[c] / c.sampling_rate for c in recording.channels)
+        t = block.index * self.block_s
+        end_s = recording_end if block.last else min(recording_end, t + self.block_s)
+        first = True
         while t < end_s:
             channels = [c for c in recording.channels if lengths[c] > _first_sample(t, c)]
             if not channels:  # the last samples start before end_s but after t
@@ -351,6 +382,12 @@ def _array(root: zarr.Group, name: str) -> zarr.Array[Any]:
     if not isinstance(found, zarr.Array):
         raise TypeError(f"{name} is not an array")
     return found
+
+
+def _duration(row: dict[str, Any]) -> float:
+    if row["duration_s"] is None:
+        raise ValueError(f"{row['dataset_id']}: {row['recording_id']} has no duration in the index")
+    return float(row["duration_s"])
 
 
 def _first_sample(t: float, channel: Channel) -> int:

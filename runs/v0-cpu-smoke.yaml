@@ -10,6 +10,7 @@ data:
   datasets: null              # every dataset of the index
   cache_directory: /root/cache-smoke
   cache_bytes: 21474836480    # 20 GiB
+  block_s: 1800.0               # the unit of work; also the longest example
   shuffle_buffer: 512
   reads_in_flight: 8
   workers: 3

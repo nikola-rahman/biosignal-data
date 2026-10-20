@@ -79,7 +79,7 @@ def _index(store: LocalStore, seconds: dict[str, float]) -> dict[tuple[str, str]
 def _source(store: LocalStore, tmp_path: Path, selection: Selection, **kw: object) -> ExampleSource:
     fields: dict[str, object] = {
         "cache_directory": tmp_path / "cache", "cache_bytes": 10**9, "max_tokens": 40,
-        "samples_per_token": 16, "max_channels": 4, "shuffle_buffer": 8,
+        "samples_per_token": 16, "max_channels": 4, "block_s": 10.0, "shuffle_buffer": 8,
         "reads_in_flight": 3, "seed": 7,
     }  # fmt: skip
     return ExampleSource(selection, lambda: store, **(fields | kw))  # type: ignore[arg-type]
@@ -147,8 +147,9 @@ def test_parts_split_the_recordings_and_an_epoch_fixes_the_examples(
     _index(store, {f"r{i}": 12.0 for i in range(7)})
     selection = Selection.load(store, "i1", split="train", signal_types=None)
     source = _source(store, tmp_path, selection)
-    parts = [source.recordings_of(epoch=0, part=p, parts=3) for p in range(3)]
-    assert sorted(r.recording_id for part in parts for r in part) == [f"r{i}" for i in range(7)]
+    parts = [source.blocks_of(epoch=0, part=p, parts=3) for p in range(3)]
+    blocks = sorted((b.recording.recording_id, b.index) for part in parts for b in part)
+    assert blocks == [(f"r{i}", k) for i in range(7) for k in (0, 1)]  # 12 s in blocks of 10
 
     def cuts(epoch: int) -> Counter[tuple[str, float, tuple[str, ...]]]:
         return Counter(
@@ -187,3 +188,16 @@ def test_a_broken_calibration_gives_nan_never_inf() -> None:
     values = _values(np.full(10, -8400, dtype=np.int16), broken)
     assert values.dtype == np.float32 and not np.isinf(values).any()
     assert np.isnan(values).all()
+
+
+def test_the_blocks_of_long_recordings_are_spread_over_the_epoch(
+    store: LocalStore, tmp_path: Path
+) -> None:
+    _index(store, {"long": 300.0} | {f"s{i}": 10.0 for i in range(30)})
+    selection = Selection.load(store, "i1", split="train", signal_types=None)
+    order = [
+        b.recording.recording_id for b in _source(store, tmp_path, selection).blocks_of(0, 0, 1)
+    ]
+    assert len(order) == 60  # 30 blocks of the long recording, 30 short recordings
+    first_half = order[:30].count("long")
+    assert 8 <= first_half <= 22  # about half of the long recording comes in each half

@@ -45,6 +45,7 @@ class DataSection(_Section):
     datasets: list[str] | None  # None: every dataset of the index
     cache_directory: Path
     cache_bytes: int
+    block_s: float  # the unit of work: a block of a recording; also the longest example
     shuffle_buffer: int
     reads_in_flight: int
     workers: int  # data loader processes
@@ -182,7 +183,7 @@ def _stream(config: TrainConfig, factory: StoreFactory, split: str) -> BatchStre
     source = ExampleSource(
         selection, factory, cache_directory=d.cache_directory, cache_bytes=d.cache_bytes,
         max_tokens=t.max_tokens, samples_per_token=t.samples_per_token,
-        max_channels=t.max_channels, shuffle_buffer=d.shuffle_buffer,
+        max_channels=t.max_channels, block_s=d.block_s, shuffle_buffer=d.shuffle_buffer,
         reads_in_flight=d.reads_in_flight, seed=config.run.seed,
     )  # fmt: skip
     datasets = sorted({r.dataset_id for r in selection.recordings})
