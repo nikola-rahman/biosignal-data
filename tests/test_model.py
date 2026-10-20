@@ -42,7 +42,7 @@ def test_tokens_keep_every_value_and_its_time() -> None:
     assert len(tokens.slot) == math.ceil(20 / 8) + math.ceil(9 / 8)  # 3 + 2
     first = slice(0, 3)
     mean, log_scale = np.sinh(tokens.channel_scale[0, 0]), tokens.channel_scale[0, 1]
-    restored = tokens.values[first] * np.exp(log_scale) + mean
+    restored = np.sinh(tokens.values[first]) * np.exp(log_scale) + mean
     original = np.full(24, np.nan, dtype=np.float32)
     original[:20] = example.signals[0].values
     original = original.reshape(3, 8)
@@ -55,6 +55,20 @@ def test_tokens_keep_every_value_and_its_time() -> None:
     for channel in (slice(0, 3), slice(3, 5)):
         assert tokens.hidden[channel].any() and not tokens.hidden[channel].all()
     assert set(tokens.signal_type) == {SIGNAL_TYPES.index("eeg")}
+
+
+def test_a_change_in_a_flat_channel_stays_small_enough_to_learn() -> None:
+    # capslpdb SpO2: flat for minutes, then a desaturation in a hidden token.
+    values = np.full(64, 97.0, dtype=np.float32)
+    values[5] = 97.000001  # one tiny step in the visible part: std near 0
+    values[40:48] = 85.0
+    channel = Channel("a", 0, 1.0, 1.0, 0.0, None, "SpO2", "spo2", "%")
+    example = Example((Signal(values, 1.0, 0.0),), Origin("d/x", "r", "d/x:s", 0.0, (channel,)))
+    packer = _packer(samples_per_token=8, mask_ratio=0.0)
+    packer.mask_ratio = 0.5
+    for _ in range(20):  # whichever tokens are hidden
+        tokens = packer.tokens(example)
+        assert np.abs(tokens.values).max() < 20  # asinh(1e8) is 19.1
 
 
 def test_examples_are_packed_whole_into_rows() -> None:

@@ -4,19 +4,30 @@ A token is `samples_per_token` consecutive samples of one channel (the last toke
 channel holds what is left, the rest is marked as not observed). For each token the model
 gets, and nothing else:
 
-- its samples, divided by the scale of its channel in this example (below), with a flag
-  per sample: observed or not (invalid in the source, or past the end of the channel);
+- its samples in the scale of its channel in this example: asinh((x - mean) / std)
+  (below), with a flag per sample: observed or not (invalid in the source, or past the
+  end of the channel);
 - the time of its centre and its length, in seconds from the start of the example;
 - a channel slot: a number drawn at random per example, which only says "same channel";
 - the scale of its channel: the mean and standard deviation of the channel's visible
-  samples, so the division loses nothing.
+  samples, so nothing is lost: x = sinh(value) * std + mean.
 
 Why the division: values are physical, in the units of each source, so they span many
 orders of magnitude (EEG in V is 1e-5, CTG in bpm is 1e2). Dividing by a channel's own
 scale makes them comparable for the network, and giving the scale to the network as an
 input keeps every value recoverable. It is the network's input encoding, not a change of
 the data: the loader and the stored data stay as they are. The statistics come from the
-visible tokens only, so masked samples do not leak into them.
+visible tokens only, so masked samples do not leak into them; at inference nothing is
+hidden, so they come from all tokens.
+
+Why asinh after the division: a channel that is flat in its visible tokens (SpO2 at 97 %
+for minutes, a heart rate, a position) has a standard deviation near 0, so a change in a
+hidden token becomes 1e6 after the division, and its square ruled the loss of a whole
+batch (seen on 2026-10-20, capslpdb SpO2 and HR: 1e12 against about 1 for other types).
+asinh is the identity near 0 and grows like a logarithm beyond: 1e6 becomes 14.5. It can
+be reversed exactly, and it needs no metadata and no hidden data. Its cost: the loss
+weighs errors in the size of large changes about on a log scale. The same encoding is
+used in training and at inference: it is part of the model, not of the data.
 
 Masking (for masked-token pretraining): in each channel with two or more tokens,
 `mask_ratio` of the tokens are hidden at random, at least one token stays visible.
@@ -171,7 +182,9 @@ class Packer:
             starts = signal.start_s + np.arange(n) * length_s
             parts.append(
                 _Tokens(
-                    values=np.where(observed, (values - mean) / scale, 0.0).astype(np.float32),
+                    values=np.where(observed, np.arcsinh((values - mean) / scale), 0.0).astype(
+                        np.float32
+                    ),
                     observed=observed,
                     hidden=hidden,
                     time_s=(starts + length_s / 2).astype(np.float32),

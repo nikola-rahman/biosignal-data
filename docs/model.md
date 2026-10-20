@@ -22,7 +22,7 @@ channel"), and the scale of its channel in this example.
 | Part | v0 | Open questions for experiments |
 |---|---|---|
 | Token | `samples_per_token` consecutive samples of one channel | a token of fixed duration; tokens cut where the signal changes (as in the Byte Latent Transformer) |
-| Values | divided by the channel's mean and standard deviation in the example (from visible tokens), with both given to the network | other encodings of scale; none |
+| Values | asinh((x - mean) / std) with the channel's mean and standard deviation in the example (from visible tokens), both given to the network; exact to reverse | a mean and scale for each token, predicted as extra targets; other encodings of scale |
 | Time | rotary embedding on continuous time (s), wavelengths on a log scale | learned time features |
 | Channels | random slot embedding per example | attention that is the same for any order of channels by design |
 | Attention | within each example only (packed rows) | |
