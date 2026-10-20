@@ -10,7 +10,7 @@ data:
   datasets: null              # every dataset of the index
   cache_directory: /workspace/cache
   cache_bytes: 214748364800   # 200 GiB (274 GB free on the pod)
-  shuffle_buffer: 2048
+  shuffle_buffer: 128         # examples per worker; one example is up to 2 MB
   reads_in_flight: 16
   workers: 10                 # of 12 cores: the rest for the training process
 
