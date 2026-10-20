@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 import zarr
 from zarr.abc.store import OffsetByteRequest, RangeByteRequest, SuffixByteRequest
 from zarr.codecs import BloscCodec
@@ -64,3 +65,20 @@ def test_eviction_deletes_the_objects_used_longest_ago(tmp_path: Path) -> None:
     (tmp_path / ".d.123.part").write_bytes(b"x" * 1000)  # a write in progress: not counted
     evict(tmp_path, max_bytes=200)
     assert sorted(p.name for p in tmp_path.iterdir()) == [".d.123.part", "b", "c"]
+
+
+def test_the_cache_looks_for_old_objects_only_after_writing_a_share_of_its_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from biosignal_data.training import cache as module  # noqa: PLC0415
+
+    scans: list[int] = []
+    monkeypatch.setattr(module, "evict", lambda directory, max_bytes: scans.append(max_bytes))
+    _sharded(tmp_path / "source.zarr")
+    source = LocalStore(tmp_path / "source.zarr", read_only=True)
+    big = WholeObjectCache(source, tmp_path / "c1", "g", max_bytes=10**12)
+    small = WholeObjectCache(source, tmp_path / "c2", "g", max_bytes=10**4)
+    for cache in (big, small):
+        array = zarr.open_group(store=cache, mode="r")["256Hz"]
+        array[:, :100_000]  # several shards
+    assert scans and set(scans) == {10**4}  # not for the cache far below its limit

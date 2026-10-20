@@ -270,6 +270,7 @@ def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[
         raise FileNotFoundError(f"index {config.data.index} has no manifest")
     train_stream = _stream(config, factory, config.data.train_split)
     validation_stream = _stream(config, factory, config.data.validation_split)
+    validation_batches = _validation_batches(validation_stream, config)
     model = Encoder(config.model_settings()).to(device)
     optimizer = _optimizer(model, o, device)
     described = config.model_dump(mode="json") | {"code_commit": code_commit}
@@ -316,7 +317,9 @@ def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[
             run.log(last, step=step)
             window = _Window(train_stream.datasets, device)
         if step % run_cfg.validate_every == 0 or step == o.steps:
-            validation = _validate(model, validation_stream, config, device, autocast)
+            validation = _validate(
+                model, validation_batches, validation_stream.datasets, device, autocast
+            )
             run.log(validation, step=step)
             last |= validation
             window.start = time.perf_counter()  # validation time is not training time
@@ -333,22 +336,31 @@ def _epochs(stream: BatchStream, workers: int, device: torch.device) -> Iterator
         yield from _loader(stream, workers, device)
 
 
+def _validation_batches(stream: BatchStream, config: TrainConfig) -> list[Batch]:
+    """The validation batches, read once before training: every validation then uses the
+    very same batches (examples and hidden tokens), so its values compare, and no reading
+    holds up the GPU. With several data workers the order in which examples come is not
+    fixed, so reading them again would give other batches."""
+    stream.epoch = 0
+    return list(
+        itertools.islice(
+            _loader(stream, config.data.workers, torch.device("cpu")),
+            config.run.validation_batches,
+        )
+    )
+
+
 @torch.no_grad()
 def _validate(
     model: Encoder,
-    stream: BatchStream,
-    config: TrainConfig,
+    batches: list[Batch],
+    datasets: list[str],
     device: torch.device,
     autocast: Any,
 ) -> dict[str, float]:
-    """The same first batches of the validation split every time, so values compare."""
     model.eval()
-    stream.epoch = 0
-    totals = _Totals(stream.datasets, device)
+    totals = _Totals(datasets, device)
     error, count = 0.0, 0.0
-    batches = itertools.islice(
-        _loader(stream, config.data.workers, device), config.run.validation_batches
-    )
     for batch in batches:
         x = batch.inputs.to(device)
         with autocast:

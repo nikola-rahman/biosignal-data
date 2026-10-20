@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 import uuid
 from collections.abc import Iterable
 from pathlib import Path
@@ -33,12 +34,26 @@ from zarr.storage import WrapperStore
 from biosignal_data.storage.layout import safe_relpath
 
 PART = ".part"
+_WRITTEN: dict[Path, int] = {}  # bytes this process wrote to each cache since its last check
+_LOCK = threading.Lock()
+
+
+def _written(directory: Path, size: int) -> int:
+    with _LOCK:
+        _WRITTEN[directory] = _WRITTEN.get(directory, 0) + size
+        return _WRITTEN[directory]
 
 
 class WholeObjectCache(WrapperStore[Store]):
     """Wraps a read-only store. `namespace` keeps the objects of one Zarr group apart
     from those of another (the key of the group in the standard layer). When the cache
-    holds more than `max_bytes`, the objects used longest ago are deleted."""
+    holds more than `max_bytes`, the objects used longest ago are deleted.
+
+    Finding what to delete means looking at every file of the cache, and the cache holds
+    many (tens of thousands for the PhysioNet sets), so it is done only after this process
+    has written 1/100 of `max_bytes` since the last time; the count is kept per process, in
+    `_WRITTEN`, for all the caches it opens. With N processes the cache can go over
+    `max_bytes` by at most N/100 of it before old objects are deleted."""
 
     def __init__(self, store: Store, directory: Path, namespace: str, max_bytes: int) -> None:
         super().__init__(store)
@@ -56,8 +71,11 @@ class WholeObjectCache(WrapperStore[Store]):
             whole = await self._store.get(key, prototype)
             if whole is None:
                 return None
-            await asyncio.to_thread(_write_atomic, path, whole.to_bytes())
-            await asyncio.to_thread(evict, self._directory, self._max_bytes)
+            data = whole.to_bytes()
+            await asyncio.to_thread(_write_atomic, path, data)
+            if _written(self._directory, len(data)) > self._max_bytes // 100:
+                _WRITTEN[self._directory] = 0
+                await asyncio.to_thread(evict, self._directory, self._max_bytes)
         data = await asyncio.to_thread(read_range, path, byte_range)
         return prototype.buffer.from_bytes(data)
 

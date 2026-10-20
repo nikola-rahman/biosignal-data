@@ -6,7 +6,9 @@ data:
   index: gpu1-2026-10-20
   train_split: train
   validation_split: validation
-  signal_types: null          # every channel
+  # Measured signals only: position (a device code for body position), other (device
+  # status, markers) and unknown (no rule knows the name) are left out (2026-10-20).
+  signal_types: [ecg, eeg, eog, emg, resp, spo2, ppg, bp, hr, temp, accel, scg, pcg, sound]
   datasets: null              # every dataset of the index
   cache_directory: /workspace/cache
   cache_bytes: 214748364800   # 200 GiB (274 GB free on the pod)
@@ -41,7 +43,7 @@ optim:
   grad_clip: 1.0
 
 run:
-  name: v0-rtx6000-test
+  name: v0-rtx6000-test-2
   seed: 0
   device: cuda
   precision: bf16
@@ -49,7 +51,7 @@ run:
   validate_every: 1000
   validation_batches: 20
   checkpoint_every: 1000
-  checkpoint_prefix: models/v0-rtx6000-test
+  checkpoint_prefix: models/v0-rtx6000-test-2
   wandb_project: biosignal-fm
   wandb_entity: schnyox-s
   wandb_mode: online
