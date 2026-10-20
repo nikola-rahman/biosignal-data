@@ -5,6 +5,8 @@ A store only knows keys and bytes. Layout lives in `layout.py`, integrity in `ma
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import os
 import shutil
 import uuid
@@ -185,8 +187,14 @@ class S3Store:
         manager.upload(stream, self.bucket, self._key(key), subscribers=subscribers).result()
 
     def put_bytes(self, key: str, data: bytes, content_type: str = "application/json") -> None:
+        """With Content-MD5: the storage refuses the object if what it received differs
+        (Hippius answers BadDigest, checked on 2026-10-20)."""
         self.client.put_object(
-            Bucket=self.bucket, Key=self._key(key), Body=data, ContentType=content_type
+            Bucket=self.bucket,
+            Key=self._key(key),
+            Body=data,
+            ContentType=content_type,
+            ContentMD5=base64.b64encode(hashlib.md5(data).digest()).decode("ascii"),  # noqa: S324 - the S3 integrity check, not security
         )
 
     def get_bytes(self, key: str) -> bytes | None:

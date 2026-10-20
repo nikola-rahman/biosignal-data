@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 from collections.abc import Iterator
@@ -161,3 +162,15 @@ def test_s3_unfinished_multipart_uploads() -> None:
         assert [(u.key, u.size) for u in left] == [("raw/x/big.edf", 1000)]
         store.discard(left[0])
         assert store.unfinished("raw") == ()
+
+
+def test_s3_store_put_bytes_sends_the_md5(s3_store: S3Store) -> None:
+    """The storage checks what it received against Content-MD5 (BadDigest if it differs)."""
+    sent: list[str] = []
+    s3_store.client.meta.events.register(
+        "before-send.s3.PutObject",
+        lambda request, **_: sent.append(request.headers["Content-MD5"].decode()),
+    )
+    s3_store.put_bytes("a/b", b"payload")
+    assert sent == [base64.b64encode(hashlib.md5(b"payload").digest()).decode()]  # noqa: S324
+    assert s3_store.get_bytes("a/b") == b"payload"

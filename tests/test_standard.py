@@ -100,6 +100,18 @@ def raw(store: LocalStore, tmp_path: Path) -> dict[str, np.ndarray]:
     return {"ecg": ecg, "x": x, "eeg": eeg, "slow": slow}
 
 
+def test_a_new_attempt_removes_what_an_earlier_one_left_in_a_group(
+    store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
+) -> None:
+    stale = "standard/physionet/mitdb/1.0.0/signals/r1.zarr/200Hz/c/0/99"
+    store.put_bytes(stale, b"from an earlier attempt")
+    plan = plan_standard(store, "physionet/mitdb", "1.0.0")
+    report = convert(plan, store, workers=1, part_bytes=1, work_dir=tmp_path / "work")
+    assert report.complete
+    assert not store.exists(stale)
+    assert list((tmp_path / "work").iterdir()) == []  # the local groups are removed
+
+
 def test_standard_version_is_exact_and_accounts_for_every_file(
     store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
 ) -> None:

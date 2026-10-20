@@ -6,7 +6,8 @@
 
 Guarantees:
 - Every recording is converted from raw files that are checked against the SHA-256 of the
-  raw manifest, and every shard written is read back and compared with the source.
+  raw manifest; every shard is decoded again before upload and compared with the source,
+  and uploaded with its MD5, which the storage checks.
 - A run can be stopped and run again: each recording finished is recorded under `_parts/`
   (its rows and a `done.json` written last), and is not converted again.
 - The tables, `_manifest.json` and then `_SUCCESS` are written only when every recording
@@ -296,9 +297,7 @@ def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -
                 }
                 check = open_source()  # a second, independent reader of the same files
                 try:
-                    arrays.write_signals(
-                        source, check, store.zarr_store(key, read_only=False), attributes
-                    )
+                    arrays.write_signals(source, check, store, key, work_dir, attributes)
                 finally:
                     check.close()
                 signals = key[len(location.prefix) + 1 :]

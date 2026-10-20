@@ -8,8 +8,12 @@ arrays, metadata as Parquet tables. It is made from the raw layer only, never fr
 - **Exact.** Signals are the integers the source stored, with a scale and an offset per
   channel (`physical = stored * scale + offset`). Nothing is filtered, resampled, rereferenced,
   cut or renamed. Every shard is read by two independent readers of the raw files, which
-  must agree, and read back after writing and compared. (One reader alone is not enough:
-  pyedflib, used before, returned another file's samples without an error.)
+  must agree. (One reader alone is not enough: pyedflib, used before, returned another
+  file's samples without an error.) A recording's Zarr group is made on the local disk,
+  where every shard is decoded again and compared with the source; then its files are
+  uploaded with their MD5 (`Content-MD5`), which the storage checks against what it
+  received. (Zarr writing straight to S3 spent about 2 s per recording in metadata
+  requests.)
 - **Native sampling rates.** The channels of a recording are grouped by sampling rate; each
   group is one array. Choosing a common rate is a decision for training, not for storage.
 - **Source names.** Channel names, units and labels are kept as the source wrote them. The
