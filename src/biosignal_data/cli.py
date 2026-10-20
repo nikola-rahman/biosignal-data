@@ -7,6 +7,7 @@
     status     what is stored in --dest
     check      check stored files against their manifests
     standardize  convert raw versions in --dest to the standard layer (Zarr + Parquet)
+    index      build the training index (subjects, splits, signal types) from the standard layer
     cleanup    remove unfinished uploads that stopped runs left in --dest
     dev        maintainer commands (validation, generated docs)
 
@@ -58,6 +59,9 @@ from biosignal_data.console import (
     setup_logging,
 )
 from biosignal_data.fetchers import FetchError, FetchOptions
+from biosignal_data.index import AlreadyIndexed, IndexRules, build_index
+from biosignal_data.index.rules import RulesError, default_rules_path
+from biosignal_data.index.subjects import SubjectError
 from biosignal_data.ingest import AlreadyComplete, Plan, planned, verify
 from biosignal_data.read.raw import complete_versions, stored_versions
 from biosignal_data.standard.convert import (
@@ -864,6 +868,71 @@ def _print_standard_plan(plan: StandardPlan) -> None:
         highlight=False,
         soft_wrap=True,
     )
+
+
+@app.command("index")
+def index_(
+    dest: DestOpt,
+    dataset_ids: IdsArg = None,
+    ids_file: IdsFileOpt = None,
+    signal: SignalOpt = [],  # noqa: B006
+    repository: RepositoryOpt = [],  # noqa: B006
+    all_: AllOpt = False,
+    version: Annotated[
+        str | None,
+        typer.Option("--version", help="The label of the index. Default: today's UTC date."),
+    ] = None,
+    replace: ReplaceOpt = False,
+    rules: Annotated[
+        Path | None,
+        typer.Option(
+            "--rules", help=f"Subject and channel rules. Default: {default_rules_path()}."
+        ),
+    ] = None,
+    verbose: VerboseOpt = False,
+    config: ConfigOpt = None,
+    catalog: CatalogOpt = None,
+    descriptions: DescriptionsOpt = None,
+) -> None:
+    """Build the training index from the complete standard versions in --dest: every
+    recording with its subject and split (by subject, stable), every channel with its
+    signal type. Written to <dest>/index/<version>/; the signals are not copied.
+    See docs/training-layer.md.
+    """
+    setup_logging(verbose)
+    cfg, cfg_path = _config(config)
+    datasets = _select_datasets(
+        _catalog(catalog), dataset_ids, ids_file, signal, repository, all_, descriptions
+    )
+    store = _store(dest, cfg, cfg_path)
+    try:
+        report = build_index(
+            store,
+            [d.id for d in datasets],
+            IndexRules.load(rules),
+            version=version,
+            replace=replace,
+        )
+    except (AlreadyIndexed, RulesError, SubjectError) as exc:
+        raise _fail(str(exc)) from exc
+    m = report.manifest
+    console.print(
+        f"[green]✓[/] index {m.version}: {plural(len(m.datasets), 'dataset')}, "
+        f"{plural(m.recordings, 'recording')}, {plural(m.subjects, 'subject')} "
+        f"({m.subjects_assumed:,} assumed one per recording) -> {report.location}",
+        highlight=False,
+        soft_wrap=True,
+    )
+    console.print(f"    splits: {m.splits}", highlight=False, soft_wrap=True)
+    console.print(f"    signal types: {m.signal_types}", highlight=False, soft_wrap=True)
+    for dataset_id, why in m.left_out.items():
+        console.print(f"    [yellow]left out[/]: {dataset_id}: {why}", highlight=False)
+    for name, count in m.unknown_channels.items():
+        console.print(
+            f"    [yellow]unknown signal type[/]: {name} ({plural(count, 'channel')})",
+            highlight=False,
+            soft_wrap=True,
+        )
 
 
 def _warn_unfinished(store: Store, dest: str) -> None:

@@ -1,0 +1,19 @@
+# Rules for the training index (biosignal-data index), per dataset: how recordings map to
+# persons (for splits by person), and channel types that only the dataset's own
+# documentation can tell. Every rule names its source; `certain: true` only when the source
+# states it, with the quote in `evidence`. See docs/training-layer.md.
+#
+# A dataset without an entry: each recording is its own subject, not certain; channel types
+# from the general rules in src/biosignal_data/index/signals.py only.
+
+datasets:
+  - id: physionet/adfecgdb
+    channels:
+      - name: '^Direct_\d+$'
+        type: ecg
+        source: https://physionet.org/content/adfecgdb/1.0.0/
+        notes: fetal ECG from a scalp electrode (direct)
+      - name: '^Abdomen_\d+$'
+        type: ecg
+        source: https://physionet.org/content/adfecgdb/1.0.0/
+        notes: abdominal ECG (maternal and fetal), not breathing effort
