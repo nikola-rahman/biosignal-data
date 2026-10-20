@@ -47,6 +47,7 @@ distributed ranks), after a shuffle that depends on `seed` and `epoch` only.
 from __future__ import annotations
 
 import io
+import logging
 import math
 import queue
 import random
@@ -65,6 +66,8 @@ from biosignal_data.index.build import ROOT as INDEX_ROOT
 from biosignal_data.storage.layout import SUCCESS
 from biosignal_data.storage.stores import Store
 from biosignal_data.training.cache import WholeObjectCache
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -362,7 +365,7 @@ class ExampleSource:
             rate = mine[0].sampling_rate
             first = _first_sample(start_s, mine[0])
             last = min(int(arrays[name].shape[1]), _first_sample(stop_s, mine[0]))
-            stored = np.asarray(arrays[name][:, first:last])
+            stored = _read_with_retries(arrays[name], first, last)
             for c in mine:
                 found[c] = Signal(_values(stored[c.index], c), rate, first / rate - start_s)
         return found
@@ -382,6 +385,24 @@ def _array(root: zarr.Group, name: str) -> zarr.Array[Any]:
     if not isinstance(found, zarr.Array):
         raise TypeError(f"{name} is not an array")
     return found
+
+
+READ_ATTEMPTS = 3
+
+
+def _read_with_retries(array: zarr.Array[Any], first: int, last: int) -> np.ndarray:
+    """Samples [first, last) of every row; a read that times out or fails in transport is
+    tried again, up to READ_ATTEMPTS times (see storage.stores: ZARR_CALL_TIMEOUT_S)."""
+    for attempt in range(1, READ_ATTEMPTS + 1):
+        try:
+            return np.asarray(array[:, first:last])
+        except (TimeoutError, OSError) as exc:
+            if attempt == READ_ATTEMPTS:
+                raise
+            log.warning(
+                "read of %s [%d:%d] failed (%s); trying again", array.path, first, last, exc
+            )
+    raise AssertionError("unreachable")
 
 
 def _duration(row: dict[str, Any]) -> float:

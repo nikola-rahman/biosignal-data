@@ -201,3 +201,23 @@ def test_the_blocks_of_long_recordings_are_spread_over_the_epoch(
     assert len(order) == 60  # 30 blocks of the long recording, 30 short recordings
     first_half = order[:30].count("long")
     assert 8 <= first_half <= 22  # about half of the long recording comes in each half
+
+
+def test_a_read_that_times_out_is_tried_again() -> None:
+    from biosignal_data.training import loader  # noqa: PLC0415
+
+    class Flaky:
+        path = "x"
+
+        def __init__(self, fails: int) -> None:
+            self.fails = fails
+
+        def __getitem__(self, key: object) -> np.ndarray:
+            if self.fails:
+                self.fails -= 1
+                raise TimeoutError("no answer")
+            return np.zeros((2, 5))
+
+    assert loader._read_with_retries(Flaky(2), 0, 5).shape == (2, 5)  # type: ignore[arg-type]
+    with pytest.raises(TimeoutError):
+        loader._read_with_retries(Flaky(3), 0, 5)  # type: ignore[arg-type]

@@ -38,6 +38,14 @@ MAX_PARTS = 10_000
 # and parts sent at the same time.
 PARTS_IN_MEMORY = 2
 PARTS_IN_FLIGHT = 4
+# Zarr reads through s3fs: without limits one request that never answers stopped a reader
+# for good (2026-10-20: a check of challenge-2018 waited 80 minutes on one read). Each
+# request gets these timeouts and retries; each Zarr call (a shard is 64 MiB at most) is
+# stopped with an error after ZARR_CALL_TIMEOUT_S, so that a caller can try again.
+S3_CONNECT_TIMEOUT_S = 10
+S3_READ_TIMEOUT_S = 60
+S3_MAX_ATTEMPTS = 5
+ZARR_CALL_TIMEOUT_S = 300
 
 
 @dataclass(frozen=True)
@@ -256,8 +264,10 @@ class S3Store:
         """A Zarr store for the Zarr hierarchy at `key`, reached with the same settings."""
         if self.settings is None:
             raise ValueError("S3Store.zarr_store needs the store's settings, not only a client")
-        from zarr.storage import FsspecStore  # noqa: PLC0415 - Zarr loads only when used
+        import zarr  # noqa: PLC0415 - Zarr loads only when used
+        from zarr.storage import FsspecStore  # noqa: PLC0415
 
+        zarr.config.set({"async.timeout": ZARR_CALL_TIMEOUT_S})
         s3 = self.settings
         return FsspecStore.from_url(
             f"s3://{self.bucket}/{self._key(key)}",
@@ -270,6 +280,9 @@ class S3Store:
                 "config_kwargs": {
                     "s3": {"addressing_style": s3.addressing},
                     "signature_version": "s3v4",
+                    "connect_timeout": S3_CONNECT_TIMEOUT_S,
+                    "read_timeout": S3_READ_TIMEOUT_S,
+                    "retries": {"max_attempts": S3_MAX_ATTEMPTS, "mode": "adaptive"},
                 },
             },
         )
