@@ -359,10 +359,16 @@ def _first_sample(t: float, channel: Channel) -> int:
 
 
 def _values(stored: np.ndarray, channel: Channel) -> np.ndarray:
+    """Physical values as float32; NaN where a sample is invalid, and where the physical
+    value is not a finite float32. The latter comes from a broken calibration in a source
+    header (e.g. autonomic-aging-cardiovascular 0065 NIBP: a gain of 2.78e-152, so a scale
+    of 3.6e151), never from a real measurement."""
     if channel.scale is None:  # no calibration: the stored integers
         values = stored.astype(np.float32)
     else:
-        values = (stored * channel.scale + (channel.offset or 0.0)).astype(np.float32)
+        physical = stored * np.float64(channel.scale) + np.float64(channel.offset or 0.0)
+        finite = np.isfinite(physical) & (np.abs(physical) <= np.finfo(np.float32).max)
+        values = np.where(finite, physical, np.nan).astype(np.float32)
     if channel.invalid_value is not None:
         values[stored == channel.invalid_value] = np.nan
     return values

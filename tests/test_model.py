@@ -130,7 +130,9 @@ def test_a_short_run_learns_and_logs_without_artifacts(store: LocalStore, tmp_pa
             "run": {"name": "test", "seed": 0, "device": "cpu", "precision": "fp32",
                     "log_every": 10, "validate_every": 20, "validation_batches": 2,
                     "checkpoint_every": 40, "checkpoint_prefix": "models/test",
-                    "wandb_project": "p", "wandb_entity": "e", "wandb_mode": "disabled"},
+                    "wandb_project": "p", "wandb_entity": "e", "wandb_mode": "disabled",
+                    "max_bad_steps": 3, "bad_batch_directory": str(tmp_path / "bad"),
+                    "resume": "never"},
         }
     )  # fmt: skip
     first = train(config.model_copy(update={"optim": config.optim.model_copy(update={"steps": 1})}),
@@ -143,6 +145,80 @@ def test_a_short_run_learns_and_logs_without_artifacts(store: LocalStore, tmp_pa
     assert not list(tmp_path.rglob("*.wandb"))  # nothing kept for upload
 
 
+def _short_config(store: LocalStore, tmp_path: Path, **run: object) -> TrainConfig:
+    _index(store, {f"r{i}": 40.0 for i in range(4)} | {"held-out": 40.0})
+    store.put_bytes("index/i1/_manifest.json", b'{"version": "i1"}')
+    return TrainConfig.model_validate(
+        {
+            "data": {"store": str(store.root), "index": "i1", "train_split": "train",
+                     "validation_split": "test", "signal_types": None, "datasets": None,
+                     "cache_directory": str(tmp_path / "cache"), "cache_bytes": 10**9,
+                     "shuffle_buffer": 16, "reads_in_flight": 2, "workers": 0},
+            "tokens": {"max_tokens": 128, "samples_per_token": 16, "max_channels": 4,
+                       "rows": 2, "mask_ratio": 0.4},
+            "model": {"width": 32, "layers": 1, "heads": 4, "feed_forward": 64,
+                      "min_wavelength_s": 0.01, "max_wavelength_s": 1000.0,
+                      "attention": "dense"},
+            "optim": {"learning_rate": 1e-3, "min_learning_rate": 1e-4, "warmup_steps": 2,
+                      "steps": 10, "weight_decay": 0.0, "beta1": 0.9, "beta2": 0.95,
+                      "grad_clip": 1.0},
+            "run": {"name": "t", "seed": 0, "device": "cpu", "precision": "fp32",
+                    "log_every": 5, "validate_every": 10, "validation_batches": 1,
+                    "checkpoint_every": 5, "checkpoint_prefix": "models/t",
+                    "wandb_project": "p", "wandb_entity": "e", "wandb_mode": "disabled",
+                    "max_bad_steps": 3, "bad_batch_directory": str(tmp_path / "bad"),
+                    "resume": "never"} | run,
+        }
+    )  # fmt: skip
+
+
+def test_a_non_finite_step_is_not_applied_and_too_many_stop_the_run(
+    store: LocalStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import biosignal_model.train as module  # noqa: PLC0415
+
+    real = module.masked_loss
+    calls = {"n": 0}
+
+    def sometimes_nan(predicted: torch.Tensor, x: object) -> tuple[torch.Tensor, torch.Tensor]:
+        loss, per_token = real(predicted, x)  # type: ignore[arg-type]
+        calls["n"] += 1
+        return (loss * float("nan") if calls["n"] == 2 else loss), per_token
+
+    monkeypatch.setattr(module, "masked_loss", sometimes_nan)
+    config = _short_config(store, tmp_path)
+    train(config, StoreFactory(str(store.root), None), "abc")  # one bad step: the run goes on
+    assert [p.name for p in (tmp_path / "bad").iterdir()] == ["bad-step-00000002.pt"]
+    weights = torch.load(store._path("models/t/step-00000010.pt"), weights_only=True)["model"]
+    assert all(torch.isfinite(t).all() for t in weights.values())
+
+    monkeypatch.setattr(
+        module, "masked_loss", lambda p, x: (real(p, x)[0] * float("nan"), real(p, x)[1])
+    )
+    with pytest.raises(FloatingPointError, match="3 steps in a row"):
+        train(config, StoreFactory(str(store.root), None), "abc")
+
+
+def test_a_run_resumes_from_its_newest_checkpoint(store: LocalStore, tmp_path: Path) -> None:
+    config = _short_config(store, tmp_path, resume="newest")
+    short = config.model_copy(update={"optim": config.optim.model_copy(update={"steps": 5})})
+    train(short, StoreFactory(str(store.root), None), "abc")
+    assert store.exists("models/t/step-00000005.pt") and not store.exists(
+        "models/t/step-00000010.pt"
+    )
+    train(config, StoreFactory(str(store.root), None), "abc")  # steps 6 to 10 only
+    resumed = torch.load(store._path("models/t/step-00000010.pt"), weights_only=True)
+    assert resumed["step"] == 10 and "wandb_id" in resumed
+
+
 def test_selection_without_recordings_is_refused(store: LocalStore) -> None:
     _index(store, {"r1": 10.0})
     assert Selection.load(store, "i1", split="validation", signal_types=None).recordings == ()
+
+
+def test_an_infinite_value_is_never_observed() -> None:
+    example = _example([20], [100.0])
+    example.signals[0].values[4] = np.inf
+    tokens = _packer(mask_ratio=0.0).tokens(example)
+    assert np.isfinite(tokens.values).all() and np.isfinite(tokens.channel_scale).all()
+    assert not tokens.observed.reshape(-1)[4]

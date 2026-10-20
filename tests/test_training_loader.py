@@ -176,3 +176,14 @@ def test_settings_that_cannot_work_are_refused(store: LocalStore, tmp_path: Path
     selection = Selection.load(store, "i1", split="train", signal_types=None)
     with pytest.raises(ValueError, match="twice max_channels"):
         _source(store, tmp_path, selection, max_tokens=8)
+
+
+def test_a_broken_calibration_gives_nan_never_inf() -> None:
+    from biosignal_data.training.loader import Channel, _values  # noqa: PLC0415
+
+    # autonomic-aging-cardiovascular 0065 NIBP: gain 2.7815e-152 in the source header
+    broken = Channel("1000Hz", 1, 1000.0, 3.5951824555096175e151, 3.0199532626280783e155,
+                     None, "NIBP", "bp", "mmHg")  # fmt: skip
+    values = _values(np.full(10, -8400, dtype=np.int16), broken)
+    assert values.dtype == np.float32 and not np.isinf(values).any()
+    assert np.isnan(values).all()

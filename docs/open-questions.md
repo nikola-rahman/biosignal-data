@@ -39,10 +39,22 @@ that these stay open:
 
 - **Standardize or not.** The usual practice (one sampling rate, a fixed montage, z-scored
   amplitudes, fixed windows) loses information. The alternative: positions in seconds,
-  tokens at the native rate with dynamic patch sizes, one token stream per channel with a
-  metadata embedding (type, position, reference, unit, filters), physical units with the
-  scale as an input, and packed sequences of different lengths. Compare both on tasks that
-  need high frequencies (e.g. high-frequency oscillations in EEG, EMG).
+  tokens at the native rate with dynamic patch sizes, physical values with the scale as an
+  input, and packed sequences of different lengths. Compare both on tasks that need high
+  frequencies (e.g. high-frequency oscillations in EEG, EMG).
+- **Samples and times only (decided 2026-10-20).** The model gets no channel names, types,
+  units or datasets, at training or inference; channels of one recording come together, in
+  random order, with random slots that only say "same channel". Metadata stays in the
+  index, for selecting data and analysing results.
+- **Spectral or raw input.** Audio models often use log-mel spectrograms: shorter
+  sequences, no phase, log compression of loudness, a hearing-based frequency scale. The
+  strongest self-supervised speech models (wav2vec 2.0, HuBERT) use the raw waveform with a
+  learned front end. Spectral content is strong for EEG, EMG and heart sounds; ECG, blood
+  pressure and PPG depend on morphology, timing and the phase between channels, which a
+  magnitude spectrogram loses, and a fixed STFT is a human prior. To test, keeping the raw
+  input: (1) a spectral term in the loss of hidden tokens (plain MSE in time punishes
+  small shifts and noise), (2) STFT tokens with magnitude and phase (lossless), (3) a
+  learned convolutional front end in place of the linear patch layer.
 - **Time scales.** The finest detail (patch size and rate), the base context, and whether a
   long-context level over window embeddings (hours, days) is part of the foundation model.
 - **Annotations.** Self-supervised pretraining on signals only; annotations for downstream
@@ -53,6 +65,19 @@ that these stay open:
 
 ## Backlog
 
+- **Mixture weights for pretraining.** The loader now reads every recording once per
+  epoch, so each dataset counts by its size: in the test index (9 datasets) capslpdb is 77 %
+  of the training tokens, adfecgdb 0.02 % (3 recordings of 5 min). The weight of each
+  dataset or signal type should be a setting of the run (natural proportions, a sampling
+  temperature as in LLM data mixtures, or explicit weights), because the mix is the
+  research question itself: does mixing help scarce signals and hurt abundant ones.
+- **A quality table over the standard layer** (agreed 2026-10-20): one row per channel,
+  computed once and stored with the index: the share of invalid samples, of flat segments
+  and of samples at the recorder's minimum or maximum; minimum, maximum and percentiles of
+  the physical values; non-finite counts. It measures and never deletes: which limits put a
+  channel into training is a setting of the run, as `signal_types` is.
+- **The arousal labels of challenge-2018** (`tr*-arousal.mat`, one label per sample, 994
+  files): not converted, because no WFDB header names them; needed for its benchmark.
 - **Request access to the gated datasets** (95 need a person): NSRR data requests per
   dataset, the TUH form and SSH key, PhysioNet credentialing (CITI course and DUA), BDSP
   (CITI certificate and DUA), a Kaggle token, and the downloads by hand. Each dataset's page

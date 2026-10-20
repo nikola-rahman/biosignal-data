@@ -191,7 +191,7 @@ class Packer:
             padded = np.full(n * p, np.nan, dtype=np.float32)
             padded[: signal.values.size] = signal.values
             values = padded.reshape(n, p)
-            observed = ~np.isnan(values)
+            observed = np.isfinite(values)  # NaN: invalid or past the end; inf never counts
             hidden = np.zeros(n, dtype=bool)
             if n >= 2 and self.mask_ratio > 0:
                 k = min(n - 1, max(1, round(n * self.mask_ratio)))

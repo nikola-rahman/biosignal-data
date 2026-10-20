@@ -53,3 +53,6 @@ run:
   wandb_project: biosignal-fm
   wandb_entity: schnyox-s
   wandb_mode: online
+  max_bad_steps: 20
+  bad_batch_directory: /root/debug/bad-batches
+  resume: newest
