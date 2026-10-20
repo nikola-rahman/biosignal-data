@@ -75,6 +75,7 @@ class StandardPlan:
     discovery: Discovery
     done: set[str]  # units finished by an earlier run
     replace: bool = False  # the version is complete and is made again
+    raw_manifest: bytes = b""  # as stored: kept with the standard version, for its lineage
 
     @property
     def units(self) -> list[Unit]:
@@ -99,25 +100,33 @@ class StandardReport:
 
 
 def plan_standard(
-    store: Store, dataset_id: str, version: str, *, raw_root: str = "raw", replace: bool = False
+    store: Store,
+    dataset_id: str,
+    version: str,
+    *,
+    raw_root: str = "raw",
+    replace: bool = False,
+    raw_store: Store | None = None,
 ) -> StandardPlan:
     """Find the recordings of a complete raw version, and those an earlier run finished.
     `replace`: a complete version is made again (by `convert`, which first removes it)
-    instead of raising `AlreadyStandard`."""
+    instead of raising `AlreadyStandard`. `raw_store`: where the raw version is, when not in
+    `store` (e.g. staged on local disk from the source's archive)."""
+    raw_store = store if raw_store is None else raw_store
     raw_location = VersionLocation(dataset_id, version, raw_root)
-    data = store.get_bytes(raw_location.manifest_key)
-    if data is None or not store.exists(raw_location.success_key):
-        raise FileNotFoundError(f"{store.uri}/{raw_location.prefix} is not a complete version")
+    data = raw_store.get_bytes(raw_location.manifest_key)
+    if data is None or not raw_store.exists(raw_location.success_key):
+        raise FileNotFoundError(f"{raw_store.uri}/{raw_location.prefix} is not a complete version")
     location = StandardLocation(dataset_id, version)
     complete = store.exists(location.success_key)
     if complete and not replace:
         raise AlreadyStandard(
             f"{store.uri}/{location.prefix} is already complete; use --replace to make it again"
         )
-    raw = RawDataset(store, raw_location, Manifest.from_json(data), Path())
+    raw = RawDataset(raw_store, raw_location, Manifest.from_json(data), Path())
 
     def read_text(path: str) -> str:
-        with store.open(raw_location.data_key(path)) as f:
+        with raw_store.open(raw_location.data_key(path)) as f:
             return f.read().decode("utf-8", errors="replace")
 
     def read_texts(paths: list[str]) -> dict[str, str]:
@@ -127,8 +136,9 @@ def plan_standard(
     discovery = discover((f.path for f in raw.files), read_text, read_texts)
     done = set() if complete else set(_done_parts(store, location))
     plan = StandardPlan(
-        raw, hashlib.sha256(data).hexdigest(), location, discovery, done, replace=complete
-    )
+        raw, hashlib.sha256(data).hexdigest(), location, discovery, done, replace=complete,
+        raw_manifest=data,
+    )  # fmt: skip
     log.info(
         "%s %s: %s, %s to convert",
         dataset_id,
@@ -467,6 +477,9 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
         not_converted=[NotConverted(path=p, reason=r) for p, r in sorted(skipped.items())],
     )
     store.put_bytes(location.manifest_key, manifest.model_dump_json(indent=2).encode())
+    # The raw version is a build input and may be deleted later; its manifest (every file
+    # with its SHA-256; its SHA-256 is raw_manifest_sha256) stays with the standard version.
+    store.put_bytes(location.raw_manifest_key, plan.raw_manifest)
     store.put_bytes(location.success_key, b"", content_type="text/plain")
     store.delete_many(list(store.list(location.parts_prefix)))
     return manifest

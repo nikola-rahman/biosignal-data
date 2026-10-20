@@ -5,6 +5,7 @@
     blocks.parquet        where each block of samples is (see standard/blocks.py)
     data/<batch>-<n>.bin  the blocks, in objects of at most 64 MiB
     _manifest.json
+    raw_manifest.json     the raw version's manifest (every file with its SHA-256), for lineage
     _parts/<batch>/...    progress of an unfinished run (removed on success)
     _SUCCESS
 """
@@ -51,6 +52,10 @@ class StandardLocation:
     @property
     def manifest_key(self) -> str:
         return f"{self.prefix}/{MANIFEST}"
+
+    @property
+    def raw_manifest_key(self) -> str:
+        return f"{self.prefix}/raw_manifest.json"
 
     @property
     def success_key(self) -> str:

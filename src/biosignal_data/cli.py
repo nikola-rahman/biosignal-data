@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import sys
 from pathlib import Path
@@ -756,17 +757,27 @@ def standardize(
         typer.Option("--dry-run", help="Show the recordings found; convert nothing."),
     ] = False,
     replace: ReplaceOpt = False,
+    from_zip: Annotated[
+        bool,
+        typer.Option(
+            "--from-zip",
+            help="PhysioNet only: stage the version's ZIP from PhysioNet's AWS copy on local "
+            "disk (checked against its ETag and SHA256SUMS.txt) instead of reading <dest>/raw/.",
+        ),
+    ] = False,
     verbose: VerboseOpt = False,
     config: ConfigOpt = None,
     catalog: CatalogOpt = None,
     descriptions: DescriptionsOpt = None,
 ) -> None:
-    """Convert raw versions in --dest to the standard layer: signals as Zarr v3 arrays at
-    their native sampling rates with the exact stored values, metadata as Parquet tables.
+    """Convert raw versions to the standard layer: samples at their native sampling rates
+    with the exact stored values, as compressed blocks with one block index; metadata as
+    Parquet tables.
 
-    The raw version is read from <dest>/raw/, the result written to
-    <dest>/standard/<id>/<raw version>/. Without --version, the newest complete raw version
-    is used. Every raw file is either used or listed in the manifest as not converted, with
+    The raw version is read from <dest>/raw/ (or, with --from-zip, staged from the source's
+    ZIP), the result written to <dest>/standard-blocks/<id>/<raw version>/. Without
+    --version, the newest complete raw version is used (with --from-zip: the catalog's
+    pinned version). Every raw file is either used or listed in the manifest as not converted, with
     the reason. If a run stops, run the same command again: it continues where it stopped.
     A complete version is skipped, unless --replace: then it is removed and made again from
     the raw version. See docs/standard-layer.md.
@@ -792,6 +803,10 @@ def standardize(
     failed = 0
     for d in datasets:
         try:
+            if from_zip:
+                ok = _standardize_from_zip(d, version, store, settings, staging.dir, replace)
+                failed += not ok
+                continue
             ok = _standardize_one(d.id, version, store, settings, staging.dir, dry_run, replace)
         except KeyboardInterrupt:
             console.print(
@@ -804,6 +819,45 @@ def standardize(
     raise typer.Exit(1 if failed else 0)
 
 
+def _standardize_from_zip(
+    dataset: Dataset,
+    version: str | None,
+    store: Store,
+    settings: StandardizeConfig,
+    staging_dir: Path,
+    replace: bool,
+) -> bool:
+    """Pipeline physionet-zip: stage the version's ZIP locally, convert, remove the stage."""
+    from biosignal_data.fetchers import physionet_zip  # noqa: PLC0415
+
+    version = version or dataset.pinned_version
+    if version is None:
+        console.print(f"[red]✗[/] {dataset.id}: --from-zip needs --version or a pinned version")
+        return False
+    work = staging_dir.expanduser() / "standardize"
+    try:
+        staged = physionet_zip.stage(dataset, version, work, connections=settings.workers)
+    except (physionet_zip.ZipCheckError, TypeError) as exc:
+        console.print(f"[red]✗[/] {dataset.id} {version}: {exc}", highlight=False, soft_wrap=True)
+        return False
+    try:
+        checked = sum(1 for f in staged.manifest.files if f.source_checksum)
+        by_size = len(staged.manifest.files) - checked
+        console.print(
+            f"[dim]{dataset.id} {version}: staged {len(staged.manifest.files):,} files: "
+            f"{checked:,} checked against SHA256SUMS.txt, {by_size:,} (not listed there) by "
+            "size",
+            highlight=False,
+            soft_wrap=True,
+        )
+        return _standardize_one(
+            dataset.id, version, store, settings, staging_dir, False, replace,
+            raw_store=staged.store,
+        )  # fmt: skip
+    finally:
+        shutil.rmtree(staged.folder, ignore_errors=True)
+
+
 def _standardize_one(
     dataset_id: str,
     version: str | None,
@@ -812,6 +866,7 @@ def _standardize_one(
     staging_dir: Path,
     dry_run: bool,
     replace: bool,
+    raw_store: Store | None = None,
 ) -> bool:
     """Plan (and unless `dry_run`, convert) one dataset; print one result line."""
     if version is None:
@@ -830,7 +885,9 @@ def _standardize_one(
             soft_wrap=True,
         )
     try:
-        plan = plan_standard(store, dataset_id, version, raw_root=ROOT, replace=replace)
+        plan = plan_standard(
+            store, dataset_id, version, raw_root=ROOT, replace=replace, raw_store=raw_store
+        )
     except AlreadyStandard:
         console.print(
             f"[green]✓[/] {dataset_id} {version}: already complete (--replace makes it again)",

@@ -32,6 +32,7 @@ never from a source.
         blocks.parquet         one row per block: where it is and what it holds
         data/<batch>-<n>.bin   the blocks, one after another, at most 64 MiB per object
         _manifest.json         lineage, files not converted and why, the layout settings
+        raw_manifest.json      the raw version's manifest: every file with its SHA-256
         _parts/                progress of an unfinished run (removed on success)
         _SUCCESS               written last
 
@@ -77,6 +78,25 @@ GET per block; a whole dataset is about one GET per object.
 Not converted yet, so listed in the manifest with the reason: multi-segment WFDB records,
 discontinuous EDF+ (EDF+D), and every other format. Metadata files (CSV, TSV, JSON) are kept
 in the raw layer and listed as not converted.
+
+## Pipelines
+
+The raw version is a build input. Each dataset can take its own way to it, from shared
+parts:
+
+- **raw layer** (default): the raw version in `<dest>/raw/`, one object per published file
+  (see raw-layer.md). Good for sources with large files.
+- **physionet-zip** (`--from-zip`): the version's ZIP from PhysioNet's AWS copy
+  (`s3://physionet-open/<slug>/<slug>-<version>.zip`, no credentials), staged on local disk:
+  checked against its S3 ETag, every member against SHA256SUMS.txt (and the ZIP's CRC-32),
+  files that PhysioNet added later on the copy (e.g. apnea-ecg's test answers) copied and
+  checked by size; an incomplete ZIP is refused (challenge-2018 1.0.0). PTB-XL: about 220
+  requests for 1.8 GB instead of 87,000; planning from local disk takes seconds. On
+  2026-10-20 it gave the same samples (SHA-256 of every channel) and events as the raw layer
+  for PTB-XL, mitdb and apnea-ecg.
+
+Because `raw_manifest.json` stays with the standard version, the raw version can be deleted
+once the standard version is checked; making it again then means staging it again.
 
 ## Run it
 
