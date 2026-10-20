@@ -11,6 +11,7 @@ import os
 import shutil
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,6 +41,7 @@ MAX_PARTS = 10_000
 # and parts sent at the same time.
 PARTS_IN_MEMORY = 2
 PARTS_IN_FLIGHT = 4
+DELETE_REQUESTS = 8  # delete requests of 1,000 keys sent at the same time
 # Zarr reads through s3fs: without limits one request that never answers stopped a reader
 # for good (2026-10-20: a check of challenge-2018 waited 80 minutes on one read). Each
 # request gets these timeouts and retries; each Zarr call (a shard is 64 MiB at most) is
@@ -214,8 +216,11 @@ class S3Store:
         self.client.delete_object(Bucket=self.bucket, Key=self._key(key))
 
     def delete_many(self, keys: list[str]) -> None:
-        """Up to 1,000 keys per request (the S3 limit); any key not deleted is an error."""
-        for start in range(0, len(keys), 1000):
+        """Up to 1,000 keys per request (the S3 limit), DELETE_REQUESTS requests at a time;
+        any key not deleted is an error. One request at a time deleted 777 objects per
+        minute on Hippius (PTB-XL, 2026-10-20)."""
+
+        def delete(start: int) -> None:
             batch: list[ObjectIdentifierTypeDef] = [
                 {"Key": self._key(k)} for k in keys[start : start + 1000]
             ]
@@ -228,6 +233,9 @@ class S3Store:
                     f"{len(errors)} keys not deleted, e.g. {first.get('Key')}: "
                     f"{first.get('Code')} {first.get('Message')}"
                 )
+
+        with ThreadPoolExecutor(max_workers=DELETE_REQUESTS) as pool:
+            list(pool.map(delete, range(0, len(keys), 1000)))
 
     def list(self, prefix: str) -> Iterator[str]:
         full = self._key(prefix)
