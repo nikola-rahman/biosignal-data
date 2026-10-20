@@ -39,6 +39,9 @@ optim:
   beta1: 0.9
   beta2: 0.95
   grad_clip: 1.0
+  schedule: cosine
+  decay_steps: null
+  decay_shape: null
 
 run:
   name: v0-cpu-smoke

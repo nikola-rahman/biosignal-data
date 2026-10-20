@@ -70,9 +70,15 @@ class ModelSection(_Section):
 
 class OptimSection(_Section):
     learning_rate: float
-    min_learning_rate: float  # the end of the cosine decay
+    min_learning_rate: float  # the end of the decay
     warmup_steps: int
     steps: int
+    # cosine: from the end of warmup to `steps`. wsd (warmup, stable, decay): constant after
+    # warmup, then a decay over the last `decay_steps`; a run continued from a checkpoint
+    # of the stable phase, with more `steps`, has no jump in its learning rate.
+    schedule: Literal["cosine", "wsd"]
+    decay_steps: int | None  # wsd only
+    decay_shape: Literal["linear", "1-sqrt"] | None  # wsd only; 1-sqrt: Hagele et al. 2024
     weight_decay: float
     beta1: float
     beta2: float
@@ -191,11 +197,21 @@ def _loader(stream: BatchStream, workers: int, device: torch.device) -> DataLoad
 
 
 def learning_rate(step: int, o: OptimSection) -> float:
+    """The learning rate of a step (counted from 0)."""
     if step < o.warmup_steps:
         return o.learning_rate * (step + 1) / o.warmup_steps
-    progress = min(1.0, (step - o.warmup_steps) / max(1, o.steps - o.warmup_steps))
-    cosine = 0.5 * (1 + math.cos(math.pi * progress))
-    return o.min_learning_rate + (o.learning_rate - o.min_learning_rate) * cosine
+    span = o.learning_rate - o.min_learning_rate
+    if o.schedule == "cosine":
+        progress = min(1.0, (step - o.warmup_steps) / max(1, o.steps - o.warmup_steps))
+        return o.min_learning_rate + span * 0.5 * (1 + math.cos(math.pi * progress))
+    if o.decay_steps is None or o.decay_shape is None:
+        raise ValueError("schedule wsd needs decay_steps and decay_shape")
+    start = o.steps - o.decay_steps
+    if step < start:
+        return o.learning_rate
+    progress = min(1.0, (step - start) / max(1, o.decay_steps))
+    left = 1 - progress if o.decay_shape == "linear" else 1 - math.sqrt(progress)
+    return o.min_learning_rate + span * left
 
 
 class _Totals:

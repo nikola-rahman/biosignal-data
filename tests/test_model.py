@@ -126,7 +126,8 @@ def test_a_short_run_learns_and_logs_without_artifacts(store: LocalStore, tmp_pa
                       "attention": "dense"},
             "optim": {"learning_rate": 3e-3, "min_learning_rate": 3e-4, "warmup_steps": 5,
                       "steps": 40, "weight_decay": 0.01, "beta1": 0.9, "beta2": 0.95,
-                      "grad_clip": 1.0},
+                      "grad_clip": 1.0, "schedule": "cosine", "decay_steps": None,
+                      "decay_shape": None},
             "run": {"name": "test", "seed": 0, "device": "cpu", "precision": "fp32",
                     "log_every": 10, "validate_every": 20, "validation_batches": 2,
                     "checkpoint_every": 40, "checkpoint_prefix": "models/test",
@@ -161,7 +162,8 @@ def _short_config(store: LocalStore, tmp_path: Path, **run: object) -> TrainConf
                       "attention": "dense"},
             "optim": {"learning_rate": 1e-3, "min_learning_rate": 1e-4, "warmup_steps": 2,
                       "steps": 10, "weight_decay": 0.0, "beta1": 0.9, "beta2": 0.95,
-                      "grad_clip": 1.0},
+                      "grad_clip": 1.0, "schedule": "cosine", "decay_steps": None,
+                      "decay_shape": None},
             "run": {"name": "t", "seed": 0, "device": "cpu", "precision": "fp32",
                     "log_every": 5, "validate_every": 10, "validation_batches": 1,
                     "checkpoint_every": 5, "checkpoint_prefix": "models/t",
@@ -222,3 +224,21 @@ def test_an_infinite_value_is_never_observed() -> None:
     tokens = _packer(mask_ratio=0.0).tokens(example)
     assert np.isfinite(tokens.values).all() and np.isfinite(tokens.channel_scale).all()
     assert not tokens.observed.reshape(-1)[4]
+
+
+def test_the_wsd_schedule_is_constant_until_its_decay_and_extends_without_a_jump() -> None:
+    from biosignal_model.train import OptimSection, learning_rate  # noqa: PLC0415
+
+    def wsd(steps: int) -> OptimSection:
+        return OptimSection(
+            learning_rate=1e-3, min_learning_rate=1e-4, warmup_steps=10, steps=steps,
+            weight_decay=0.0, beta1=0.9, beta2=0.95, grad_clip=1.0, schedule="wsd",
+            decay_steps=100, decay_shape="1-sqrt",
+        )  # fmt: skip
+
+    short, long = wsd(1000), wsd(5000)
+    assert learning_rate(5, short) == pytest.approx(6e-4)  # warmup
+    assert learning_rate(899, short) == learning_rate(899, long) == 1e-3  # stable
+    assert learning_rate(999, short) == pytest.approx(1e-4, rel=0.2)  # end of its decay
+    assert learning_rate(950, short) == pytest.approx(1e-4 + 9e-4 * (1 - 0.5**0.5))
+    assert learning_rate(999, long) == 1e-3  # the longer run is still stable there
