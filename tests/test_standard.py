@@ -221,6 +221,22 @@ def test_discovery_without_lists_tries_unknown_extensions_as_annotations() -> No
     assert by_id["b"].format == "edf" and by_id["b"].annotations == ("b.edf.event",)
 
 
+def test_two_records_joined_on_one_records_line_are_both_found() -> None:
+    """PTB-XL 1.0.3 lists `records100/21000/21837_lrrecords500/00000/00001_hr`."""
+    paths = [
+        "RECORDS", "r100/1_lr.hea", "r100/1_lr.dat", "r100/2_lr.hea", "r100/2_lr.dat",
+        "r500/1_hr.hea", "r500/1_hr.dat", "x/ab.hea", "x/a.hea", "x/b.hea", "x/ab2.hea",
+    ]  # fmt: skip
+    records = "r100/1_lr\nr100/2_lrr500/1_hr\nx/ab\nmissing\n"
+    found = discover(paths, lambda p: records, lambda ps: dict.fromkeys(ps, "r 0\n"))
+    assert [u.id for u in found.units] == ["r100/1_lr", "r100/2_lr", "r500/1_hr", "x/ab"]
+    assert found.problems == [
+        "r100/2_lrr500/1_hr: two RECORDS entries without a line break between them; "
+        "read as r100/2_lr and r500/1_hr",
+        "missing: listed in RECORDS, but no such header or EDF file",
+    ]
+
+
 @pytest.mark.parametrize(
     ("rate", "channels", "length", "step", "chunk"),
     [

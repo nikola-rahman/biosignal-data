@@ -9,6 +9,9 @@ and reported if it does not read as one.
 EDF and BDF: every `.edf` / `.bdf` file is a recording, unless `RECORDS` lists the records
 (then only those listed).
 
+A `RECORDS` line that names no files but is exactly one pair of existing records written
+without a line break between them is read as those two, and reported as a problem.
+
 A WFDB record that only shows the signal files of other records side by side (it uses two
 or more signal files, and each is the only signal file of another record; apnea-ecg a01er
 shows a01.dat and a01r.dat) is a view, not a recording: its samples are converted with
@@ -87,7 +90,14 @@ def discover(
             for line in read_text(list_path).splitlines():
                 entry = line.strip()
                 if entry and not entry.startswith("#") and not entry.endswith("/"):
-                    names.append(posixpath.normpath(posixpath.join(folder, entry)))
+                    name = posixpath.normpath(posixpath.join(folder, entry))
+                    joined = None if _has_files(name, paths) else _joined(entry, folder, paths)
+                    if joined:
+                        problems.append(
+                            f"{name}: two RECORDS entries without a line break between them; "
+                            f"read as {joined[0]} and {joined[1]}"
+                        )
+                    names += joined or [name]
     else:
         names = [p[: -len(".hea")] for p in paths if p.endswith(".hea")]
         names += [p for p in paths if p.lower().endswith(EDF_SUFFIXES)]
@@ -111,6 +121,22 @@ def discover(
     views = _views(units, read_texts)
     kept = [u for u in units.values() if u.id not in views]
     return Discovery(kept, lists, frozenset(annotators), problems, views)
+
+
+def _has_files(name: str, paths: set[str]) -> bool:
+    return name + ".hea" in paths or (name.lower().endswith(EDF_SUFFIXES) and name in paths)
+
+
+def _joined(entry: str, folder: str, paths: set[str]) -> list[str] | None:
+    """The two records of a RECORDS line that is two entries without a line break between
+    them (PTB-XL 1.0.3: `records100/21000/21837_lrrecords500/00000/00001_hr`), when exactly
+    one split gives two records that exist; otherwise None."""
+    splits = [
+        [posixpath.normpath(posixpath.join(folder, e)) for e in (entry[:i], entry[i:])]
+        for i in range(1, len(entry))
+    ]
+    found = [pair for pair in splits if all(_has_files(n, paths) for n in pair)]
+    return found[0] if len(found) == 1 else None
 
 
 def _views(
