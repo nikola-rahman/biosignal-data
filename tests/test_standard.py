@@ -266,7 +266,11 @@ def test_two_records_joined_on_one_records_line_are_both_found() -> None:
         "r500/1_hr.hea", "r500/1_hr.dat", "x/ab.hea", "x/a.hea", "x/b.hea", "x/ab2.hea",
     ]  # fmt: skip
     records = "r100/1_lr\nr100/2_lrr500/1_hr\nx/ab\nmissing\n"
-    found = discover(paths, lambda p: records, lambda ps: dict.fromkeys(ps, "r 0\n"))
+
+    def texts(ps: list[str]) -> dict[str, str]:  # lists and headers are read together
+        return {p: records if p == "RECORDS" else "r 0\n" for p in ps}
+
+    found = discover(paths, lambda p: records, texts)
     assert [u.id for u in found.units] == ["r100/1_lr", "r100/2_lr", "r500/1_hr", "x/ab"]
     assert found.problems == [
         "r100/2_lrr500/1_hr: two RECORDS entries without a line break between them; "

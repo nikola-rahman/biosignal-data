@@ -82,11 +82,13 @@ def discover(
     only the annotations of an EDF recording."""
     paths = set(paths)
     lists = sorted(p for p in paths if posixpath.basename(p) in LISTS)
+    # All at the same time: icentia11k 1.0 has a RECORDS list in each of 11,000 folders.
+    texts = read_texts(lists) if lists else {}
     annotators = {
         line.split()[0]
         for p in lists
         if p.endswith("ANNOTATORS")
-        for line in read_text(p).splitlines()
+        for line in texts[p].splitlines()
         if line.strip() and not line.startswith("#")
     }
     records = [p for p in lists if p.endswith("RECORDS")]
@@ -95,7 +97,7 @@ def discover(
         names = []
         for list_path in records:
             folder = posixpath.dirname(list_path)
-            for line in read_text(list_path).splitlines():
+            for line in texts[list_path].splitlines():
                 entry = line.strip()
                 if entry and not entry.startswith("#") and not entry.endswith("/"):
                     name = posixpath.normpath(posixpath.join(folder, entry))

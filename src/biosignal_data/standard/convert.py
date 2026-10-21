@@ -40,7 +40,13 @@ from biosignal_data import __version__
 from biosignal_data.progress import Ticker
 from biosignal_data.read.raw import RawDataset
 from biosignal_data.standard import blocks, file_index, kept_files, tables
-from biosignal_data.standard.discover import Discovery, Unit, discover, may_be_annotations
+from biosignal_data.standard.discover import (
+    LISTS,
+    Discovery,
+    Unit,
+    discover,
+    may_be_annotations,
+)
 from biosignal_data.standard.layout import DONE, TABLES, StandardLocation
 from biosignal_data.standard.manifest import NotConverted, StandardManifest
 from biosignal_data.standard.rules import StandardRules
@@ -142,13 +148,16 @@ def plan_standard(
         )
     raw = RawDataset(raw_store, raw_location, Manifest.from_json(data), Path())
 
-    headers = sum(1 for f in raw.files if f.path.endswith(".hea"))
-    reading = Ticker(f"{dataset_id} {version}: reading headers", headers or None)
+    def counted(path: str) -> bool:
+        return path.endswith(".hea") or posixpath.basename(path) in LISTS
+
+    texts = sum(1 for f in raw.files if counted(f.path))
+    reading = Ticker(f"{dataset_id} {version}: reading headers and RECORDS lists", texts or None)
 
     def read_text(path: str) -> str:
         with raw_store.open(raw_location.data_key(path)) as f:
             text = f.read().decode("utf-8", errors="replace")
-        if path.endswith(".hea"):
+        if counted(path):
             reading.add()
         return text
 
