@@ -68,12 +68,14 @@ class MirrorStore:
         self._prefix = f"{slug}/{version}/"
         self._location = location
         self._data = location.data_prefix
-        self._manifest = manifest
+        self._manifest: bytes | None = manifest
         self._connections = connections
         self._client: Any = None
 
     def __getstate__(self) -> dict[str, Any]:
-        return self.__dict__ | {"_client": None}
+        # A conversion process reads data files only: not the manifest (icentia11k: 1.6
+        # million files, ~0.5 GB of JSON in each process).
+        return self.__dict__ | {"_client": None, "_manifest": None}
 
     @property
     def client(self) -> Any:
@@ -91,6 +93,8 @@ class MirrorStore:
 
     def _local(self, key: str) -> bytes | None:
         if key == f"{self._location.prefix}/{MANIFEST}":
+            if self._manifest is None:
+                raise RuntimeError(f"{self.uri}: the manifest is not sent to other processes")
             return self._manifest
         if key == f"{self._location.prefix}/{SUCCESS}":
             return b""

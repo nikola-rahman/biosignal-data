@@ -39,7 +39,7 @@ import pyarrow as pa
 from biosignal_data import __version__
 from biosignal_data.progress import Ticker
 from biosignal_data.read.raw import RawDataset
-from biosignal_data.standard import blocks, kept_files, tables
+from biosignal_data.standard import blocks, file_index, kept_files, tables
 from biosignal_data.standard.discover import Discovery, Unit, discover, may_be_annotations
 from biosignal_data.standard.layout import DONE, TABLES, StandardLocation
 from biosignal_data.standard.manifest import NotConverted, StandardManifest
@@ -230,15 +230,17 @@ def convert(
 
     lock = threading.Lock()
     units: ProcessPoolExecutor | None = None
+    index: Path | None = None
     if processes and not getattr(plan.raw.store, "process_safe", False):
         log.warning(
             "%s: the raw version's store cannot go to other processes; recordings are "
             "converted in the batch threads, not in %d processes", report.location, processes,
         )  # fmt: skip
     elif processes:
+        index = file_index.write(work_dir, plan.raw.files)
         units = ProcessPoolExecutor(
             processes, mp_context=multiprocessing.get_context("spawn"),
-            initializer=_init_process, initargs=(plan,),
+            initializer=_init_process, initargs=(plan.raw.store, plan.raw.location, index),
         )  # fmt: skip
 
     def run(batch: list[Unit]) -> None:
@@ -255,6 +257,8 @@ def convert(
         pool.shutdown(cancel_futures=True)
         if units is not None:
             units.shutdown(cancel_futures=True)
+        if index is not None:
+            index.unlink(missing_ok=True)
     if report.failed:
         log.error("%s failed; run again to retry them", plural(len(report.failed), "recording"))
         return report
@@ -292,7 +296,7 @@ def _convert_batch(
                 progress.unit_started(unit.id)
             try:
                 if units is None:
-                    result = convert_unit(plan, store, unit, work_dir)
+                    result = convert_unit(plan.raw, store, unit, work_dir)
                 else:
                     result = units.submit(_convert_in_process, unit, work_dir).result()
             except Exception as exc:  # noqa: BLE001 - recorded per recording, reported at the end
@@ -318,18 +322,22 @@ def _convert_batch(
         shutil.rmtree(folder, ignore_errors=True)
 
 
-_PLAN: StandardPlan | None = None  # in a conversion process: its plan (_init_process)
+# In a conversion process: the raw version's files (_init_process). A process gets the raw
+# store, its location and the file index, not the plan: a copy of icentia11k's plan
+# (542,157 recordings, 1.6 million files) took 4 GB in each of 16 processes, and the
+# server ran out of memory (2026-10-21).
+_RAW: file_index.IndexedRaw | None = None
 
 
-def _init_process(plan: StandardPlan) -> None:
-    global _PLAN  # noqa: PLW0603 - one plan per process, set once when it starts
-    _PLAN = plan
+def _init_process(store: Store, location: VersionLocation, index: Path) -> None:
+    global _RAW  # noqa: PLW0603 - one per process, set once when it starts
+    _RAW = file_index.IndexedRaw(store, location, index)
 
 
 def _convert_in_process(unit: Unit, work_dir: Path) -> UnitResult:
-    if _PLAN is None:
-        raise RuntimeError("a conversion process without its plan")
-    return convert_unit(_PLAN, None, unit, work_dir)
+    if _RAW is None:
+        raise RuntimeError("a conversion process without its raw files")
+    return convert_unit(_RAW, None, unit, work_dir)
 
 
 def _keep(writer: blocks.ObjectWriter, result: UnitResult) -> None:
@@ -356,12 +364,20 @@ class UnitResult:
     blocks: list[tuple[dict[str, Any], bytes]] = field(default_factory=list)  # until kept
 
 
-def convert_unit(plan: StandardPlan, store: Store | None, unit: Unit, work_dir: Path) -> UnitResult:
+class RawFiles(Protocol):
+    """The raw version's files as a recording's conversion reads them: RawDataset, or
+    file_index.IndexedRaw in a conversion process."""
+
+    def has(self, path: str) -> bool: ...
+    def entry(self, path: str) -> file_index.Sized: ...
+    def fetch_to(self, path: str, folder: Path) -> Path: ...
+
+
+def convert_unit(raw: RawFiles, store: Store | None, unit: Unit, work_dir: Path) -> UnitResult:
     """Convert one recording: its blocks (checked, compressed) and its table rows are
     returned, to be stored with the other recordings of its batch."""
     folder = Path(tempfile.mkdtemp(prefix="unit-", dir=work_dir))
     try:
-        raw = plan.raw
 
         def fetch(path: str) -> Path:
             return raw.fetch_to(path, folder)

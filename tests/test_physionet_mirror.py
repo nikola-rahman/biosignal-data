@@ -86,7 +86,8 @@ def test_the_store_goes_to_a_conversion_process_without_its_client(copy: object)
     assert header_reads(raw) == 64 and header_reads(LocalStore(Path("x"))) == HEADER_READS
     raw.get_bytes(raw._data + "r1.hea")  # opens the client
     again = pickle.loads(pickle.dumps(raw))  # noqa: S301 - our own object, as spawn sends it
-    assert again._client is None and again._manifest == raw._manifest
+    assert again._client is None and again._manifest is None  # data files only
+    assert again.get_bytes(again._data + "r1.hea") == FILES["r1.hea"]
 
 
 class _AccessPoints:

@@ -129,6 +129,29 @@ def test_recordings_converted_in_processes_are_the_same_as_in_threads(
     assert threads.events.num_rows == events
 
 
+def test_conversion_processes_get_a_file_index_not_the_plan(
+    store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
+) -> None:
+    """icentia11k 1.0: a copy of the plan (542,157 recordings, 1.6 million files) took 4 GB
+    in each of 16 processes; what goes to a process does not grow with the dataset."""
+    import pickle  # noqa: PLC0415
+
+    from biosignal_data.standard import file_index  # noqa: PLC0415
+
+    plan = plan_standard(store, "physionet/mitdb", "1.0.0")
+    index = file_index.write(tmp_path, plan.raw.files)
+    raw = file_index.IndexedRaw(store, plan.raw.location, index)
+    for f in plan.raw.files:
+        assert raw.has(f.path) and raw.entry(f.path) == file_index.Entry(f.size, f.sha256)
+    assert not raw.has("nope.dat")
+    with pytest.raises(FileNotFoundError):
+        raw.entry("nope.dat")
+    got = raw.fetch_to("r1.hea", tmp_path / "unit")
+    assert got.read_bytes() == plan.raw.fetch_to("r1.hea", tmp_path / "direct").read_bytes()
+    sent = pickle.dumps((plan.raw.store, plan.raw.location, index))
+    assert len(sent) < 2000  # the store, the location and a path: no file list
+
+
 def test_standard_version_is_exact_and_accounts_for_every_file(
     store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
 ) -> None:

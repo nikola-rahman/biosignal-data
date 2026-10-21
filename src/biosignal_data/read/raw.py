@@ -122,21 +122,32 @@ class RawDataset:
         """Download `path` to `folder/<path>` unless it is there with the right size, and
         return that local path. The SHA-256 is checked against the manifest."""
         entry = self.entry(path)
-        target = folder / path
-        if target.is_file() and target.stat().st_size == entry.size:
-            return target
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_name(target.name + ".part")
-        digest = hashlib.sha256()
-        with self.store.open(self.location.data_key(path)) as src, tmp.open("wb") as out:
-            while chunk := src.read(8 * 1024 * 1024):
-                digest.update(chunk)
-                out.write(chunk)
-        if verify and digest.hexdigest() != entry.sha256:
-            tmp.unlink(missing_ok=True)
-            raise OSError(f"{path}: downloaded bytes do not match the manifest SHA-256")
-        shutil.move(tmp, target)
-        return target
+        return fetch_file(
+            self.store, self.location, path, entry.size, entry.sha256, folder, verify=verify
+        )
 
     def local_paths(self, pattern: str) -> list[Path]:
         return [self.local_path(f.path) for f in self.glob(pattern)]
+
+
+def fetch_file(
+    store: Store, location: VersionLocation, path: str, size: int, sha256: str, folder: Path,
+    *, verify: bool = True,
+) -> Path:  # fmt: skip
+    """Download the file `path` of the raw version at `location` to `folder/<path>` unless
+    it is there with `size` bytes, checked against `sha256`; return that local path."""
+    target = folder / path
+    if target.is_file() and target.stat().st_size == size:
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".part")
+    digest = hashlib.sha256()
+    with store.open(location.data_key(path)) as src, tmp.open("wb") as out:
+        while chunk := src.read(8 * 1024 * 1024):
+            digest.update(chunk)
+            out.write(chunk)
+    if verify and digest.hexdigest() != sha256:
+        tmp.unlink(missing_ok=True)
+        raise OSError(f"{path}: downloaded bytes do not match the manifest SHA-256")
+    shutil.move(tmp, target)
+    return target
