@@ -290,6 +290,40 @@ def test_kept_files_fill_packs_of_at_most_the_object_size(
         kept_files.read(store, location, "b.txt")
 
 
+def test_kept_files_are_read_ahead_only_up_to_a_bound(store: LocalStore) -> None:
+    """ltstdb 1.0.0: 64 readers from AWS against one uploader held all kept files in memory
+    (14 GB); the read-ahead is bounded in bytes, and many packs upload in order."""
+    from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+
+    from biosignal_data.standard import kept_files  # noqa: PLC0415
+    from biosignal_data.standard.convert import _read_ahead  # noqa: PLC0415
+    from biosignal_data.standard.layout import StandardLocation  # noqa: PLC0415
+
+    read: list[str] = []
+    taken: list[str] = []
+    ahead: list[int] = []
+
+    def fetch(item: str) -> str:
+        read.append(item)
+        return item
+
+    items = [f"f{i}" for i in range(8)]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for item in _read_ahead(pool, fetch, items, [4] * 8, limit=10):
+            ahead.append(len(read) - len(taken))
+            taken.append(item)
+    assert taken == items  # in order
+    assert max(ahead) <= 2  # 2 files of 4 bytes fit in 10 bytes, a third does not
+    location = StandardLocation("physionet/x", "1.0.0")
+    files = [(f"f{i}", bytes([i]) * 7) for i in range(12)]  # 12 packs at 10 bytes each
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(kept_files, "OBJECT_BYTES", 10)
+        table = kept_files.pack(store, location, files)
+    assert table.column("object").to_pylist() == [f"files/pack-{i:04d}.bin" for i in range(12)]
+    rows = kept_files.index(store, location)
+    assert [kept_files.read(store, location, p, rows) for p, _ in files] == [d for _, d in files]
+
+
 def test_every_worker_gets_a_batch_of_a_small_dataset(
     store: LocalStore, raw: dict[str, np.ndarray]
 ) -> None:

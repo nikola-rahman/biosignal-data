@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
+from collections import deque
 from collections.abc import Iterable
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
 import pyarrow as pa
@@ -36,33 +39,45 @@ FILES = pa.schema(
     ]
 )
 PACK_PREFIX = "files/pack-"
+UPLOADS = 4  # packs uploaded at the same time (one at a time: ~1 min for 1 GB, 2026-10-21)
+log = logging.getLogger(__name__)
 
 
 def pack(store: Store, location: StandardLocation, files: Iterable[tuple[str, bytes]]) -> pa.Table:
     """Write `files` ((path, data), in the order given) as packs and files.parquet; return
-    the table. Every upload carries its MD5, which the storage checks."""
+    the table. Every upload carries its MD5, which the storage checks. Packs are uploaded
+    UPLOADS at a time; at most UPLOADS packs wait in memory."""
     rows: list[dict[str, Any]] = []
     buffer = bytearray()
     n = 0
+    uploads: deque[Future[None]] = deque()
 
-    def flush() -> None:
+    def put(key: str, data: bytes) -> None:
+        store.put_bytes(key, data, "application/octet-stream")
+        log.info("%s: %s (%.0f MiB) written", location.dataset_id, key.rsplit("/", 1)[-1],
+                 len(data) / 2**20)  # fmt: skip
+
+    def flush(pool: ThreadPoolExecutor) -> None:
         nonlocal buffer, n
         if buffer:
-            store.put_bytes(
-                location.object_key(f"{PACK_PREFIX}{n:04d}.bin"), bytes(buffer),
-                "application/octet-stream",
-            )  # fmt: skip
+            while len(uploads) >= UPLOADS:
+                uploads.popleft().result()
+            key = location.object_key(f"{PACK_PREFIX}{n:04d}.bin")
+            uploads.append(pool.submit(put, key, bytes(buffer)))
             buffer, n = bytearray(), n + 1
 
-    for path, data in files:
-        if buffer and len(buffer) + len(data) > OBJECT_BYTES:
-            flush()
-        rows.append(
-            {"path": path, "object": f"{PACK_PREFIX}{n:04d}.bin", "offset": len(buffer),
-             "nbytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
-        )  # fmt: skip
-        buffer += data
-    flush()
+    with ThreadPoolExecutor(max_workers=UPLOADS) as pool:
+        for path, data in files:
+            if buffer and len(buffer) + len(data) > OBJECT_BYTES:
+                flush(pool)
+            rows.append(
+                {"path": path, "object": f"{PACK_PREFIX}{n:04d}.bin", "offset": len(buffer),
+                 "nbytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+            )  # fmt: skip
+            buffer += data
+        flush(pool)
+        while uploads:
+            uploads.popleft().result()
     table = pa.Table.from_pylist(rows, schema=FILES)
     sink = io.BytesIO()
     pq.write_table(table, sink)

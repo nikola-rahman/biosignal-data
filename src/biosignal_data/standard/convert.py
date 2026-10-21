@@ -27,6 +27,7 @@ import posixpath
 import shutil
 import tempfile
 import threading
+from collections import deque
 from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -574,6 +575,9 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
 
 
 KEEP_BYTES = 16 * 2**20  # raw files not converted and at most this size are kept (files/)
+# Kept files read but not yet packed: without a bound, 64 readers from AWS against one
+# uploader held all of ltstdb's kept files in memory (14 GB, 2026-10-21).
+READ_AHEAD_BYTES = 4 * blocks.OBJECT_BYTES
 
 
 def _keep_files(
@@ -583,8 +587,14 @@ def _keep_files(
     kept_files.py), so that the standard version does not need the raw version: the index
     reads subject tables from them, a benchmark its labels (PTB-XL: ptbxl_database.csv).
     Larger files stay listed in the manifest as not converted only. Each file is checked
-    against the raw manifest; files are read header_reads() at a time."""
+    against the raw manifest; files are read header_reads() at a time, at most
+    READ_AHEAD_BYTES ahead of the packing."""
     paths = [p for p in sorted(not_converted) if plan.raw.entry(p).size <= KEEP_BYTES]
+    total = sum(plan.raw.entry(p).size for p in paths)
+    log.info(
+        "%s: keeping %s (%.2f GB) in files/", location.dataset_id, plural(len(paths), "file"),
+        total / 1e9,
+    )  # fmt: skip
 
     def read(path: str) -> tuple[str, bytes]:
         with plan.raw.store.open(plan.raw.location.data_key(path)) as f:
@@ -593,8 +603,28 @@ def _keep_files(
             raise RuntimeError(f"{path}: differs from the raw manifest")
         return path, data
 
+    sizes = [plan.raw.entry(p).size for p in paths]
     with ThreadPoolExecutor(max_workers=header_reads(plan.raw.store)) as pool:
-        kept_files.pack(store, location, pool.map(read, paths))
+        kept_files.pack(store, location, _read_ahead(pool, read, paths, sizes))
+
+
+def _read_ahead(
+    pool: ThreadPoolExecutor, read: Any, items: list[str], sizes: list[int],
+    limit: int = READ_AHEAD_BYTES,
+) -> Iterator[Any]:  # fmt: skip
+    """read(item) for each item, in order, run in `pool`, with at most `limit` bytes (by
+    `sizes`) read and not yet taken (at least one item)."""
+    pending: deque[tuple[Any, int]] = deque()
+    held = 0
+    for item, size in zip(items, sizes, strict=True):
+        while pending and held + size > limit:
+            future, done = pending.popleft()
+            held -= done
+            yield future.result()
+        pending.append((pool.submit(read, item), size))
+        held += size
+    while pending:
+        yield pending.popleft()[0].result()
 
 
 def _in_unit_order(table: pa.Table, order: dict[str, int]) -> pa.Table:
