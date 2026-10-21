@@ -47,7 +47,10 @@ def test_tokens_keep_every_value_and_its_time() -> None:
     original[:20] = example.signals[0].values
     original = original.reshape(3, 8)
     observed = tokens.observed[first]
-    np.testing.assert_allclose(restored[observed], original[observed], rtol=1e-5)
+    # The encoding is float32, like the model's input: a value next to the channel mean
+    # (cancellation in x - mean) comes back to float32 precision of the channel's scale.
+    scale = np.exp(log_scale)
+    np.testing.assert_allclose(restored[observed], original[observed], rtol=1e-5, atol=1e-6 * scale)
     assert not observed.reshape(-1)[1] and not observed.reshape(-1)[20:].any()
     # token centres: start + (k + 1/2) * 8 / rate
     np.testing.assert_allclose(tokens.time_s[first], 0.25 / 100 + (np.arange(3) + 0.5) * 0.08)
