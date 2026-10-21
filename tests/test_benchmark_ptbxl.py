@@ -67,6 +67,7 @@ def test_the_probe_chooses_on_fold_9_and_scores_fold_10() -> None:
     features[:, 1] += 3 * y[:, 1]
     settings = ptbxl.PtbxlSettings(
         rate=100, tasks=["all"], rows=2, read_threads=1, workers=0, probes=True,
+        methods=["finetune", "supervised"],
         probe_l2=[1e-3, 1.0], probe_steps=50,
         finetune_epochs=1, finetune_learning_rate=1e-3, finetune_weight_decay=0.0,
         finetune_examples_per_step=8, finetune_discriminative_factor=0.1,
@@ -89,6 +90,7 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model() -> None:
     y, _, _ = ptbxl.labels(records, STATEMENTS, "diagnostic")
     settings = ptbxl.PtbxlSettings(
         rate=100, tasks=["diagnostic"], rows=2, read_threads=1, workers=0, probes=True,
+        methods=["finetune", "supervised"],
         probe_l2=[1.0], probe_steps=10,
         finetune_epochs=2, finetune_learning_rate=1e-3, finetune_weight_decay=0.0,
         finetune_examples_per_step=4, finetune_discriminative_factor=0.1,

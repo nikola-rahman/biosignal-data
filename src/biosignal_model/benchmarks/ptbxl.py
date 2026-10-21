@@ -63,6 +63,8 @@ class PtbxlSettings(BaseModel):
     read_threads: int  # requests to the store at the same time
     workers: int  # data loader processes that crop and pack batches; 0: the main process
     probes: bool  # also the linear probes on the frozen encoder (pretrained and random)
+    # finetune: the pretrained encoder and a head; supervised: the same from random weights
+    methods: list[Literal["finetune", "supervised"]]
     probe_l2: list[float]
     probe_steps: int
     finetune_epochs: int  # the best epoch on fold 9 is the one scored
@@ -530,7 +532,9 @@ def run(
             scores = probe(f[keep], y[keep], records.folds[keep], settings, log, f"{task}/{name}")
             results |= {f"{task}/{name}/{k}": v for k, v in scores.items()}
             log({f"{task}/{name}/macro_auc": scores["macro_auc"]})
-        for name, start in (("finetune", checkpoint["model"]), ("supervised", None)):
+        starts = {"finetune": checkpoint["model"], "supervised": None}
+        for name in settings.methods:
+            start = starts[name]
             scores = end_to_end(
                 config, kept, y[keep], max_tokens, settings, device, start, log, f"{task}/{name}"
             )
