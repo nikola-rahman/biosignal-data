@@ -804,7 +804,10 @@ def standardize(
     for d in datasets:
         try:
             if from_zip:
-                ok = _standardize_from_zip(d, version, store, settings, staging.dir, replace)
+                website = _need(cfg.download, "download", cfg_path).physionet_website_connections
+                ok = _standardize_from_zip(
+                    d, version, store, settings, staging.dir, replace, website
+                )
                 failed += not ok
                 continue
             ok = _standardize_one(d.id, version, store, settings, staging.dir, dry_run, replace)
@@ -826,8 +829,11 @@ def _standardize_from_zip(
     settings: StandardizeConfig,
     staging_dir: Path,
     replace: bool,
+    website_connections: int,
 ) -> bool:
-    """Pipeline physionet-zip: stage the version's ZIP locally, convert, remove the stage."""
+    """Pipeline physionet-zip: stage the version's ZIP locally, convert, remove the stage.
+    `website_connections`: requests to physionet.org at the same time, for a version that
+    is not on PhysioNet's AWS copy."""
     from biosignal_data.fetchers import physionet_zip  # noqa: PLC0415
 
     version = version or dataset.pinned_version
@@ -836,7 +842,10 @@ def _standardize_from_zip(
         return False
     work = staging_dir.expanduser() / "standardize"
     try:
-        staged = physionet_zip.stage(dataset, version, work, connections=settings.workers)
+        staged = physionet_zip.stage(
+            dataset, version, work, connections=settings.workers,
+            website_connections=website_connections,
+        )  # fmt: skip
     except (physionet_zip.ZipCheckError, TypeError) as exc:
         console.print(f"[red]✗[/] {dataset.id} {version}: {exc}", highlight=False, soft_wrap=True)
         return False

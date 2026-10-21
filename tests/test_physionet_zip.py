@@ -55,7 +55,9 @@ def test_a_staged_zip_converts_exactly_and_keeps_the_raw_manifest(
     mirror.put_object(  # type: ignore[attr-defined]
         Bucket="physionet-open", Key="mitdb/mitdb-1.0.0.zip", Body=_zip(FILES)
     )
-    staged = physionet_zip.stage(DATASET, "1.0.0", tmp_path / "work", connections=2)
+    staged = physionet_zip.stage(
+        DATASET, "1.0.0", tmp_path / "work", connections=2, website_connections=1
+    )
     assert sorted(f.path for f in staged.manifest.files) == ["RECORDS", "r1.dat", "r1.hea"]
     assert all(f.source_checksum for f in staged.manifest.files)
     assert not (staged.folder / "archive.zip").exists()  # only the extracted, checked tree
@@ -79,7 +81,9 @@ def test_folders_next_to_the_version_folder_are_left_out(mirror: object, tmp_pat
     mirror.put_object(  # type: ignore[attr-defined]
         Bucket="physionet-open", Key="mitdb/mitdb-1.0.0.zip", Body=out.getvalue()
     )
-    staged = physionet_zip.stage(DATASET, "1.0.0", tmp_path / "work", connections=2)
+    staged = physionet_zip.stage(
+        DATASET, "1.0.0", tmp_path / "work", connections=2, website_connections=1
+    )
     hea = next(f for f in staged.manifest.files if f.path == "r1.hea")
     assert hea.sha256 == hashlib.sha256(FILES["r1.hea"]).hexdigest()
     assert sorted(f.path for f in staged.manifest.files) == ["RECORDS", "r1.dat", "r1.hea"]
@@ -94,7 +98,9 @@ def test_files_added_after_the_zip_come_from_the_version_folder(
     mirror.put_object(  # type: ignore[attr-defined]
         Bucket="physionet-open", Key="mitdb/1.0.0/r1.apn", Body=b"answers"
     )  # added later: on the copy, not in the ZIP, not in SHA256SUMS.txt
-    staged = physionet_zip.stage(DATASET, "1.0.0", tmp_path / "work", connections=2)
+    staged = physionet_zip.stage(
+        DATASET, "1.0.0", tmp_path / "work", connections=2, website_connections=1
+    )
     added = next(f for f in staged.manifest.files if f.path == "r1.apn")
     assert added.size == 7 and added.source_checksum is None
 
@@ -105,7 +111,9 @@ def test_an_incomplete_zip_is_refused(mirror: object, tmp_path: Path) -> None:
         Body=_zip({k: v for k, v in FILES.items() if k != "r1.dat"}),
     )  # fmt: skip
     with pytest.raises(physionet_zip.ZipCheckError, match=r"incomplete.*r1\.dat"):
-        physionet_zip.stage(DATASET, "1.0.0", tmp_path / "work", connections=2)
+        physionet_zip.stage(
+            DATASET, "1.0.0", tmp_path / "work", connections=2, website_connections=1
+        )
 
 
 def test_a_member_that_differs_from_sha256sums_is_refused(mirror: object, tmp_path: Path) -> None:
@@ -114,7 +122,9 @@ def test_a_member_that_differs_from_sha256sums_is_refused(mirror: object, tmp_pa
         Body=_zip(FILES | {"r1.dat": ECG[::-1].tobytes()}),
     )  # fmt: skip
     with pytest.raises(physionet_zip.ZipCheckError, match=r"r1\.dat differs"):
-        physionet_zip.stage(DATASET, "1.0.0", tmp_path / "work", connections=2)
+        physionet_zip.stage(
+            DATASET, "1.0.0", tmp_path / "work", connections=2, website_connections=1
+        )
 
 
 def test_the_etag_of_a_multipart_upload(tmp_path: Path) -> None:
@@ -148,10 +158,73 @@ def test_a_complete_earlier_download_is_checked_not_downloaded_again(
     (folder / "archive.zip").write_bytes(body)
     (folder / "store").mkdir()  # an earlier extraction: made again
     (folder / "store" / "stale").write_bytes(b"x")
-    staged = physionet_zip.stage(DATASET, "1.0.0", tmp_path / "work", connections=2)
+    staged = physionet_zip.stage(
+        DATASET, "1.0.0", tmp_path / "work", connections=2, website_connections=1
+    )
     assert not (folder / "store" / "stale").exists()
     assert sorted(f.path for f in staged.manifest.files) == ["RECORDS", "r1.dat", "r1.hea"]
     (folder / "store").mkdir(exist_ok=True)
     (folder / "archive.zip").write_bytes(body[:-1] + bytes([body[-1] ^ 1]))  # same size
     with pytest.raises(physionet_zip.ZipCheckError, match="ETag"):
-        physionet_zip.stage(DATASET, "1.0.0", tmp_path / "work", connections=2)
+        physionet_zip.stage(
+            DATASET, "1.0.0", tmp_path / "work", connections=2, website_connections=1
+        )
+
+
+class _Website:
+    """physionet.org for one version that is not on the AWS copy: SHA256SUMS.txt, and the
+    ZIP behind get-zip (a redirect), served in byte ranges; the first range request answers
+    short once (physionet.org cut downloads short with many connections, 2026-10-19)."""
+
+    def __init__(self, files: dict[str, bytes], body: bytes) -> None:
+        self.sums = "".join(f"{hashlib.sha256(b).hexdigest()}  {n}\n" for n, b in files.items())
+        self.body = body
+        self.short = True
+        self.ranges: list[str] = []
+
+    def _answer(self, status: int, content: bytes, headers: dict[str, str], url: str) -> object:
+        class Response:
+            pass
+
+        r = Response()
+        r.status_code, r.content, r.headers, r.url = status, content, headers, url  # type: ignore[attr-defined]
+        r.raise_for_status = lambda: None  # type: ignore[attr-defined]
+        return r
+
+    def get(
+        self, url: str, headers: dict[str, str] | None = None, timeout: object = None
+    ) -> object:
+        if url.endswith("/SHA256SUMS.txt"):
+            return self._answer(200, self.sums.encode(), {}, url)
+        start, stop = (int(x) for x in (headers or {})["Range"][len("bytes=") :].split("-"))
+        self.ranges.append(f"{start}-{stop}")
+        if self.short:
+            self.short = False
+            return self._answer(206, self.body[start : start + 3], {}, url)
+        return self._answer(206, self.body[start : stop + 1], {}, url)
+
+    def head(self, url: str, allow_redirects: bool = False, timeout: object = None) -> object:
+        assert url.endswith("/content/mitdb/get-zip/1.0.0/") and allow_redirects
+        headers = {"Content-Length": str(len(self.body)), "Accept-Ranges": "bytes"}
+        return self._answer(200, b"", headers, "https://physionet.org/static/mitdb-1.0.0.zip")
+
+
+def test_a_version_not_on_the_aws_copy_comes_from_physionet_org(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with mock_aws():
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket="physionet-open")  # the version is not there
+        monkeypatch.setattr(physionet_zip, "s3_client", lambda **_: s3)
+        website = _Website(FILES, _zip(FILES))
+        monkeypatch.setattr(physionet_zip, "_website_session", lambda connections: website)
+        monkeypatch.setattr(physionet_zip, "RANGE", 100)
+        staged = physionet_zip.stage(
+            DATASET, "1.0.0", tmp_path / "work", connections=2, website_connections=1
+        )
+    assert sorted(f.path for f in staged.manifest.files) == ["RECORDS", "r1.dat", "r1.hea"]
+    assert all(f.source_checksum for f in staged.manifest.files)  # each against SHA256SUMS
+    assert staged.manifest.files[0].source_url.startswith(
+        "https://physionet.org/content/mitdb/get-zip/1.0.0/#"
+    )  # the canonical URL of the version's ZIP
+    assert len(website.ranges) == -(-len(website.body) // 100) + 1  # every range, one retried

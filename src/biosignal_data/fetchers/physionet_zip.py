@@ -29,15 +29,24 @@ import hashlib
 import logging
 import shutil
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import requests
 from boto3.s3.transfer import TransferConfig
 
 from biosignal_data import __version__
 from biosignal_data.catalog.models import Dataset, PhysioNetSource
-from biosignal_data.fetchers.physionet import MIRROR_BUCKET, MIRROR_REGION, SUMS, parse_sha256sums
+from biosignal_data.fetchers.base import http_session, limit_host
+from biosignal_data.fetchers.physionet import (
+    BASE,
+    MIRROR_BUCKET,
+    MIRROR_REGION,
+    SUMS,
+    parse_sha256sums,
+)
 from biosignal_data.fetchers.s3 import s3_client
 from biosignal_data.storage.layout import MANIFEST, SUCCESS, VersionLocation
 from biosignal_data.storage.manifest import FileEntry, Manifest, utcnow
@@ -48,6 +57,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 PART = 8 * 2**20  # download parts (S3 ranges)
+RANGE = 64 * 2**20  # download ranges from physionet.org
+RANGE_ATTEMPTS = 3
 MIB = 2**20
 CHUNK = 2**20
 
@@ -63,8 +74,13 @@ class Staged:
     folder: Path  # remove when done
 
 
-def stage(dataset: Dataset, version: str, work: Path, *, connections: int) -> Staged:
-    """Download, check and extract one version into `work`; return a local raw version."""
+def stage(
+    dataset: Dataset, version: str, work: Path, *, connections: int, website_connections: int
+) -> Staged:
+    """Download, check and extract one version into `work`; return a local raw version.
+    From PhysioNet's AWS copy when the version is there (`connections` at a time), else from
+    physionet.org (at most `website_connections` at a time: it blocks clients that open
+    many)."""
     source = dataset.source
     if not isinstance(source, PhysioNetSource):
         raise TypeError(f"{dataset.id}: not a PhysioNet dataset")
@@ -72,7 +88,7 @@ def stage(dataset: Dataset, version: str, work: Path, *, connections: int) -> St
         raise ZipCheckError(f"{dataset.id}: credentialed; not on the open AWS copy")
     folder = work / f"zip-{source.slug}-{version}"
     archive = folder / "archive.zip"
-    # A complete download from an earlier run is checked again (ETag, SHA256SUMS), not
+    # A complete download from an earlier run is checked again (ETag or SHA256SUMS), not
     # downloaded again (hd-semg: 145 GB); everything else of the folder is made again.
     for leftover in folder.glob("*") if folder.exists() else []:
         if leftover.is_dir():
@@ -82,39 +98,29 @@ def stage(dataset: Dataset, version: str, work: Path, *, connections: int) -> St
     folder.mkdir(parents=True, exist_ok=True)
     client = s3_client(region=MIRROR_REGION, connections=connections)
     prefix = f"{source.slug}/{version}/"
-    sums = dict(
-        parse_sha256sums(
-            client.get_object(Bucket=MIRROR_BUCKET, Key=prefix + SUMS)["Body"]
-            .read()
-            .decode("utf-8")
-        )
-    )
-    key = f"{source.slug}/{source.slug}-{version}.zip"
-    head = client.head_object(Bucket=MIRROR_BUCKET, Key=key)
-    if archive.exists() and archive.stat().st_size == head["ContentLength"]:
-        log.info("%s: %s is on disk from an earlier run; checking it again", dataset.id, key)
+    try:
+        sums_text = client.get_object(Bucket=MIRROR_BUCKET, Key=prefix + SUMS)["Body"].read()
+        on_aws = True
+    except client.exceptions.NoSuchKey:
+        on_aws = False
+    if on_aws:
+        key = f"{source.slug}/{source.slug}-{version}.zip"
+        _from_aws(client, key, archive, connections, dataset.id)
     else:
-        log.info(
-            "%s: downloading s3://%s/%s (%d bytes)",
-            dataset.id, MIRROR_BUCKET, key, head["ContentLength"],
-        )  # fmt: skip
-        client.download_file(
-            MIRROR_BUCKET, key, str(archive),
-            Config=TransferConfig(multipart_chunksize=PART, max_concurrency=connections),
-        )  # fmt: skip
-    if archive.stat().st_size != head["ContentLength"]:
-        raise ZipCheckError(
-            f"{key}: {archive.stat().st_size} bytes, expected {head['ContentLength']}"
-        )
-    etag = head["ETag"].strip('"')
-    if _etag(archive, _part_size(head["ContentLength"], etag)) != etag:
-        raise ZipCheckError(f"{key}: the MD5 of its parts differs from the S3 ETag")
+        log.info("%s %s is not on PhysioNet's AWS copy; from physionet.org", dataset.id, version)
+        session = _website_session(website_connections)
+        sums_text = _website_get(session, f"{BASE}/files/{source.slug}/{version}/{SUMS}")
+        key = f"{BASE}/content/{source.slug}/get-zip/{version}/"
+        _from_website(session, key, archive, website_connections, dataset.id)
+    sums = dict(parse_sha256sums(sums_text.decode("utf-8")))
 
     location = VersionLocation(dataset.id, version, "raw")
     store = LocalStore(folder / "store")
     entries, extra = _extract(archive, key, sums, folder / "store", location)
     archive.unlink()
-    entries += _added_later(client, prefix, {e.path for e in entries}, folder / "store", location)
+    if on_aws:
+        have = {e.path for e in entries}
+        entries += _added_later(client, prefix, have, folder / "store", location)
     missing = sorted(set(sums) - {e.path for e in entries})
     if missing:
         raise ZipCheckError(
@@ -135,6 +141,80 @@ def stage(dataset: Dataset, version: str, work: Path, *, connections: int) -> St
     store.put_bytes(f"{location.prefix}/{MANIFEST}", manifest.to_json())
     store.put_bytes(f"{location.prefix}/{SUCCESS}", b"", content_type="text/plain")
     return Staged(store, manifest, folder)
+
+
+def _from_aws(client: S3Client, key: str, archive: Path, connections: int, name: str) -> None:
+    """The version's ZIP from the AWS copy, checked against its size and S3 ETag."""
+    head = client.head_object(Bucket=MIRROR_BUCKET, Key=key)
+    if archive.exists() and archive.stat().st_size == head["ContentLength"]:
+        log.info("%s: %s is on disk from an earlier run; checking it again", name, key)
+    else:
+        log.info(
+            "%s: downloading s3://%s/%s (%d bytes)", name, MIRROR_BUCKET, key,
+            head["ContentLength"],
+        )  # fmt: skip
+        client.download_file(
+            MIRROR_BUCKET, key, str(archive),
+            Config=TransferConfig(multipart_chunksize=PART, max_concurrency=connections),
+        )  # fmt: skip
+    if archive.stat().st_size != head["ContentLength"]:
+        raise ZipCheckError(
+            f"{key}: {archive.stat().st_size} bytes, expected {head['ContentLength']}"
+        )
+    etag = head["ETag"].strip('"')
+    if _etag(archive, _part_size(head["ContentLength"], etag)) != etag:
+        raise ZipCheckError(f"{key}: the MD5 of its parts differs from the S3 ETag")
+
+
+def _website_session(connections: int) -> requests.Session:
+    return limit_host(http_session(), f"{BASE}/", connections)
+
+
+def _website_get(session: requests.Session, url: str) -> bytes:
+    response = session.get(url, timeout=(10, 300))
+    response.raise_for_status()
+    return response.content
+
+
+def _from_website(
+    session: requests.Session, url: str, archive: Path, connections: int, name: str
+) -> None:
+    """The version's ZIP from physionet.org, in RANGE-byte ranges, `connections` at a time.
+    physionet.org gives no checksum of the ZIP: every member is checked against
+    SHA256SUMS.txt and its CRC-32 when it is extracted, and SHA256SUMS.txt must be complete
+    in it (stage)."""
+    head = session.head(url, allow_redirects=True, timeout=(10, 60))
+    head.raise_for_status()
+    size, final = int(head.headers["Content-Length"]), head.url
+    if head.headers.get("Accept-Ranges") != "bytes":
+        raise ZipCheckError(f"{final}: the server does not serve byte ranges")
+    if archive.exists() and archive.stat().st_size == size:
+        log.info("%s: %s is on disk from an earlier run; checking it again", name, final)
+        return
+    log.info("%s: downloading %s (%d bytes, %d at a time)", name, final, size, connections)
+    with archive.open("wb") as f:
+        f.truncate(size)
+
+    def fetch(start: int) -> None:
+        stop = min(start + RANGE, size) - 1
+        for attempt in range(1, RANGE_ATTEMPTS + 1):
+            response = session.get(
+                final, headers={"Range": f"bytes={start}-{stop}"}, timeout=(10, 300)
+            )
+            data = response.content if response.status_code == 206 else b""
+            if len(data) == stop - start + 1:
+                with archive.open("r+b") as f:
+                    f.seek(start)
+                    f.write(data)
+                return
+            log.warning(
+                "%s: bytes %d-%d: HTTP %d, %d bytes (attempt %d of %d)", final, start, stop,
+                response.status_code, len(data), attempt, RANGE_ATTEMPTS,
+            )  # fmt: skip
+        raise ZipCheckError(f"{final}: bytes {start}-{stop} failed {RANGE_ATTEMPTS} times")
+
+    with ThreadPoolExecutor(max_workers=connections) as pool:
+        list(pool.map(fetch, range(0, size, RANGE)))
 
 
 def _added_later(
@@ -208,7 +288,7 @@ def _extract(
                 FileEntry(
                     path=path, size=info.file_size, sha256=sha.hexdigest(), md5=md5.hexdigest(),
                     source_checksum=f"sha256:{sums[path]}" if path in sums else None,
-                    source_url=f"s3://{MIRROR_BUCKET}/{key}#{info.filename}",
+                    source_url=f"{_archive_url(key)}#{info.filename}",
                 )
             )  # fmt: skip
     return entries, extra
@@ -244,6 +324,11 @@ def _part_size(size: int, etag: str) -> int:
     if -(-size // part) != parts:
         raise ZipCheckError(f"no whole-MiB part size cuts {size} bytes into {parts} parts")
     return part
+
+
+def _archive_url(key: str) -> str:
+    """The ZIP's URL: a physionet.org URL as it is, an AWS key as s3://."""
+    return key if key.startswith("https://") else f"s3://{MIRROR_BUCKET}/{key}"
 
 
 def _etag(path: Path, part_size: int) -> str:
