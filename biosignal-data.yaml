@@ -19,6 +19,8 @@ standardize:
   workers: 4                   # batches of recordings converted at the same time
   part_bytes: 67108864         # 64 MiB: a batch closes when its raw files reach this, so many
                                # small recordings share one part (fewer S3 requests)
+  processes: 8                 # recordings compressed and checked in processes (CPU work;
+                               # a staged ZIP only): the cores of the machine
 
 # biosignal-data quality: per-channel measurements of the standard layer.
 quality:

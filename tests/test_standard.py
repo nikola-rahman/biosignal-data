@@ -111,6 +111,24 @@ def test_objects_of_unfinished_batches_are_removed_at_the_end(
     assert list((tmp_path / "work").iterdir()) == []  # the local objects are removed
 
 
+def test_recordings_converted_in_processes_are_the_same_as_in_threads(
+    store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
+) -> None:
+    plan = plan_standard(store, "physionet/mitdb", "1.0.0")
+    report = convert(plan, store, workers=2, part_bytes=1, work_dir=tmp_path / "work", processes=2)
+    assert report.complete and not report.failed and report.converted == 5
+    ds = StandardDataset.open(store, "physionet/mitdb", "1.0.0")
+    np.testing.assert_array_equal(ds.read("r1", "200Hz"), raw["ecg"][None, :])
+    np.testing.assert_array_equal(ds.read("sub/s1", "256Hz"), raw["eeg"][None, :])
+    in_processes = sorted(ds.channels.column("sha256").to_pylist(), key=str)
+    events = ds.events.num_rows
+    again = plan_standard(store, "physionet/mitdb", "1.0.0", replace=True)
+    convert(again, store, workers=2, part_bytes=1, work_dir=tmp_path / "work2")
+    threads = StandardDataset.open(store, "physionet/mitdb", "1.0.0")
+    assert sorted(threads.channels.column("sha256").to_pylist(), key=str) == in_processes
+    assert threads.events.num_rows == events
+
+
 def test_standard_version_is_exact_and_accounts_for_every_file(
     store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
 ) -> None:
@@ -347,7 +365,7 @@ def test_cli_dry_run_then_convert_then_already(
 
     config = tmp_path / "biosignal-data.yaml"
     config.write_text(
-        f"standardize:\n  workers: 2\n  part_bytes: 1\n"
+        f"standardize:\n  workers: 2\n  part_bytes: 1\n  processes: 0\n"
         f"staging:\n  dir: {tmp_path / 'staging'}\n  keep: false\n"
     )
     args = ["standardize", "physionet/mitdb", "--dest", str(store.root), "--config", str(config)]

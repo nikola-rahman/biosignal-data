@@ -22,12 +22,13 @@ import hashlib
 import json
 import logging
 import math
+import multiprocessing
 import posixpath
 import shutil
 import tempfile
 import threading
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -52,7 +53,7 @@ from biosignal_data.standard.sources import (
 )
 from biosignal_data.storage.layout import VersionLocation
 from biosignal_data.storage.manifest import Manifest, utcnow
-from biosignal_data.storage.stores import Store
+from biosignal_data.storage.stores import LocalStore, Store
 from biosignal_data.text import plural
 
 log = logging.getLogger(__name__)
@@ -180,12 +181,18 @@ def convert(
     workers: int,
     part_bytes: int,
     work_dir: Path,
+    processes: int = 0,
     progress: StandardProgress | None = None,
     stop: threading.Event | None = None,
 ) -> StandardReport:
     """Convert exactly `plan.to_convert`, `workers` batches at a time (see `_batches`);
     complete the version when every recording is done. Raw files are fetched to
-    `work_dir`, one folder per recording, removed when it is done."""
+    `work_dir`, one folder per recording, removed when it is done.
+
+    `processes`: recordings are read, compressed and checked in this many processes (0: in
+    the batch threads). Compression and the check of every block are CPU work that threads
+    share badly (hd-semg 2.0.0: 16 threads kept 4 of 8 cores busy). Only for a raw version
+    on local disk (a staged ZIP): the plan goes to each process once."""
     report = StandardReport(
         plan.raw.location.dataset_id,
         plan.raw.location.version,
@@ -201,9 +208,20 @@ def convert(
     work_dir.mkdir(parents=True, exist_ok=True)
 
     lock = threading.Lock()
+    units: ProcessPoolExecutor | None = None
+    if processes and not isinstance(plan.raw.store, LocalStore):
+        log.warning(
+            "%s: the raw version is not on local disk; recordings are converted in the "
+            "batch threads, not in %d processes", report.location, processes,
+        )  # fmt: skip
+    elif processes:
+        units = ProcessPoolExecutor(
+            processes, mp_context=multiprocessing.get_context("spawn"),
+            initializer=_init_process, initargs=(plan,),
+        )  # fmt: skip
 
     def run(batch: list[Unit]) -> None:
-        _convert_batch(plan, store, batch, work_dir, report, lock, progress, stop)
+        _convert_batch(plan, store, batch, work_dir, report, lock, progress, stop, units)
 
     pool = ThreadPoolExecutor(max_workers=workers)
     try:
@@ -214,6 +232,8 @@ def convert(
     finally:
         # On Ctrl+C: batches not started yet are dropped; those running finish.
         pool.shutdown(cancel_futures=True)
+        if units is not None:
+            units.shutdown(cancel_futures=True)
     if report.failed:
         log.error("%s failed; run again to retry them", plural(len(report.failed), "recording"))
         return report
@@ -232,9 +252,11 @@ def _convert_batch(
     lock: threading.Lock,
     progress: StandardProgress | None,
     stop: threading.Event | None,
+    units: ProcessPoolExecutor | None = None,
 ) -> None:
     """Convert a batch, recording by recording, into the batch's own objects; upload them
-    and record the recordings that succeeded (called from worker threads)."""
+    and record the recordings that succeeded (called from worker threads). `units`: the
+    processes that convert each recording (None: this thread does)."""
     name = "batch-" + hashlib.sha256("\n".join(u.id for u in batch).encode()).hexdigest()[:20]
     folder = Path(tempfile.mkdtemp(prefix="objects-", dir=work_dir))
     try:
@@ -248,7 +270,10 @@ def _convert_batch(
             if progress:
                 progress.unit_started(unit.id)
             try:
-                result = convert_unit(plan, store, unit, work_dir)
+                if units is None:
+                    result = convert_unit(plan, store, unit, work_dir)
+                else:
+                    result = units.submit(_convert_in_process, unit, work_dir).result()
             except Exception as exc:  # noqa: BLE001 - recorded per recording, reported at the end
                 log.error("%s: %s", unit.id, exc)
                 with lock:
@@ -270,6 +295,20 @@ def _convert_batch(
                 report.converted += len(results)
     finally:
         shutil.rmtree(folder, ignore_errors=True)
+
+
+_PLAN: StandardPlan | None = None  # in a conversion process: its plan (_init_process)
+
+
+def _init_process(plan: StandardPlan) -> None:
+    global _PLAN  # noqa: PLW0603 - one plan per process, set once when it starts
+    _PLAN = plan
+
+
+def _convert_in_process(unit: Unit, work_dir: Path) -> UnitResult:
+    if _PLAN is None:
+        raise RuntimeError("a conversion process without its plan")
+    return convert_unit(_PLAN, None, unit, work_dir)
 
 
 def _keep(writer: blocks.ObjectWriter, result: UnitResult) -> None:
@@ -296,7 +335,7 @@ class UnitResult:
     blocks: list[tuple[dict[str, Any], bytes]] = field(default_factory=list)  # until kept
 
 
-def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -> UnitResult:
+def convert_unit(plan: StandardPlan, store: Store | None, unit: Unit, work_dir: Path) -> UnitResult:
     """Convert one recording: its blocks (checked, compressed) and its table rows are
     returned, to be stored with the other recordings of its batch."""
     folder = Path(tempfile.mkdtemp(prefix="unit-", dir=work_dir))

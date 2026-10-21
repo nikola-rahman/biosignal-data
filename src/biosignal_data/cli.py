@@ -908,6 +908,7 @@ def _standardize_one(
             workers=settings.workers,
             part_bytes=settings.part_bytes,
             work_dir=staging_dir.expanduser() / "standardize",
+            processes=settings.processes,
             progress=bar,
         )
     if not report.complete:

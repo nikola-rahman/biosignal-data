@@ -39,6 +39,9 @@ class DownloadConfig(_Section):
 class StandardizeConfig(_Section):
     workers: int = Field(ge=1)  # batches converted at the same time
     part_bytes: int = Field(ge=1)  # a batch of recordings closes when its raw files reach this
+    # recordings read, compressed and checked in this many processes (a raw version on
+    # local disk only, e.g. a staged ZIP); 0: in the batch threads
+    processes: int = Field(ge=0)
 
 
 class QualityConfig(_Section):
