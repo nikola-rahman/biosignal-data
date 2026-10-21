@@ -176,14 +176,16 @@ class _Website:
     """physionet.org for one version that is not on the AWS copy: SHA256SUMS.txt, and the
     ZIP behind get-zip (a redirect), served in byte ranges; the first range request answers
     short once (physionet.org cut downloads short with many connections, 2026-10-19), and
-    the second stalls once (a read timeout mid-range, 2026-10-21). Ranges from `down_from`
-    on fail every time (physionet.org down)."""
+    the second stalls once (a read timeout mid-range, 2026-10-21), and SHA256SUMS.txt is cut
+    once (challenge-2020: 8 MB, cut after 163 KB, 2026-10-21). Ranges from `down_from` on
+    fail every time (physionet.org down)."""
 
     def __init__(self, files: dict[str, bytes], body: bytes, down_from: int | None = None) -> None:
         self.sums = "".join(f"{hashlib.sha256(b).hexdigest()}  {n}\n" for n, b in files.items())
         self.body = body
         self.short = True
         self.stall = True
+        self.cut_sums = True
         self.down_from = down_from
         self.ranges: list[str] = []
 
@@ -200,6 +202,9 @@ class _Website:
         self, url: str, headers: dict[str, str] | None = None, timeout: object = None
     ) -> object:
         if url.endswith("/SHA256SUMS.txt"):
+            if self.cut_sums:
+                self.cut_sums = False
+                raise requests.exceptions.ChunkedEncodingError("Connection broken")
             return self._answer(200, self.sums.encode(), {}, url)
         start, stop = (int(x) for x in (headers or {})["Range"][len("bytes=") :].split("-"))
         self.ranges.append(f"{start}-{stop}")
@@ -262,7 +267,7 @@ def test_a_download_from_physionet_org_that_stopped_continues_where_it_stopped(
         assert (folder / "archive.zip").stat().st_size == len(body)  # incomplete: not used
         assert (folder / "archive.ranges").read_text().split() == ["0", "100", "200"]
         again = _Website(FILES, body)
-        again.short = again.stall = False
+        again.short = again.stall = again.cut_sums = False
         monkeypatch.setattr(physionet_zip, "_website_session", lambda connections: again)
         staged = physionet_zip.stage(
             DATASET, "1.0.0", tmp_path / "work", connections=2, website_connections=1

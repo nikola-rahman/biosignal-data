@@ -65,6 +65,8 @@ PART = 8 * 2**20  # download parts (S3 ranges)
 RANGE = 8 * 2**20
 RANGE_ATTEMPTS = 10
 RETRY_WAIT = 30.0  # seconds, times the attempt number
+# A download cut or stalled by physionet.org (not an HTTP error answer)
+CUT = (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError)
 MIB = 2**20
 CHUNK = 2**20
 
@@ -178,9 +180,18 @@ def _website_session(connections: int) -> requests.Session:
 
 
 def _website_get(session: requests.Session, url: str) -> bytes:
-    response = session.get(url, timeout=(10, 300))
-    response.raise_for_status()
-    return response.content
+    """A small file from physionet.org (SHA256SUMS.txt: 8 MB for challenge-2020), tried
+    again as the ZIP's ranges are when it is cut or stalls."""
+    for attempt in range(1, RANGE_ATTEMPTS + 1):
+        try:
+            response = session.get(url, timeout=(10, 300))
+            response.raise_for_status()
+            return response.content
+        except CUT as exc:
+            log.warning("%s: %s (attempt %d of %d)", url, exc, attempt, RANGE_ATTEMPTS)
+            if attempt < RANGE_ATTEMPTS:
+                time.sleep(RETRY_WAIT * attempt)
+    raise ZipCheckError(f"{url}: failed {RANGE_ATTEMPTS} times")
 
 
 def _ranges_file(archive: Path) -> Path:
