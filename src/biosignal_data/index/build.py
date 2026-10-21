@@ -16,7 +16,6 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
-import json
 import logging
 from collections import Counter
 from dataclasses import dataclass, field
@@ -39,7 +38,7 @@ from biosignal_data.index.subjects import split_of, subject_of
 from biosignal_data.read.raw import complete_versions
 from biosignal_data.standard.layout import ROOT as STANDARD_ROOT
 from biosignal_data.standard.layout import StandardLocation
-from biosignal_data.storage.layout import SUCCESS, VersionLocation, retrieval_version
+from biosignal_data.storage.layout import SUCCESS, retrieval_version
 from biosignal_data.storage.manifest import utcnow
 from biosignal_data.storage.stores import Store
 
@@ -141,8 +140,7 @@ def build_index(
             raise FileNotFoundError(f"{location.manifest_key} is missing but _SUCCESS exists")
         used[dataset_id] = location.version
         manifests[dataset_id] = hashlib.sha256(data).hexdigest()
-        raw = VersionLocation(dataset_id, json.loads(data)["raw_version"])
-        indexed = _index_dataset(store, location, raw, rules.get(dataset_id), found)
+        indexed = _index_dataset(store, location, rules.get(dataset_id), found)
         log.info("%s %s: %d recordings indexed", dataset_id, location.version, indexed)
     recordings, channels = found.recordings, found.channels
     subjects = {r["subject_id"]: r["subject_certain"] for r in recordings}
@@ -186,7 +184,6 @@ class _Found:
 def _index_dataset(
     store: Store,
     location: StandardLocation,
-    raw: VersionLocation,
     rules: DatasetRules,
     found: _Found,
 ) -> int:
@@ -195,9 +192,9 @@ def _index_dataset(
     overrides = channel_overrides(rules)
     table = None
     if rules.subject is not None and rules.subject.table is not None:
-        table = _subject_table(store, raw, rules.subject.table)
+        table = _subject_table(store, location, rules.subject.table)
     held_out_tables = {
-        i: _column(store, raw, h.table.file, h.table.delimiter, h.table.recording_column,
+        i: _column(store, location, h.table.file, h.table.delimiter, h.table.recording_column,
                    h.table.column)
         for i, h in enumerate(rules.held_out) if h.table is not None
     }  # fmt: skip
@@ -255,19 +252,21 @@ def _index_dataset(
     return len(indexed)
 
 
-def _subject_table(store: Store, raw: VersionLocation, table: SubjectTable) -> dict[str, str]:
-    """{recording: subject} from a table of the raw dataset."""
+def _subject_table(store: Store, location: StandardLocation, table: SubjectTable) -> dict[str, str]:
+    """{recording: subject} from a table of the dataset (kept with its standard version)."""
     return _column(
-        store, raw, table.file, table.delimiter, table.recording_column, table.subject_column
-    )
+        store, location, table.file, table.delimiter, table.recording_column,
+        table.subject_column,
+    )  # fmt: skip
 
 
 def _column(
-    store: Store, raw: VersionLocation, file: str, delimiter: str, key_column: str, column: str
-) -> dict[str, str]:
-    """{key: value} of two columns of a delimited table of the raw dataset; a key with
-    two different values is an error."""
-    key = raw.data_key(file)
+    store: Store, location: StandardLocation, file: str, delimiter: str, key_column: str,
+    column: str,
+) -> dict[str, str]:  # fmt: skip
+    """{key: value} of two columns of a delimited table of the dataset (in the standard
+    version's files/); a key with two different values is an error."""
+    key = location.file_key(file)
     data = store.get_bytes(key)
     if data is None:
         raise FileNotFoundError(key)

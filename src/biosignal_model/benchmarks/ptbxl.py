@@ -39,7 +39,6 @@ from pydantic import BaseModel, ConfigDict
 from scipy.stats import rankdata
 
 from biosignal_data.read.standard import StandardDataset
-from biosignal_data.storage.layout import VersionLocation
 from biosignal_data.storage.stores import Store
 from biosignal_data.training.loader import Channel, Example, Origin, Signal
 from biosignal_model.batch import Packer
@@ -126,12 +125,11 @@ def macro_auc(y: np.ndarray, p: np.ndarray) -> tuple[float, int]:
 def load(store: Store, settings: PtbxlSettings, log: Log) -> tuple[Records, list[dict[str, str]]]:
     """Every record of the chosen rate, read once into memory, and the statement table."""
     dataset = StandardDataset.open(store, DATASET, "latest")
-    raw = VersionLocation(DATASET, dataset.manifest.raw_version)
 
-    def table(name: str) -> list[dict[str, str]]:
-        data = store.get_bytes(raw.data_key(name))
+    def table(name: str) -> list[dict[str, str]]:  # kept with the standard version
+        data = store.get_bytes(dataset.location.file_key(name))
         if data is None:
-            raise FileNotFoundError(raw.data_key(name))
+            raise FileNotFoundError(dataset.location.file_key(name))
         return list(csv.DictReader(io.StringIO(data.decode("utf-8-sig"))))
 
     rows = table("ptbxl_database.csv")

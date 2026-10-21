@@ -6,6 +6,8 @@
     data/<batch>-<n>.bin  the blocks, in objects of at most 64 MiB
     _manifest.json
     raw_manifest.json     the raw version's manifest (every file with its SHA-256), for lineage
+    files/<path>          the raw version's small files that hold no signals (tables such as
+                          ptbxl_database.csv, documentation), copied as published
     _parts/<batch>/...    progress of an unfinished run (removed on success)
     _SUCCESS
 """
@@ -52,6 +54,10 @@ class StandardLocation:
     @property
     def manifest_key(self) -> str:
         return f"{self.prefix}/{MANIFEST}"
+
+    def file_key(self, path: str) -> str:
+        """A raw file kept with the standard version (a table, documentation)."""
+        return f"{self.prefix}/files/{safe_relpath(path)}"
 
     @property
     def raw_manifest_key(self) -> str:

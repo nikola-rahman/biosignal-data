@@ -483,6 +483,7 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
         problems=plan.discovery.problems + [p for done, _ in loaded for p in done["problems"]],
         not_converted=[NotConverted(path=p, reason=r) for p, r in sorted(skipped.items())],
     )
+    _keep_files(store, plan, location, skipped)
     store.put_bytes(location.manifest_key, manifest.model_dump_json(indent=2).encode())
     # The raw version is a build input and may be deleted later; its manifest (every file
     # with its SHA-256; its SHA-256 is raw_manifest_sha256) stays with the standard version.
@@ -490,6 +491,27 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
     store.put_bytes(location.success_key, b"", content_type="text/plain")
     store.delete_many(list(store.list(location.parts_prefix)))
     return manifest
+
+
+KEEP_BYTES = 16 * 2**20  # raw files not converted and at most this size are kept as files/
+
+
+def _keep_files(
+    store: Store, plan: StandardPlan, location: StandardLocation, not_converted: dict[str, str]
+) -> None:
+    """Copy the raw files that hold no signals (tables, documentation) into files/, so that
+    the standard version does not need the raw version: the index reads subject tables
+    from them, a benchmark its labels (PTB-XL: ptbxl_database.csv). Larger files stay
+    listed in the manifest as not converted only."""
+    for path in sorted(not_converted):
+        entry = plan.raw.entry(path)
+        if entry.size > KEEP_BYTES:
+            continue
+        with plan.raw.store.open(plan.raw.location.data_key(path)) as f:
+            data = f.read()
+        if hashlib.sha256(data).hexdigest() != entry.sha256:
+            raise RuntimeError(f"{path}: differs from the raw manifest")
+        store.put_bytes(location.file_key(path), data, "application/octet-stream")
 
 
 def _in_unit_order(table: pa.Table, order: dict[str, int]) -> pa.Table:

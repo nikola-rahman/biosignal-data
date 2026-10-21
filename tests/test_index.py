@@ -214,7 +214,7 @@ def test_excluded_recordings_and_subjects_from_a_raw_table(
     store.put_bytes(f"{prefix}/_manifest.json", b'{"raw_version": "1.0.0"}')
     store.put_bytes(f"{prefix}/_SUCCESS", b"")
     store.put_bytes(
-        "raw/physionet/ephnogram/1.0.0/data/t.csv",
+        "standard-blocks/physionet/ephnogram/1.0.0/files/t.csv",
         "﻿Record Name,Subject ID\nECGPCG0001,S001\nECGPCG0002,S001\n".encode(),
     )
     rules_path = tmp_path / "index.yaml"
@@ -306,7 +306,7 @@ def test_a_benchmark_test_fold_from_a_table_is_held_out(store: LocalStore, tmp_p
     store.put_bytes(f"{prefix}/_manifest.json", b'{"raw_version": "1.0.3"}')
     store.put_bytes(f"{prefix}/_SUCCESS", b"")
     store.put_bytes(
-        "raw/physionet/ptb-xl/1.0.3/data/ptbxl_database.csv",
+        "standard-blocks/physionet/ptb-xl/1.0.3/files/ptbxl_database.csv",
         b"ecg_id,patient_id,strat_fold,filename_hr\n"
         b"1,15709.0,3,records500/00000/00001_hr\n"
         b"2,13243.0,10,records500/00000/00002_hr\n"

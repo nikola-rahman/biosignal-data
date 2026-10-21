@@ -232,6 +232,16 @@ def test_two_records_joined_on_one_records_line_are_both_found() -> None:
     ]
 
 
+def test_small_files_that_hold_no_signals_are_kept_with_the_version(
+    store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
+) -> None:
+    plan = plan_standard(store, "physionet/mitdb", "1.0.0")
+    assert convert(plan, store, workers=1, part_bytes=1, work_dir=tmp_path / "work").complete
+    location = plan.location
+    assert store.get_bytes(location.file_key("r1.xws")) == b"wave settings"  # not converted
+    assert not store.exists(location.file_key("r1.dat"))  # signals are in blocks, not files/
+
+
 def test_every_worker_gets_a_batch_of_a_small_dataset(
     store: LocalStore, raw: dict[str, np.ndarray]
 ) -> None:

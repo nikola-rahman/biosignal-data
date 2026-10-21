@@ -33,6 +33,8 @@ never from a source.
         data/<batch>-<n>.bin   the blocks, one after another, at most 64 MiB per object
         _manifest.json         lineage, files not converted and why, the layout settings
         raw_manifest.json      the raw version's manifest: every file with its SHA-256
+        files/<path>           the raw files that hold no signals, up to 16 MiB each
+                               (tables such as ptbxl_database.csv, documentation)
         _parts/                progress of an unfinished run (removed on success)
         _SUCCESS               written last
 
@@ -95,8 +97,10 @@ parts:
   2026-10-20 it gave the same samples (SHA-256 of every channel) and events as the raw layer
   for PTB-XL, mitdb and apnea-ecg.
 
-Because `raw_manifest.json` stays with the standard version, the raw version can be deleted
-once the standard version is checked; making it again then means staging it again.
+Because `raw_manifest.json` and `files/` stay with the standard version, the raw version can
+be deleted once the standard version is checked: the index reads its subject and held-out
+tables from `files/`, the benchmarks their labels. Making a version again means staging the
+raw version again.
 
 ## Run it
 
