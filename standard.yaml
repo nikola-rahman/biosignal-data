@@ -1,0 +1,42 @@
+# Rules for the standard layer (biosignal-data standardize), per dataset: what only the
+# dataset's own documentation can tell about its files. Every rule names its source and
+# quotes it in `evidence`. See src/biosignal_data/standard/rules.py.
+#
+# A dataset without an entry is converted by the general rules only
+# (src/biosignal_data/standard/discover.py).
+
+datasets:
+  - id: physionet/sleep-edfx
+    edf_annotation_files:
+      recording_suffix: -PSG.edf
+      annotation_suffix: -Hypnogram.edf
+      same_first_characters: 7  # SC4ssNE / ST7ssNJ: study, subject (ss), night (N)
+      source: https://physionet.org/content/sleep-edfx/1.0.0/
+      evidence: >-
+        The *Hypnogram.edf files contain annotations of the sleep patterns that correspond
+        to the PSGs. [...] All hypnograms were manually scored by well-trained technicians
+        (identified by the eighth letter of the hypnogram filename) [...] Files are named
+        in the form SC4ssNEO-PSG.edf where ss is the subject number, and N is the night.
+        [...] Files are named in the form ST7ssNJ0-PSG.edf where ss is the subject number,
+        and N is the night.
+      notes: >-
+        The page names no hypnogram file pattern; the first 7 characters (study, subject,
+        night) are what a PSG file and its hypnogram share. Checked on 2026-10-21
+        against version 1.0.0: 197 PSG files, 197 hypnograms, each pair one to one by the
+        first 7 characters.
+
+  - id: physionet/hmc-sleep-staging
+    edf_annotation_files:
+      recording_suffix: .edf
+      annotation_suffix: _sleepscoring.edf
+      same_first_characters: 5  # SNXXX: the recording's sequence number
+      source: https://physionet.org/content/hmc-sleep-staging/1.1/
+      evidence: >-
+        Night recordings are identified by a sequence number SNXXX (e.g. SN001 identifies
+        recording 001). Three different files are available for each recording using the
+        following notation: SNXXX.edf: Contains the PSG signals [...] SNXXX_sleepscoring.edf:
+        Contains the corresponding hypnogram annotations and lights-off/on markers* in EDF+
+        format
+      notes: >-
+        Checked on 2026-10-21 against version 1.1: 151 recordings, 151 _sleepscoring.edf
+        files, each pair one to one by the first 5 characters.

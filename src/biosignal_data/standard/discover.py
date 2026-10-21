@@ -24,7 +24,10 @@ import posixpath
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from biosignal_data.standard.rules import EdfAnnotationFiles
 
 EDF_SUFFIXES = (".edf", ".bdf")
 LISTS = ("RECORDS", "ANNOTATORS")
@@ -53,6 +56,7 @@ class Unit:
     path: str  # WFDB: the record name (header without .hea); EDF: the file
     annotations: tuple[str, ...]  # WFDB annotation files of the record
     listed_annotators: bool  # annotators from ANNOTATORS: a file that does not read fails
+    edf_annotations: tuple[str, ...] = ()  # EDF+ annotation files (standard.yaml rule)
 
 
 @dataclass(frozen=True)
@@ -69,9 +73,12 @@ def discover(
     paths: Iterable[str],
     read_text: Callable[[str], str],
     read_texts: Callable[[list[str]], dict[str, str]],
+    edf_annotation_files: EdfAnnotationFiles | None = None,
 ) -> Discovery:
     """`paths`: every file of the raw version. `read_text`: the text of one of them;
-    `read_texts`: the texts of many (the WFDB headers), read at the same time."""
+    `read_texts`: the texts of many (the WFDB headers), read at the same time.
+    `edf_annotation_files`: the dataset's rule (standard.yaml) for EDF+ files that hold
+    only the annotations of an EDF recording."""
     paths = set(paths)
     lists = sorted(p for p in paths if posixpath.basename(p) in LISTS)
     annotators = {
@@ -120,6 +127,8 @@ def discover(
         units[unit.id] = unit
     files = _signal_files(units, read_texts)
     units = _without_signal_files(units, files)
+    if edf_annotation_files is not None:
+        units = _with_edf_annotations(units, paths, edf_annotation_files, problems)
     views = _views(units, files)
     kept = [u for u in units.values() if u.id not in views]
     return Discovery(kept, lists, frozenset(annotators), problems, views)
@@ -153,6 +162,47 @@ def _signal_files(
     }
 
 
+def _with_edf_annotations(
+    units: dict[str, Unit], paths: set[str], rule: EdfAnnotationFiles, problems: list[str]
+) -> dict[str, Unit]:
+    """Each EDF+ annotation file to the one recording the dataset's rule pairs it with; a
+    file the rule pairs with no or several recordings is reported and left out."""
+    n = rule.same_first_characters
+
+    def key(path: str) -> tuple[str, str]:
+        return posixpath.dirname(path), posixpath.basename(path)[:n]
+
+    recordings: dict[tuple[str, str], list[str]] = {}
+    for unit_id, unit in units.items():
+        path = unit.path
+        if (
+            unit.format == "edf"
+            and path.endswith(rule.recording_suffix)
+            and not path.endswith(rule.annotation_suffix)  # hmc: .edf and _sleepscoring.edf
+        ):
+            recordings.setdefault(key(unit.path), []).append(unit_id)
+    found: dict[str, list[str]] = {}
+    for path in sorted(p for p in paths if p.endswith(rule.annotation_suffix)):
+        owners = recordings.get(key(path), [])
+        if len(owners) == 1:
+            found.setdefault(owners[0], []).append(path)
+        else:
+            problems.append(
+                f"{path}: the standard.yaml rule pairs it with {len(owners)} recordings "
+                f"({', '.join(owners) or 'none'}); left out"
+            )
+    annotation_files = {p for ps in found.values() for p in ps}
+    kept = {}
+    for unit_id, unit in units.items():
+        if unit.path in annotation_files:  # without RECORDS, such a file is no recording
+            continue
+        kept[unit_id] = Unit(
+            unit.id, unit.format, unit.path, unit.annotations, unit.listed_annotators,
+            tuple(found.get(unit_id, ())),
+        )  # fmt: skip
+    return kept
+
+
 def _without_signal_files(
     units: dict[str, Unit], files: dict[str, list[str] | None]
 ) -> dict[str, Unit]:
@@ -163,7 +213,10 @@ def _without_signal_files(
     kept = {}
     for unit_id, unit in units.items():
         annotations = tuple(a for a in unit.annotations if a not in signals)
-        kept[unit_id] = Unit(unit.id, unit.format, unit.path, annotations, unit.listed_annotators)
+        kept[unit_id] = Unit(
+            unit.id, unit.format, unit.path, annotations, unit.listed_annotators,
+            unit.edf_annotations,
+        )  # fmt: skip
     return kept
 
 

@@ -40,8 +40,11 @@ from biosignal_data.standard import blocks, tables
 from biosignal_data.standard.discover import Discovery, Unit, discover, may_be_annotations
 from biosignal_data.standard.layout import DONE, TABLES, StandardLocation
 from biosignal_data.standard.manifest import NotConverted, StandardManifest
+from biosignal_data.standard.rules import StandardRules
 from biosignal_data.standard.sources import (
     EdfSource,
+    Event,
+    Fetch,
     Source,
     UnsupportedError,
     WfdbSource,
@@ -108,11 +111,13 @@ def plan_standard(
     raw_root: str = "raw",
     replace: bool = False,
     raw_store: Store | None = None,
+    rules: StandardRules | None = None,
 ) -> StandardPlan:
     """Find the recordings of a complete raw version, and those an earlier run finished.
     `replace`: a complete version is made again (by `convert`, which first removes it)
     instead of raising `AlreadyStandard`. `raw_store`: where the raw version is, when not in
-    `store` (e.g. staged on local disk from the source's archive)."""
+    `store` (e.g. staged on local disk from the source's archive). `rules`: the per-dataset
+    rules (standard.yaml in the repository when None)."""
     raw_store = store if raw_store is None else raw_store
     raw_location = VersionLocation(dataset_id, version, raw_root)
     data = raw_store.get_bytes(raw_location.manifest_key)
@@ -134,7 +139,9 @@ def plan_standard(
         with ThreadPoolExecutor(max_workers=HEADER_READS) as pool:
             return dict(zip(paths, pool.map(read_text, paths), strict=True))
 
-    discovery = discover((f.path for f in raw.files), read_text, read_texts)
+    mine = (rules or StandardRules.load()).get(dataset_id)
+    edf_rule = mine.edf_annotation_files if mine is not None else None
+    discovery = discover((f.path for f in raw.files), read_text, read_texts, edf_rule)
     done = set() if complete else set(_done_parts(store, location))
     plan = StandardPlan(
         raw, hashlib.sha256(data).hexdigest(), location, discovery, done, replace=complete,
@@ -326,6 +333,11 @@ def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -
                         raise
                     reason = f"tried as a WFDB annotation file: {type(exc).__name__}: {exc}"
                     skipped.append(NotConverted(path=path, reason=reason))
+            for path in unit.edf_annotations:
+                found, odd = _edf_annotations(path, fetch, source)
+                events += found
+                problems += odd
+                used.append(path)
             encoded: list[tuple[dict[str, Any], bytes]] = []
             sha256: dict[tuple[str, int], str] = {}
             if source.groups:
@@ -345,6 +357,24 @@ def convert_unit(plan: StandardPlan, store: Store, unit: Unit, work_dir: Path) -
             source.close()
     finally:
         shutil.rmtree(folder, ignore_errors=True)
+
+
+def _edf_annotations(path: str, fetch: Fetch, recording: Source) -> tuple[list[Event], list[str]]:
+    """The events of an EDF+ file that holds only the annotations of `recording` (paired by
+    a standard.yaml rule), and its problems. A file with signals, or one that does not start
+    when the recording starts, fails the recording: the rule paired the wrong files."""
+    annotations = EdfSource(path, fetch)
+    try:
+        if annotations.groups:
+            raise ValueError(f"{path}: has signals, so it is not an annotation file")
+        if annotations.start_time != recording.start_time:
+            raise ValueError(
+                f"{path}: starts at {annotations.start_time}, its recording at "
+                f"{recording.start_time}"
+            )
+        return list(annotations.events), list(annotations.problems)
+    finally:
+        annotations.close()
 
 
 def _record_batch(

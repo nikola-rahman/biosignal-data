@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +19,7 @@ from biosignal_data.standard.convert import (
     plan_standard,
 )
 from biosignal_data.standard.discover import discover
+from biosignal_data.standard.rules import DatasetRules, EdfAnnotationFiles, StandardRules
 from biosignal_data.storage.stores import LocalStore
 from tests.conftest import FakeFetcher, make_dataset
 
@@ -632,3 +634,95 @@ def test_each_module_imports_first_in_a_fresh_interpreter(module: str) -> None:
         [sys.executable, "-c", f"import {module}"], check=False, capture_output=True, text=True
     )
     assert done.returncode == 0, done.stderr
+
+
+def _psg(path: Path, start: datetime) -> None:
+    w = pyedflib.EdfWriter(str(path), 1, file_type=pyedflib.FILETYPE_EDF)
+    w.setSignalHeaders(
+        [{"label": "EEG Fpz-Cz", "dimension": "uV", "sample_frequency": 100,
+          "physical_min": -3276.8, "physical_max": 3276.7,
+          "digital_min": -32768, "digital_max": 32767}]
+    )  # fmt: skip
+    w.setStartdatetime(start)
+    w.writeSamples([RNG.integers(-1000, 1000, 100 * 90).astype(np.int32)], digital=True)
+    w.close()
+
+
+def _hypnogram(path: Path, start: datetime) -> None:
+    import edfio  # noqa: PLC0415
+
+    stages = [edfio.EdfAnnotation(0, 30, "Sleep stage W"),
+              edfio.EdfAnnotation(30, 60, "Sleep stage 1")]  # fmt: skip
+    edf = edfio.Edf([], annotations=stages, starttime=start.time())
+    edf.startdate = start.date()
+    edf.write(path)
+
+
+EDFX_RULES = StandardRules(
+    datasets=[
+        DatasetRules(
+            id="physionet/sleep-edfx",
+            edf_annotation_files=EdfAnnotationFiles(
+                recording_suffix="-PSG.edf", annotation_suffix="-Hypnogram.edf",
+                same_first_characters=7, source="https://physionet.org/content/sleep-edfx/1.0.0/",
+                evidence="Files are named in the form SC4ssNEO-PSG.edf",
+            ),
+        )
+    ]
+)  # fmt: skip
+
+
+def _sleep_edfx(store: LocalStore, tmp_path: Path, hypnogram_start: datetime) -> None:
+    night = datetime(1989, 4, 24, 16, 13)
+    _psg(tmp_path / "psg.edf", night)
+    _hypnogram(tmp_path / "hyp.edf", hypnogram_start)
+    files = {
+        "RECORDS": b"SC4001E0-PSG.edf\n",
+        "SC4001E0-PSG.edf": (tmp_path / "psg.edf").read_bytes(),
+        "SC4001EC-Hypnogram.edf": (tmp_path / "hyp.edf").read_bytes(),
+        "SC4003EC-Hypnogram.edf": (tmp_path / "hyp.edf").read_bytes(),  # no such PSG
+    }
+    dataset = make_dataset(id="physionet/sleep-edfx")
+    ingest(dataset, store, fetcher=FakeFetcher(dataset, files), workers=2)
+
+
+def test_hypnograms_are_the_events_of_the_psg_the_dataset_rule_pairs_them_with(
+    store: LocalStore, tmp_path: Path
+) -> None:
+    """sleep-edfx: SC4001EC-Hypnogram.edf (annotations only) belongs to SC4001E0-PSG.edf."""
+    _sleep_edfx(store, tmp_path, datetime(1989, 4, 24, 16, 13))
+    plan = plan_standard(store, "physionet/sleep-edfx", "1.0.0", rules=EDFX_RULES)
+    assert {u.id: u.edf_annotations for u in plan.units} == {
+        "SC4001E0-PSG": ("SC4001EC-Hypnogram.edf",)
+    }
+    assert plan.discovery.problems == [
+        "SC4003EC-Hypnogram.edf: the standard.yaml rule pairs it with 0 recordings (none); left out"
+    ]
+    report = convert(plan, store, workers=1, part_bytes=1, work_dir=tmp_path / "work")
+    assert report.complete
+    ds = StandardDataset.open(store, "physionet/sleep-edfx", "1.0.0")
+    events = [e for e in ds.events.to_pylist() if e["file"] == "SC4001EC-Hypnogram.edf"]
+    assert [(e["recording_id"], e["onset_s"], e["duration_s"], e["label"]) for e in events] == [
+        ("SC4001E0-PSG", 0.0, 30.0, "Sleep stage W"),
+        ("SC4001E0-PSG", 30.0, 60.0, "Sleep stage 1"),
+    ]
+    recording = ds.recordings.to_pylist()[0]
+    assert "SC4001EC-Hypnogram.edf" in recording["source_files"]
+
+
+def test_a_paired_annotation_file_that_starts_at_another_time_fails_its_recording(
+    store: LocalStore, tmp_path: Path
+) -> None:
+    _sleep_edfx(store, tmp_path, datetime(1989, 4, 24, 16, 14))
+    plan = plan_standard(store, "physionet/sleep-edfx", "1.0.0", rules=EDFX_RULES)
+    report = convert(plan, store, workers=1, part_bytes=1, work_dir=tmp_path / "work")
+    assert list(report.failed) == ["SC4001E0-PSG"]
+    assert (
+        "starts at 1989-04-24 16:14:00, its recording at 1989-04-24 16:13:00"
+        in (report.failed["SC4001E0-PSG"])
+    )
+
+
+def test_standard_yaml_is_valid() -> None:
+    rules = StandardRules.load()
+    assert rules.get("physionet/sleep-edfx") is not None
