@@ -521,6 +521,38 @@ def test_a_wfdb_record_shorter_than_its_header_is_read_as_far_as_it_goes(tmp_pat
     ]
 
 
+def test_a_record_name_with_a_folder_the_source_lacks_is_read_next_to_the_header(
+    tmp_path: Path,
+) -> None:
+    """ptb-xl-plus 1.0.1 median beats: `ge_median_beats_wfdb/00001_medians` in the header, the
+    files next to it."""
+    from biosignal_data.standard.sources import WfdbSource  # noqa: PLC0415
+
+    folder = tmp_path / "median_beats" / "12sl"
+    folder.mkdir(parents=True)
+    held = RNG.integers(-2000, 2000, (600, 2)).astype(np.int32)
+    held.astype("<i4").tofile(folder / "00001_medians.dat")
+    header = (
+        "ge/00001_medians 2 500 600\n"
+        "ge/00001_medians.dat 32 1000.5(-7)/mV 32 0 0 0 0 I\n"
+        "ge/00001_medians.dat 32 1000.5(-7)/mV 32 0 0 0 0 II\n"
+    )
+    (folder / "00001_medians.hea").write_text(header)
+    record = "median_beats/12sl/00001_medians"
+    paths = [f"{record}.hea", f"{record}.dat"]
+    found = discover(paths, lambda p: "", lambda ps: dict.fromkeys(ps, header))
+    assert [u.id for u in found.units] == [record]
+    source = WfdbSource(record, lambda p: tmp_path / p, lambda p: True)
+    assert source.header == header  # kept as written
+    assert source.files == [f"{record}.hea", f"{record}.dat"]
+    assert source.groups[0].channels[0].offset == pytest.approx(7 / 1000.5)
+    np.testing.assert_array_equal(source.read(0, 0, 600), held.T)
+    assert source.problems == [
+        f"{record}.hea: the record line names 'ge/00001_medians', in a folder 'ge' the source "
+        "does not have; read as the record and signal files next to the header"
+    ]
+
+
 def test_a_view_is_listed_with_its_records_not_stored_twice(
     store: LocalStore, tmp_path: Path
 ) -> None:

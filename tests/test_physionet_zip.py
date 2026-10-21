@@ -70,6 +70,21 @@ def test_a_staged_zip_converts_exactly_and_keeps_the_raw_manifest(
     assert {f["path"] for f in json.loads(raw_manifest)["files"]} == set(FILES)
 
 
+def test_folders_next_to_the_version_folder_are_left_out(mirror: object, tmp_path: Path) -> None:
+    """incartdb 1.0.0: `.old-headers/I01.hea` next to the version folder, with the 2008
+    header that the version replaced."""
+    body = _zip(FILES)
+    with zipfile.ZipFile(out := io.BytesIO(body), "a") as z:
+        z.writestr(".old-headers/r1.hea", b"r1 1 100 200\nr1.dat 16 0 16 0 0 0 0 ECG\n")
+    mirror.put_object(  # type: ignore[attr-defined]
+        Bucket="physionet-open", Key="mitdb/mitdb-1.0.0.zip", Body=out.getvalue()
+    )
+    staged = physionet_zip.stage(DATASET, "1.0.0", tmp_path / "work", connections=2)
+    hea = next(f for f in staged.manifest.files if f.path == "r1.hea")
+    assert hea.sha256 == hashlib.sha256(FILES["r1.hea"]).hexdigest()
+    assert sorted(f.path for f in staged.manifest.files) == ["RECORDS", "r1.dat", "r1.hea"]
+
+
 def test_files_added_after_the_zip_come_from_the_version_folder(
     mirror: object, tmp_path: Path
 ) -> None:

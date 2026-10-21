@@ -170,11 +170,20 @@ def _extract(
     (and the ZIP's CRC-32); returns the entries and the members SHA256SUMS.txt does not list."""
     entries, extra = [], []
     with zipfile.ZipFile(archive) as z:
-        for info in (i for i in z.infolist() if not i.is_dir()):
-            parts = info.filename.split("/", 1)
-            if len(parts) != 2:
-                raise ZipCheckError(f"{key}: {info.filename} is not below the version folder")
-            path = parts[1]
+        members = [i for i in z.infolist() if not i.is_dir()]
+        top = _version_folder(key, [i.filename for i in members], sums)
+        outside = [i.filename for i in members if not i.filename.startswith(top)]
+        if outside:
+            log.warning(
+                "%s: %d files are outside the version folder %r (not part of the published "
+                "version; left out), e.g. %s", key, len(outside), top, outside[0],
+            )  # fmt: skip
+        written: set[str] = set()
+        for info in (i for i in members if i.filename.startswith(top)):
+            path = info.filename[len(top) :]
+            if path in written:
+                raise ZipCheckError(f"{key}: {path} is in the ZIP twice")
+            written.add(path)
             target = root / location.data_key(path)
             target.parent.mkdir(parents=True, exist_ok=True)
             sha, md5 = hashlib.sha256(), hashlib.md5()  # noqa: S324 - recorded, not for security
@@ -195,6 +204,23 @@ def _extract(
                 )
             )  # fmt: skip
     return entries, extra
+
+
+def _version_folder(key: str, names: list[str], sums: dict[str, str]) -> str:
+    """The folder the version's files are in (`<folder>/`): the top folder that holds the
+    files SHA256SUMS.txt lists. Other folders next to it (incartdb 1.0.0: `.old-headers/`,
+    the 2008 headers that the version replaced, with the same file names) are not part of
+    the published version."""
+    listed: dict[str, int] = {}
+    for name in names:
+        top, sep, rest = name.partition("/")
+        if sep:
+            listed[top + "/"] = listed.get(top + "/", 0) + (rest in sums)
+    best = max(listed.values(), default=0)
+    tops = [t for t, n in listed.items() if n == best]
+    if best == 0 or len(tops) != 1:
+        raise ZipCheckError(f"{key}: no single folder holds the files of {SUMS} ({listed})")
+    return tops[0]
 
 
 def _etag(path: Path) -> str:

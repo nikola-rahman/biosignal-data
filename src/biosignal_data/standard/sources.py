@@ -20,6 +20,8 @@ from typing import Any, Protocol
 
 import numpy as np
 
+from biosignal_data.standard.discover import header_as_read
+
 Fetch = Callable[[str], Path]
 Available = Callable[[str], bool]  # whether a raw file is in the raw version
 
@@ -104,6 +106,14 @@ class WfdbSource:
         self._wfdb = wfdb
         header_path = fetch(record + ".hea")
         self.header = header_path.read_text(encoding="latin-1")
+        self.problems = []
+        as_read, problem = header_as_read(self.header, record)
+        if problem is not None:
+            # The header as read goes next to the signal files; the source's header is kept
+            # as written (source_header) and the change reported.
+            header_path = header_path.with_name(header_path.stem + "_as_read.hea")
+            header_path.write_text(as_read, encoding="latin-1")
+            self.problems.append(problem)
         head = wfdb.rdheader(str(header_path.with_suffix("")))
         if getattr(head, "seg_name", None):
             raise UnsupportedError("multi-segment WFDB record (not converted yet)")
@@ -111,7 +121,6 @@ class WfdbSource:
         # has one whose signal files the source does not publish (only its header).
         folder = posixpath.dirname(record)
         signal_files = sorted({posixpath.join(folder, f) for f in head.file_name or []})
-        self.problems = []
         unpublished = [p for p in signal_files if not available(p)]
         if unpublished:
             self.problems.append(

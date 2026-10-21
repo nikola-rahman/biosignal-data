@@ -144,7 +144,10 @@ def _views(
 ) -> dict[str, tuple[Unit, tuple[str, ...]]]:
     wfdb = {u.path: u for u in units.values() if u.format == "wfdb"}
     headers = read_texts([path + ".hea" for path in wfdb]) if wfdb else {}
-    files = {path: signal_files(headers[path + ".hea"], posixpath.dirname(path)) for path in wfdb}
+    files = {
+        path: signal_files(header_as_read(headers[path + ".hea"], path)[0], posixpath.dirname(path))
+        for path in wfdb
+    }
     # A signal file "belongs" to a record that uses it and no other file.
     owner = {fs[0]: path for path, fs in files.items() if fs is not None and len(fs) == 1}
     views = {}
@@ -152,6 +155,42 @@ def _views(
         if fs is not None and len(fs) > 1 and all(f in owner and owner[f] != path for f in fs):
             views[wfdb[path].id] = (wfdb[path], tuple(sorted(wfdb[owner[f]].id for f in fs)))
     return views
+
+
+def header_as_read(header: str, record: str) -> tuple[str, str | None]:
+    """The header with a folder removed from its record name and signal file names, when the
+    record line names `<folder>/<record name>` (ptb-xl-plus 1.0.1 median beats:
+    `ge_median_beats_wfdb/00001_medians`, a folder the source does not have; the signal
+    files are next to the header). WFDB reads `a/b` as record `a` with segments `b`, so such
+    a header does not parse. Returns the text to read and a problem to report (None when
+    the header is used as written)."""
+    lines = header.splitlines(keepends=True)
+    used = [i for i, ln in enumerate(lines) if ln.strip() and not ln.lstrip().startswith("#")]
+    first = used[0] if used else None
+    if first is None:
+        return header, None
+    name = lines[first].split()[0]
+    base = posixpath.basename(record)
+    folder, _, last = name.rpartition("/")
+    if not folder or last != base:
+        return header, None
+    prefix = folder + "/"
+    lines[first] = lines[first].replace(name, base, 1)
+    n_sig = int(lines[first].split()[1]) if len(lines[first].split()) > 1 else 0
+    signal_line = 0
+    for i in range(first + 1, len(lines)):
+        if signal_line == n_sig:
+            break
+        if not lines[i].strip() or lines[i].lstrip().startswith("#"):
+            continue
+        file = lines[i].split()[0]
+        if file.startswith(prefix):
+            lines[i] = lines[i].replace(file, file[len(prefix) :], 1)
+        signal_line += 1
+    return "".join(lines), (
+        f"{record}.hea: the record line names {name!r}, in a folder {folder!r} the source "
+        "does not have; read as the record and signal files next to the header"
+    )
 
 
 def signal_files(header: str, folder: str) -> list[str] | None:
