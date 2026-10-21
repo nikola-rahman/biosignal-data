@@ -87,3 +87,25 @@ def test_every_vital_file_is_a_recording() -> None:
     assert [(u.id, u.format, u.annotations) for u in found.units] == [
         ("vital_files/0001", "vital", ()), ("vital_files/0002", "vital", ()),
     ]  # fmt: skip
+
+
+def test_a_vital_file_with_nan_gaps_converts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Float tracks hold NaN where no record is: the checks (two readers, decoded blocks)
+    compare stored bytes, so NaN gaps are not a difference."""
+    from biosignal_data.standard import blocks  # noqa: PLC0415
+
+    vf = _file()
+    (tmp_path / "0001.vital").write_bytes(b"")
+    monkeypatch.setattr(vitaldb, "VitalFile", lambda path: vf)
+
+    def source() -> sources.VitalSource:
+        return sources.VitalSource("vital_files/0001.vital", lambda p: tmp_path / "0001.vital")
+
+    found, sha256 = blocks.encode_source("vital_files/0001", source(), source())
+    assert len(sha256) == 3 and found
+    other = source()
+    other._arrays[0][1, 50] = 1.5  # one sample of the float track differs
+    with pytest.raises(blocks.MismatchError, match="two readers of the file differ"):
+        blocks.encode_source("vital_files/0001", source(), other)

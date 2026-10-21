@@ -109,6 +109,17 @@ def checksum(blob: bytes) -> int:
     return zlib.crc32(blob)
 
 
+def _identical(a: np.ndarray, b: np.ndarray, dtype: np.dtype[Any]) -> bool:
+    """The same shape and the same stored bytes in `dtype`: NaN equals NaN (vitaldb's float
+    tracks have NaN gaps; np.array_equal calls them different), any other difference does
+    not."""
+    little = dtype.newbyteorder("<")
+    return a.shape == b.shape and (
+        np.ascontiguousarray(a, dtype=little).tobytes()
+        == np.ascontiguousarray(b, dtype=little).tobytes()
+    )
+
+
 def encode_source(
     recording_id: str, source: Source, check: Source
 ) -> tuple[list[tuple[dict[str, Any], bytes]], dict[tuple[str, int], str]]:
@@ -127,10 +138,10 @@ def encode_source(
                 raise MismatchError(
                     f"{group.name}: the source gave {data.shape} for {start}:{stop}"
                 )
-            if not np.array_equal(data, check.read(index, start, stop)):
+            if not _identical(data, check.read(index, start, stop), group.dtype):
                 raise MismatchError(f"{group.name} {start}:{stop}: two readers of the file differ")
             blob = encode(data)
-            if not np.array_equal(decode(blob, n, stop - start, group.dtype.str), data):
+            if not _identical(decode(blob, n, stop - start, group.dtype.str), data, group.dtype):
                 raise MismatchError(f"{group.name} {start}:{stop}: decoded differs from source")
             little = data.astype(group.dtype.newbyteorder("<"), copy=False)
             for i in range(n):
