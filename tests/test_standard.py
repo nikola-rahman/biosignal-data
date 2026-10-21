@@ -521,6 +521,14 @@ def test_a_wfdb_record_shorter_than_its_header_is_read_as_far_as_it_goes(tmp_pat
     ]
 
 
+def test_a_signal_file_the_header_names_is_never_tried_as_annotations() -> None:
+    """ptbdb 1.0.0: `s0010_re.xyz` holds the Frank leads; `.xyz` looks like an annotator."""
+    header = "s 2 1000 100\ns.dat 16 2000 16 0 0 0 0 i\ns.xyz 16 2000 16 0 0 0 0 vx\n"
+    paths = ["s.hea", "s.dat", "s.xyz", "s.atr"]
+    found = discover(paths, lambda p: "", lambda ps: dict.fromkeys(ps, header))
+    assert [u.annotations for u in found.units] == [("s.atr",)]
+
+
 def test_a_record_name_with_a_folder_the_source_lacks_is_read_next_to_the_header(
     tmp_path: Path,
 ) -> None:

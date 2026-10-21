@@ -118,7 +118,9 @@ def discover(
         if unit.id in units:
             raise ValueError(f"two recordings would get the id {unit.id!r}: rename one source")
         units[unit.id] = unit
-    views = _views(units, read_texts)
+    files = _signal_files(units, read_texts)
+    units = _without_signal_files(units, files)
+    views = _views(units, files)
     kept = [u for u in units.values() if u.id not in views]
     return Discovery(kept, lists, frozenset(annotators), problems, views)
 
@@ -139,15 +141,36 @@ def _joined(entry: str, folder: str, paths: set[str]) -> list[str] | None:
     return found[0] if len(found) == 1 else None
 
 
-def _views(
+def _signal_files(
     units: dict[str, Unit], read_texts: Callable[[list[str]], dict[str, str]]
-) -> dict[str, tuple[Unit, tuple[str, ...]]]:
-    wfdb = {u.path: u for u in units.values() if u.format == "wfdb"}
+) -> dict[str, list[str] | None]:
+    """WFDB record path -> the signal files its header names (None: multi-segment)."""
+    wfdb = [u.path for u in units.values() if u.format == "wfdb"]
     headers = read_texts([path + ".hea" for path in wfdb]) if wfdb else {}
-    files = {
+    return {
         path: signal_files(header_as_read(headers[path + ".hea"], path)[0], posixpath.dirname(path))
         for path in wfdb
     }
+
+
+def _without_signal_files(
+    units: dict[str, Unit], files: dict[str, list[str] | None]
+) -> dict[str, Unit]:
+    """A file a header names as a signal file is never an annotation file (ptbdb 1.0.0:
+    `s0010_re.xyz` holds the Frank leads vx, vy, vz; read as annotations, its samples gave
+    labels)."""
+    signals = {f for fs in files.values() if fs for f in fs}
+    kept = {}
+    for unit_id, unit in units.items():
+        annotations = tuple(a for a in unit.annotations if a not in signals)
+        kept[unit_id] = Unit(unit.id, unit.format, unit.path, annotations, unit.listed_annotators)
+    return kept
+
+
+def _views(
+    units: dict[str, Unit], files: dict[str, list[str] | None]
+) -> dict[str, tuple[Unit, tuple[str, ...]]]:
+    wfdb = {u.path: u for u in units.values() if u.format == "wfdb"}
     # A signal file "belongs" to a record that uses it and no other file.
     owner = {fs[0]: path for path, fs in files.items() if fs is not None and len(fs) == 1}
     views = {}
