@@ -28,12 +28,14 @@ import hashlib
 import io
 import logging
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, BinaryIO
 
 from biosignal_data import __version__
 from biosignal_data.catalog.models import Dataset, PhysioNetSource
 from biosignal_data.fetchers.physionet import MIRROR_BUCKET, MIRROR_REGION, SUMS, parse_sha256sums
 from biosignal_data.fetchers.s3 import s3_client
+from biosignal_data.progress import Ticker
 from biosignal_data.storage.layout import MANIFEST, SUCCESS, VersionLocation
 from biosignal_data.storage.manifest import FileEntry, Manifest, utcnow
 
@@ -162,7 +164,7 @@ def _sums(
     """(client, bucket, SHA256SUMS.txt) from the public bucket, else from the version's
     access point with `keys`; None if neither has the version."""
     key = f"{slug}/{version}/{SUMS}"
-    client = s3_client(region=MIRROR_REGION, connections=connections)
+    client = s3_client(region=MIRROR_REGION, connections=max(connections, MirrorStore.header_reads))
     try:
         sums = client.get_object(Bucket=MIRROR_BUCKET, Key=key)["Body"].read()
         return client, MIRROR_BUCKET, sums
@@ -170,7 +172,9 @@ def _sums(
         pass
     if keys is None:
         return None
-    client = s3_client(region=MIRROR_REGION, connections=connections, keys=keys)
+    client = s3_client(
+        region=MIRROR_REGION, connections=max(connections, MirrorStore.header_reads), keys=keys
+    )
     for number in range(1, ACCESS_POINTS + 1):
         bucket = access_point(slug, version, number)
         try:
@@ -202,9 +206,12 @@ def mirror(
     client, bucket, sums_text = found
     sums = dict(parse_sha256sums(sums_text.decode("utf-8")))
     sizes: dict[str, int] = {}
+    listing = Ticker(f"{dataset.id} {version}: listing", len(sums))
     for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
         for item in page.get("Contents", []):
             sizes[item["Key"][len(prefix) :]] = int(item["Size"])
+        listing.add(len(page.get("Contents", [])), sum(i["Size"] for i in page.get("Contents", [])))
+    listing.finish()
     missing = sorted(set(sums) - set(sizes))
     if missing:
         raise MirrorError(
@@ -221,15 +228,22 @@ def mirror(
                 source_url=f"s3://{bucket}/{prefix}{path}",
             )
         )  # fmt: skip
-    for path in unlisted:  # not in SHA256SUMS.txt (itself, files added later): read once
+    # Not in SHA256SUMS.txt (itself, files added later): read once, HEADER_READS at a time
+    # (challenge-2020 1.0.2: 72 files, 2.8 GB, the teams' code as ZIPs).
+    reading = Ticker(f"{dataset.id} {version}: SHA-256 of files not in {SUMS}", len(unlisted))
+
+    def unlisted_entry(path: str) -> FileEntry:
         data = client.get_object(Bucket=bucket, Key=prefix + path)["Body"].read()
-        entries.append(
-            FileEntry(
-                path=path, size=len(data), sha256=hashlib.sha256(data).hexdigest(),
-                md5=hashlib.md5(data).hexdigest(),  # noqa: S324 - recorded, not for security
-                source_url=f"s3://{bucket}/{prefix}{path}",
-            )
+        reading.add(1, len(data))
+        return FileEntry(
+            path=path, size=len(data), sha256=hashlib.sha256(data).hexdigest(),
+            md5=hashlib.md5(data).hexdigest(),  # noqa: S324 - recorded, not for security
+            source_url=f"s3://{bucket}/{prefix}{path}",
         )  # fmt: skip
+
+    with ThreadPoolExecutor(max_workers=MirrorStore.header_reads) as pool:
+        entries += pool.map(unlisted_entry, unlisted)
+    reading.finish()
     if [p for p in unlisted if p != SUMS]:
         log.warning(
             "%s: %d files on the AWS copy are not in %s (their SHA-256 computed now), e.g. %s",

@@ -37,6 +37,7 @@ from typing import Any, Protocol
 import pyarrow as pa
 
 from biosignal_data import __version__
+from biosignal_data.progress import Ticker
 from biosignal_data.read.raw import RawDataset
 from biosignal_data.standard import blocks, kept_files, tables
 from biosignal_data.standard.discover import Discovery, Unit, discover, may_be_annotations
@@ -141,9 +142,15 @@ def plan_standard(
         )
     raw = RawDataset(raw_store, raw_location, Manifest.from_json(data), Path())
 
+    headers = sum(1 for f in raw.files if f.path.endswith(".hea"))
+    reading = Ticker(f"{dataset_id} {version}: reading headers", headers or None)
+
     def read_text(path: str) -> str:
         with raw_store.open(raw_location.data_key(path)) as f:
-            return f.read().decode("utf-8", errors="replace")
+            text = f.read().decode("utf-8", errors="replace")
+        if path.endswith(".hea"):
+            reading.add()
+        return text
 
     def read_texts(paths: list[str]) -> dict[str, str]:
         with ThreadPoolExecutor(max_workers=header_reads(raw_store)) as pool:
@@ -152,6 +159,7 @@ def plan_standard(
     mine = (rules or StandardRules.load()).get(dataset_id)
     edf_rule = mine.edf_annotation_files if mine is not None else None
     discovery = discover((f.path for f in raw.files), read_text, read_texts, edf_rule)
+    reading.finish()
     done = set() if complete else set(_done_parts(store, location))
     plan = StandardPlan(
         raw, hashlib.sha256(data).hexdigest(), location, discovery, done, replace=complete,
@@ -174,12 +182,15 @@ def _done_parts(store: Store, location: StandardLocation) -> dict[str, str]:
     keys = [k for k in store.list(location.parts_prefix) if k.endswith("/" + DONE)]
     folders = [k[len(location.parts_prefix) : -len("/" + DONE)] for k in keys]
     found: dict[str, str] = {}
+    reading = Ticker(f"{location.dataset_id}: reading finished batches", len(keys), "batches")
     with ThreadPoolExecutor(max_workers=HEADER_READS) as pool:
         for folder, data in zip(folders, pool.map(store.get_bytes, keys), strict=True):
             if data is None:
                 raise RuntimeError(f"{location.parts_prefix}{folder}: done.json vanished")
             for unit_id in json.loads(data)["units"]:
                 found[unit_id] = folder
+            reading.add()
+    reading.finish()
     return found
 
 
@@ -501,14 +512,18 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
             if blob is None:
                 raise RuntimeError(f"{part}: the {name} part is missing")
             parts[name] = tables.from_parquet(blob, name)
+        joining.add()
         return done, parts
 
     holders = _done_parts(store, location)
     missing = [u.id for u in plan.units if u.id not in holders]
     if missing:
         raise RuntimeError(f"{len(missing)} recordings are not done, e.g. {missing[0]}")
+    part_names = sorted({holders[u.id] for u in plan.units})
+    joining = Ticker(f"{location.dataset_id}: reading the parts' tables", len(part_names), "parts")
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        loaded = list(pool.map(load, sorted({holders[u.id] for u in plan.units})))
+        loaded = list(pool.map(load, part_names))
+    joining.finish()
     order = {u.id: i for i, u in enumerate(plan.units)}
     joined = {
         name: _in_unit_order(
