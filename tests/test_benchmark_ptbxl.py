@@ -68,7 +68,8 @@ def test_the_probe_chooses_on_fold_9_and_scores_fold_10() -> None:
     settings = ptbxl.PtbxlSettings(
         rate=100, tasks=["all"], rows=2, read_threads=1, probe_l2=[1e-3, 1.0], probe_steps=50,
         finetune_epochs=1, finetune_learning_rate=1e-3, finetune_weight_decay=0.0,
-        finetune_examples_per_step=8, seed=0,
+        finetune_examples_per_step=8, finetune_discriminative_factor=0.1,
+        finetune_lower_blocks_fraction=0.25, finetune_crop_s=None, seed=0,
     )  # fmt: skip
     logged: list[dict[str, float]] = []
     scores = ptbxl.probe(features, y, folds, settings, logged.append, "p")
@@ -88,7 +89,8 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model() -> None:
     settings = ptbxl.PtbxlSettings(
         rate=100, tasks=["diagnostic"], rows=2, read_threads=1, probe_l2=[1.0], probe_steps=10,
         finetune_epochs=2, finetune_learning_rate=1e-3, finetune_weight_decay=0.0,
-        finetune_examples_per_step=4, seed=0,
+        finetune_examples_per_step=4, finetune_discriminative_factor=0.1,
+        finetune_lower_blocks_fraction=0.25, finetune_crop_s=2.5, seed=0,
     )  # fmt: skip
     device = torch.device("cpu")
     logged: list[dict[str, float]] = []
@@ -107,3 +109,38 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model() -> None:
     features = ptbxl.embed(Encoder(config), records.examples, 256, 2, device, logged.append, "e")
     assert features.shape == (24, 32) and np.isfinite(features).all()
     assert logged[-1]["embed/e/batches"] == logged[-1]["embed/e/of"]
+
+
+def test_layer_dependent_learning_rates_cover_every_weight_a_task_uses() -> None:
+    config = ModelConfig(
+        samples_per_token=50, max_channels=4, width=32, layers=8, heads=4, feed_forward=64,
+        min_wavelength_s=0.01, max_wavelength_s=1000.0, attention="dense",
+    )  # fmt: skip
+    model, head = Encoder(config), torch.nn.Linear(32, 3)
+    groups = ptbxl.parameter_groups(model, head, 1e-3, 0.1, 0.25)
+    assert [g["lr"] for g in groups] == pytest.approx([1e-3, 1e-4, 1e-5])
+    ids = [{id(p) for p in g["params"]} for g in groups]
+    used = {id(p) for p in head.parameters()} | {
+        id(p) for n, p in model.named_parameters() if not n.startswith("head.")
+    }
+    assert set.union(*ids) == used and sum(map(len, ids)) == len(used)  # each once
+    lower = {id(p) for b in model.blocks[:2] for p in b.parameters()} | {id(model.hidden)}
+    assert lower <= ids[2] and not lower & ids[1]  # 2 of 8 blocks, with the embedding
+
+
+def test_crops_cover_a_record_without_overlap() -> None:
+    example = _records([["NORM"]], [1]).examples[0]  # 10 s at 100 Hz
+    crops = ptbxl._crops(example, 2.5)
+    assert len(crops) == 4 and all(len(s.values) == 250 for c in crops for s in c.signals)
+    np.testing.assert_array_equal(
+        np.concatenate([c.signals[0].values for c in crops]), example.signals[0].values
+    )
+    import random  # noqa: PLC0415
+
+    crop = ptbxl._random_crop(example, 2.5, random.Random(0))  # noqa: S311 - not secret
+    values = example.signals[0].values
+    start = int(np.flatnonzero(values == crop.signals[0].values[0])[0])
+    np.testing.assert_array_equal(crop.signals[0].values, values[start : start + 250])
+    np.testing.assert_array_equal(
+        crop.signals[1].values, example.signals[1].values[start : start + 250]
+    )

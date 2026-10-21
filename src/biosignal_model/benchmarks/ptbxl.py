@@ -16,9 +16,10 @@ with both classes there. The paper's main tables use the 100 Hz records (`rate: 
 `rate: 500` uses the original 500 Hz records, a different input from the published one.
 
 For one checkpoint and each task: `finetune` (the pretrained encoder and a linear head,
-every weight trained on folds 1-8, the epoch chosen on fold 9), `supervised` (the same from
-random weights), and `probe` / `random` (a logistic regression per label on the frozen
-encoder's mean feature, its L2 chosen on fold 9). Folds 9 and 10 are held out of
+every weight trained on folds 1-8 with layer-dependent learning rates, the epoch chosen on
+fold 9; the recipe of arXiv 2509.25095 when its settings are used), `supervised` (the same
+from random weights, one learning rate), and `probe` / `random` (a logistic regression per
+label on the frozen encoder's mean feature, its L2 chosen on fold 9). Folds 9 and 10 are held out of
 pretraining (index.yaml).
 """
 
@@ -62,9 +63,21 @@ class PtbxlSettings(BaseModel):
     probe_l2: list[float]
     probe_steps: int
     finetune_epochs: int  # the best epoch on fold 9 is the one scored
-    finetune_learning_rate: float
+    finetune_learning_rate: float  # of the head; the encoder's parts get lower ones
     finetune_weight_decay: float
     finetune_examples_per_step: int
+    # Layer-dependent learning rates, as the ECG foundation model benchmark (arXiv 2509.25095,
+    # section 3.3; github.com/AI4HealthUOL/ecg-fm-benchmarking, fm_ecg.py get_params): the
+    # encoder's upper part trains at the head's rate x factor, its lower part (the input
+    # embedding and the first blocks) at x factor^2.
+    # Training from random weights uses one rate for all (their template_model.py).
+    finetune_discriminative_factor: float
+    finetune_lower_blocks_fraction: float  # of the blocks in the lower part (ECG-JEPA: 3/12)
+    # Each training example is a random crop of this length, drawn again every epoch; a
+    # validation or test record is scored as the mean probability of its non-overlapping
+    # crops (their main_lite.py: input-size, stride-fraction-valtest 1, aggregate by mean).
+    # None: the whole record.
+    finetune_crop_s: float | None
     seed: int
 
 
@@ -259,8 +272,9 @@ def end_to_end(
     config: ModelConfig, records: Records, y: np.ndarray, max_tokens: int, s: PtbxlSettings,
     device: torch.device, start: dict[str, torch.Tensor] | None, log: Log, prefix: str,
 ) -> dict[str, float]:  # fmt: skip
-    """The encoder and a linear head, every weight trained on folds 1-8; the epoch with the
-    best macro-AUC on fold 9 is scored on fold 10. `start`: pretrained weights, or None.
+    """The encoder and a linear head on its mean feature, every weight trained on folds 1-8
+    (layer-dependent learning rates and crops: see PtbxlSettings); the epoch with the best
+    macro-AUC on fold 9 is scored on fold 10. `start`: pretrained weights, or None.
     Logged under `prefix`: the training loss every LOG_EVERY_STEPS steps, and per epoch its
     mean training loss, fold-9 macro-AUC, time and speed; fold 10 only for a chosen epoch."""
     torch.manual_seed(s.seed)
@@ -268,24 +282,17 @@ def end_to_end(
     if start is not None:
         model.load_state_dict(start)
     head = torch.nn.Linear(config.width, y.shape[1]).to(device)
-    optimizer = torch.optim.AdamW(
-        [*model.parameters(), *head.parameters()],
-        lr=s.finetune_learning_rate, weight_decay=s.finetune_weight_decay,
-    )  # fmt: skip
+    factor = s.finetune_discriminative_factor if start is not None else 1.0
+    groups = parameter_groups(model, head, s.finetune_learning_rate, factor,
+                              s.finetune_lower_blocks_fraction)  # fmt: skip
+    optimizer = torch.optim.AdamW(groups, weight_decay=s.finetune_weight_decay)
     packer = _packer(config, max_tokens, s.rows)
     train = [i for i in range(len(records.ids)) if records.folds[i] in TRAIN]
     rng = random.Random(s.seed)  # noqa: S311 - not secret
 
     def predict(indices: list[int]) -> np.ndarray:
-        model.eval()
-        out = []
-        with torch.no_grad():
-            for ids in _batches(len(indices), packer, records.examples, s.rows):
-                chosen = [records.examples[indices[i]] for i in ids]
-                out.append(
-                    torch.sigmoid(head(_pooled(model, chosen, packer, device))).float().cpu()
-                )
-        return torch.cat(out).numpy()
+        examples = [records.examples[i] for i in indices]
+        return _predict(model, head, examples, s.finetune_crop_s, packer, s.rows, device)
 
     val = [i for i in range(len(records.ids)) if records.folds[i] in VALIDATION]
     test = [i for i in range(len(records.ids)) if records.folds[i] in TEST]
@@ -301,7 +308,8 @@ def end_to_end(
         started, losses, window = time.monotonic(), [], []
         for k in range(0, len(train), s.finetune_examples_per_step):
             ids = train[k : k + s.finetune_examples_per_step]
-            pooled = _pooled(model, [records.examples[i] for i in ids], packer, device)
+            chosen = [_random_crop(records.examples[i], s.finetune_crop_s, rng) for i in ids]
+            pooled = _pooled(model, chosen, packer, device)
             target = torch.from_numpy(y[ids]).to(device)
             loss = F.binary_cross_entropy_with_logits(head(pooled), target)
             optimizer.zero_grad(set_to_none=True)
@@ -334,6 +342,78 @@ def end_to_end(
         log(record)
     return {"macro_auc": best_test, "labels": float(labels_n), "epoch": float(best_epoch),
             "validation_macro_auc": best_val}  # fmt: skip
+
+
+@torch.no_grad()
+def _predict(
+    model: Encoder, head: torch.nn.Module, examples: list[Example], crop_s: float | None,
+    packer: Packer, rows: int, device: torch.device,
+) -> np.ndarray:  # fmt: skip
+    """The probabilities of each example: the mean over its crops."""
+    model.eval()
+    crops, owner = [], []
+    for n, example in enumerate(examples):
+        for c in _crops(example, crop_s):
+            crops.append(c)
+            owner.append(n)
+    out = []
+    for ids in _batches(len(crops), packer, crops, rows):
+        chosen = [crops[i] for i in ids]
+        out.append(torch.sigmoid(head(_pooled(model, chosen, packer, device))).float().cpu())
+    p = torch.cat(out).numpy()
+    sums = np.zeros((len(examples), p.shape[1]))
+    np.add.at(sums, owner, p)
+    return sums / np.bincount(owner, minlength=len(examples))[:, None]
+
+
+def parameter_groups(
+    model: Encoder, head: torch.nn.Module, lr: float, factor: float, lower_fraction: float
+) -> list[dict[str, Any]]:
+    """AdamW groups: the head at `lr`; the encoder's upper blocks and final norm at
+    lr x factor; its input embedding and lowest blocks (`lower_fraction` of them, rounded) at
+    lr x factor^2. The pretraining head (`model.head`) is not used by a task and left out."""
+    lower_blocks = round(len(model.blocks) * lower_fraction)
+    embedding = [model.samples, model.context, model.slot]
+    lower = [p for m in embedding for p in m.parameters()] + [model.hidden]
+    lower += [p for b in model.blocks[:lower_blocks] for p in b.parameters()]
+    upper = [p for b in model.blocks[lower_blocks:] for p in b.parameters()]
+    upper += list(model.norm.parameters())
+    return [
+        {"params": list(head.parameters()), "lr": lr},
+        {"params": upper, "lr": lr * factor},
+        {"params": lower, "lr": lr * factor * factor},
+    ]
+
+
+def _crop(example: Example, start_s: float, length_s: float) -> Example:
+    """`length_s` of every signal from `start_s` on (whole samples at each signal's rate)."""
+    signals = []
+    for sig in example.signals:
+        first = round(start_s * sig.sampling_rate)
+        n = round(length_s * sig.sampling_rate)
+        signals.append(Signal(sig.values[first : first + n], sig.sampling_rate, 0.0))
+    return Example(tuple(signals), example.origin)
+
+
+def _duration_s(example: Example) -> float:
+    return min(len(sig.values) / sig.sampling_rate for sig in example.signals)
+
+
+def _random_crop(example: Example, length_s: float | None, rng: random.Random) -> Example:
+    if length_s is None:
+        return example
+    rate = min(sig.sampling_rate for sig in example.signals)
+    starts = round((_duration_s(example) - length_s) * rate)
+    return _crop(example, rng.randint(0, max(0, starts)) / rate, length_s)
+
+
+def _crops(example: Example, length_s: float | None) -> list[Example]:
+    """The non-overlapping crops of a record, from its start; a rest shorter than one crop
+    is left out (their min_chunk_length)."""
+    if length_s is None:
+        return [example]
+    n = int(_duration_s(example) / length_s + 1e-9)
+    return [_crop(example, k * length_s, length_s) for k in range(n)]
 
 
 def _bce(y: np.ndarray, p: np.ndarray) -> float:

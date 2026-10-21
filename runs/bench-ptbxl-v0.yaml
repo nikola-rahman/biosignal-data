@@ -14,6 +14,9 @@ settings:
   finetune_learning_rate: 3.0e-4
   finetune_weight_decay: 0.05
   finetune_examples_per_step: 64
+  finetune_discriminative_factor: 1.0   # one learning rate for every weight (as run)
+  finetune_lower_blocks_fraction: 0.25
+  finetune_crop_s: null                 # the whole record
   seed: 0
 wandb_project: biosignal-fm
 wandb_entity: schnyox-s

@@ -111,8 +111,9 @@ def benchmark(
     results = module.run(store, checkpoint, bench_settings, torch.device(run.device), log)
     logged.summary.update({f"{name}/{k}": v for k, v in results.items()})
     logged.finish()
-    key = (
-        run.checkpoint.rsplit("/", 1)[0] + f"/benchmarks/{name}-step-{checkpoint['step']:08d}.json"
+    key = (  # the run's file name too: two recipes for one checkpoint do not overwrite
+        run.checkpoint.rsplit("/", 1)[0]
+        + f"/benchmarks/{name}-step-{checkpoint['step']:08d}-{config.stem}.json"
     )
     store.put_bytes(key, json.dumps(described | {"results": results}, indent=2).encode())
     for k, v in sorted(results.items()):

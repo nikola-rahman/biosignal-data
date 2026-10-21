@@ -1,0 +1,31 @@
+# PTB-XL task "all" for checkpoint step 30,000 of v0-rtx6000-c2, with the fine-tuning recipe
+# of the ECG foundation model benchmark (arXiv 2509.25095, section 3.3, and its code
+# github.com/AI4HealthUOL/ecg-fm-benchmarking: run.sh, main_lite.py, fm_ecg.py):
+# - AdamW, head learning rate 1e-3, weight decay 1e-3, constant schedule, 100 epochs,
+#   batch 64, a linear head;
+# - layer-dependent learning rates: upper blocks x0.1, embedding and lowest blocks x0.01
+#   (their ECG-JEPA split: 3 of 12 blocks in the lowest part);
+# - a random 2.5 s crop per training record and epoch; validation and test records scored
+#   as the mean probability of their four 2.5 s crops;
+# - the 500 Hz records (their run.sh: ptb-xl/records500); the epoch chosen on fold 9.
+store: s3://biosignal-data
+checkpoint: models/v0-rtx6000-c2/step-00030000.pt
+device: cuda
+settings:
+  rate: 500
+  tasks: [all]
+  rows: 8
+  read_threads: 32
+  probe_l2: [1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]
+  probe_steps: 100
+  finetune_epochs: 100
+  finetune_learning_rate: 1.0e-3
+  finetune_weight_decay: 1.0e-3
+  finetune_examples_per_step: 64
+  finetune_discriminative_factor: 0.1
+  finetune_lower_blocks_fraction: 0.25
+  finetune_crop_s: 2.5
+  seed: 0
+wandb_project: biosignal-fm
+wandb_entity: schnyox-s
+wandb_mode: online
