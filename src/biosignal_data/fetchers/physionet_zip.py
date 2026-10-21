@@ -27,7 +27,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import shutil
+import threading
+import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -57,8 +60,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 PART = 8 * 2**20  # download parts (S3 ranges)
-RANGE = 64 * 2**20  # download ranges from physionet.org
-RANGE_ATTEMPTS = 3
+# Ranges from physionet.org: at its slowest (10 KB/s a connection, 2026-10-21) one range
+# takes 14 minutes, and a range that fails is all that is downloaded again.
+RANGE = 8 * 2**20
+RANGE_ATTEMPTS = 10
+RETRY_WAIT = 30.0  # seconds, times the attempt number
 MIB = 2**20
 CHUNK = 2**20
 
@@ -89,11 +95,12 @@ def stage(
     folder = work / f"zip-{source.slug}-{version}"
     archive = folder / "archive.zip"
     # A complete download from an earlier run is checked again (ETag or SHA256SUMS), not
-    # downloaded again (hd-semg: 145 GB); everything else of the folder is made again.
+    # downloaded again (hd-semg: 145 GB), and an incomplete one from physionet.org is
+    # continued (archive.ranges); everything else of the folder is made again.
     for leftover in folder.glob("*") if folder.exists() else []:
         if leftover.is_dir():
             shutil.rmtree(leftover)
-        elif leftover != archive:
+        elif leftover not in (archive, _ranges_file(archive)):
             leftover.unlink()
     folder.mkdir(parents=True, exist_ok=True)
     client = s3_client(region=MIRROR_REGION, connections=connections)
@@ -176,45 +183,84 @@ def _website_get(session: requests.Session, url: str) -> bytes:
     return response.content
 
 
+def _ranges_file(archive: Path) -> Path:
+    return archive.with_suffix(".ranges")
+
+
 def _from_website(
     session: requests.Session, url: str, archive: Path, connections: int, name: str
 ) -> None:
     """The version's ZIP from physionet.org, in RANGE-byte ranges, `connections` at a time.
     physionet.org gives no checksum of the ZIP: every member is checked against
     SHA256SUMS.txt and its CRC-32 when it is extracted, and SHA256SUMS.txt must be complete
-    in it (stage)."""
+    in it (stage).
+
+    archive.ranges holds the start of each range on disk (written after the range is on
+    disk) while the download is incomplete; it is removed when the last range is on disk.
+    An archive of the right size without it is complete. A later run continues an
+    incomplete download with the ranges that are not on disk."""
     head = session.head(url, allow_redirects=True, timeout=(10, 60))
     head.raise_for_status()
     size, final = int(head.headers["Content-Length"]), head.url
     if head.headers.get("Accept-Ranges") != "bytes":
         raise ZipCheckError(f"{final}: the server does not serve byte ranges")
-    if archive.exists() and archive.stat().st_size == size:
+    ranges = _ranges_file(archive)
+    on_disk = archive.exists() and archive.stat().st_size == size
+    if on_disk and not ranges.exists():
         log.info("%s: %s is on disk from an earlier run; checking it again", name, final)
         return
-    log.info("%s: downloading %s (%d bytes, %d at a time)", name, final, size, connections)
-    with archive.open("wb") as f:
-        f.truncate(size)
+    starts = range(0, size, RANGE)
+    done: set[int] = set()
+    if on_disk:
+        done = {int(line) for line in ranges.read_text().split()} & set(starts)
+    else:
+        ranges.write_text("")  # before the archive: an archive without it is complete
+        with archive.open("wb") as f:
+            f.truncate(size)
+    todo = [s for s in starts if s not in done]
+    log.info(
+        "%s: downloading %s (%d bytes, %d at a time): %d of %d ranges, %d on disk from an "
+        "earlier run", name, final, size, connections, len(todo), len(starts), len(done),
+    )  # fmt: skip
+    lock = threading.Lock()
 
     def fetch(start: int) -> None:
         stop = min(start + RANGE, size) - 1
         for attempt in range(1, RANGE_ATTEMPTS + 1):
-            response = session.get(
-                final, headers={"Range": f"bytes={start}-{stop}"}, timeout=(10, 300)
-            )
-            data = response.content if response.status_code == 206 else b""
+            try:
+                response = session.get(
+                    final, headers={"Range": f"bytes={start}-{stop}"}, timeout=(10, 300)
+                )
+                data = response.content if response.status_code == 206 else b""
+                problem = f"HTTP {response.status_code}, {len(data)} bytes"
+            except requests.RequestException as exc:  # a stall or a cut mid-range
+                data, problem = b"", f"{type(exc).__name__}: {exc}"
             if len(data) == stop - start + 1:
                 with archive.open("r+b") as f:
                     f.seek(start)
                     f.write(data)
+                    f.flush()
+                    os.fsync(f.fileno())
+                with lock, ranges.open("a") as f:
+                    f.write(f"{start}\n")
+                    f.flush()
+                    os.fsync(f.fileno())
                 return
             log.warning(
-                "%s: bytes %d-%d: HTTP %d, %d bytes (attempt %d of %d)", final, start, stop,
-                response.status_code, len(data), attempt, RANGE_ATTEMPTS,
+                "%s: bytes %d-%d: %s (attempt %d of %d)", final, start, stop, problem,
+                attempt, RANGE_ATTEMPTS,
             )  # fmt: skip
+            if attempt < RANGE_ATTEMPTS:
+                time.sleep(RETRY_WAIT * attempt)
         raise ZipCheckError(f"{final}: bytes {start}-{stop} failed {RANGE_ATTEMPTS} times")
 
     with ThreadPoolExecutor(max_workers=connections) as pool:
-        list(pool.map(fetch, range(0, size, RANGE)))
+        try:
+            list(pool.map(fetch, todo))
+        except BaseException:  # the other ranges wait for the next run
+            pool.shutdown(cancel_futures=True)
+            raise
+    ranges.unlink()
 
 
 def _added_later(

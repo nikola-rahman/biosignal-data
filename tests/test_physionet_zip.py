@@ -10,6 +10,7 @@ from pathlib import Path
 import boto3
 import numpy as np
 import pytest
+import requests
 from moto import mock_aws
 
 from biosignal_data.fetchers import physionet_zip
@@ -174,12 +175,16 @@ def test_a_complete_earlier_download_is_checked_not_downloaded_again(
 class _Website:
     """physionet.org for one version that is not on the AWS copy: SHA256SUMS.txt, and the
     ZIP behind get-zip (a redirect), served in byte ranges; the first range request answers
-    short once (physionet.org cut downloads short with many connections, 2026-10-19)."""
+    short once (physionet.org cut downloads short with many connections, 2026-10-19), and
+    the second stalls once (a read timeout mid-range, 2026-10-21). Ranges from `down_from`
+    on fail every time (physionet.org down)."""
 
-    def __init__(self, files: dict[str, bytes], body: bytes) -> None:
+    def __init__(self, files: dict[str, bytes], body: bytes, down_from: int | None = None) -> None:
         self.sums = "".join(f"{hashlib.sha256(b).hexdigest()}  {n}\n" for n, b in files.items())
         self.body = body
         self.short = True
+        self.stall = True
+        self.down_from = down_from
         self.ranges: list[str] = []
 
     def _answer(self, status: int, content: bytes, headers: dict[str, str], url: str) -> object:
@@ -198,9 +203,14 @@ class _Website:
             return self._answer(200, self.sums.encode(), {}, url)
         start, stop = (int(x) for x in (headers or {})["Range"][len("bytes=") :].split("-"))
         self.ranges.append(f"{start}-{stop}")
+        if self.down_from is not None and start >= self.down_from:
+            raise requests.ConnectionError("physionet.org is down")
         if self.short:
             self.short = False
             return self._answer(206, self.body[start : start + 3], {}, url)
+        if self.stall:
+            self.stall = False
+            raise requests.exceptions.ChunkedEncodingError("Read timed out.")
         return self._answer(206, self.body[start : stop + 1], {}, url)
 
     def head(self, url: str, allow_redirects: bool = False, timeout: object = None) -> object:
@@ -219,6 +229,7 @@ def test_a_version_not_on_the_aws_copy_comes_from_physionet_org(
         website = _Website(FILES, _zip(FILES))
         monkeypatch.setattr(physionet_zip, "_website_session", lambda connections: website)
         monkeypatch.setattr(physionet_zip, "RANGE", 100)
+        monkeypatch.setattr(physionet_zip, "RETRY_WAIT", 0.0)
         staged = physionet_zip.stage(
             DATASET, "1.0.0", tmp_path / "work", connections=2, website_connections=1
         )
@@ -227,4 +238,35 @@ def test_a_version_not_on_the_aws_copy_comes_from_physionet_org(
     assert staged.manifest.files[0].source_url.startswith(
         "https://physionet.org/content/mitdb/get-zip/1.0.0/#"
     )  # the canonical URL of the version's ZIP
-    assert len(website.ranges) == -(-len(website.body) // 100) + 1  # every range, one retried
+    assert len(website.ranges) == -(-len(website.body) // 100) + 2  # every range, two retried
+    assert not (staged.folder / "archive.ranges").exists()
+
+
+def test_a_download_from_physionet_org_that_stopped_continues_where_it_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    body = _zip(FILES)
+    with mock_aws():
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket="physionet-open")  # the version is not there
+        monkeypatch.setattr(physionet_zip, "s3_client", lambda **_: s3)
+        monkeypatch.setattr(physionet_zip, "RANGE", 100)
+        monkeypatch.setattr(physionet_zip, "RETRY_WAIT", 0.0)
+        down = _Website(FILES, body, down_from=300)
+        monkeypatch.setattr(physionet_zip, "_website_session", lambda connections: down)
+        with pytest.raises(physionet_zip.ZipCheckError, match="bytes 300-399 failed 10 times"):
+            physionet_zip.stage(
+                DATASET, "1.0.0", tmp_path / "work", connections=2, website_connections=1
+            )
+        folder = tmp_path / "work" / "zip-mitdb-1.0.0"
+        assert (folder / "archive.zip").stat().st_size == len(body)  # incomplete: not used
+        assert (folder / "archive.ranges").read_text().split() == ["0", "100", "200"]
+        again = _Website(FILES, body)
+        again.short = again.stall = False
+        monkeypatch.setattr(physionet_zip, "_website_session", lambda connections: again)
+        staged = physionet_zip.stage(
+            DATASET, "1.0.0", tmp_path / "work", connections=2, website_connections=1
+        )
+    starts = range(300, len(body), 100)
+    assert again.ranges == [f"{s}-{min(s + 100, len(body)) - 1}" for s in starts]
+    assert sorted(f.path for f in staged.manifest.files) == ["RECORDS", "r1.dat", "r1.hea"]
