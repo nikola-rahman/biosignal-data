@@ -7,6 +7,7 @@ tools' variables. Never put secrets in the catalog, the config file, or a commit
 | Repository | What you need | Variables |
 | --- | --- | --- |
 | PhysioNet (open) | nothing; read only from PhysioNet's copy on AWS (see below) | |
+| PhysioNet (open, login required: ltstdb, challenge-2020, mimic-iv-ecg, i-care, mimic3wdb, ...) | an AWS account linked to your PhysioNet account (Settings → Cloud; an IAM user with AmazonS3FullAccess, verified with `aws s3 presign`), and AWS access requested in the Files section of each version's page; read through PhysioNet's S3 access points, PhysioNet pays the transfer | `BIOSIGNAL_PHYSIONET_AWS_ACCESS_KEY_ID`, `BIOSIGNAL_PHYSIONET_AWS_SECRET_ACCESS_KEY` (`standardize --from-mirror`) |
 | PhysioNet (credentialed) | a credentialed PhysioNet account (CITI training) and the dataset's DUA signed on its page; read only from physionet.org | `BIOSIGNAL_PHYSIONET_USERNAME`, `BIOSIGNAL_PHYSIONET_PASSWORD` |
 | OpenNeuro | nothing | |
 | NEMAR | nothing | |
@@ -30,6 +31,10 @@ Your own S3 storage (the destination): `BIOSIGNAL_ACCESS_KEY_ID` and
   Data program, no account), where it has them: it is faster than physionet.org and gives
   file sizes. A file that the copy lacks, or a version that is not on it at all, comes from
   physionet.org. The run says so in a warning, with the number of files.
+- **Open datasets with login** (not in `s3://physionet-open`) are in PhysioNet's second
+  bucket, one S3 access point per version (`<slug>-v<version>-<nn>`). `standardize
+  --from-mirror` reads them with the keys above (fetchers/physionet_mirror.py). physionet.org
+  sends them at about 20 KB/s a connection (2026-10-21): too slow for these sizes.
 - **Credentialed datasets** are not on that copy. They come only from physionet.org, with
   your PhysioNet account.
 - The file list and SHA-256 checksums come from the version's `SHA256SUMS.txt`, whichever

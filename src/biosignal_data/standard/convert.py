@@ -61,6 +61,13 @@ log = logging.getLogger(__name__)
 HEADER_READS = 16  # WFDB headers read at the same time while planning (small files)
 
 
+def header_reads(store: Store) -> int:
+    """Small files read from `store` at the same time: HEADER_READS, or the store's own
+    number (MirrorStore: 64; AWS answers each request in ~0.1 s from Europe, 2026-10-21:
+    125 headers/s at 16, 367/s at 64, 341/s at 128)."""
+    return int(getattr(store, "header_reads", HEADER_READS))
+
+
 class AlreadyStandard(RuntimeError):  # noqa: N818 - reads naturally at the call site
     pass
 
@@ -138,7 +145,7 @@ def plan_standard(
             return f.read().decode("utf-8", errors="replace")
 
     def read_texts(paths: list[str]) -> dict[str, str]:
-        with ThreadPoolExecutor(max_workers=HEADER_READS) as pool:
+        with ThreadPoolExecutor(max_workers=header_reads(raw_store)) as pool:
             return dict(zip(paths, pool.map(read_text, paths), strict=True))
 
     mine = (rules or StandardRules.load()).get(dataset_id)
@@ -576,7 +583,7 @@ def _keep_files(
     kept_files.py), so that the standard version does not need the raw version: the index
     reads subject tables from them, a benchmark its labels (PTB-XL: ptbxl_database.csv).
     Larger files stay listed in the manifest as not converted only. Each file is checked
-    against the raw manifest; files are read HEADER_READS at a time."""
+    against the raw manifest; files are read header_reads() at a time."""
     paths = [p for p in sorted(not_converted) if plan.raw.entry(p).size <= KEEP_BYTES]
 
     def read(path: str) -> tuple[str, bytes]:
@@ -586,7 +593,7 @@ def _keep_files(
             raise RuntimeError(f"{path}: differs from the raw manifest")
         return path, data
 
-    with ThreadPoolExecutor(max_workers=HEADER_READS) as pool:
+    with ThreadPoolExecutor(max_workers=header_reads(plan.raw.store)) as pool:
         kept_files.pack(store, location, pool.map(read, paths))
 
 

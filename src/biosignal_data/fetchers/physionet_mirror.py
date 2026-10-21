@@ -6,6 +6,14 @@ the converter reads the version's files from the copy as it needs them: each rec
 files are downloaded to a temporary folder, checked against SHA256SUMS.txt, converted and
 removed. Nothing is kept as a raw version and no disk holds the whole version.
 
+Open versions that are not in the public bucket (ltstdb, challenge-2020, mimic-iv-ecg, i-care,
+mimic3wdb, ...: "open access, login required" on PhysioNet) are in PhysioNet's second bucket,
+read through one S3 access point per version (`<slug>-v<version with dashes>-<nn>`, nn from
+01; PhysioNet's physionet-build, project/cloud/s3.py). It needs an AWS account linked to a
+PhysioNet account (Settings, Cloud) that requested AWS access on the version's page, and
+that account's keys (docs/access.md). PhysioNet pays for the transfer: the bucket is not
+requester-pays (2026-10-21: requests without x-amz-request-payer succeed).
+
 MirrorStore is a read-only store that looks like a raw version (raw/<id>/<version>/: its
 manifest, _SUCCESS, data/<path>): the manifest is made from SHA256SUMS.txt and one listing
 of the version folder (sizes); data/<path> is <slug>/<version>/<path> on the copy. Files on
@@ -33,6 +41,8 @@ if TYPE_CHECKING:
     from biosignal_data.storage.stores import Unfinished
 
 log = logging.getLogger(__name__)
+ACCESS_POINT_ACCOUNT = "724665945834"  # PhysioNet's AWS account
+ACCESS_POINTS = 9  # access point numbers tried: 01 ... 09
 
 
 class MirrorError(RuntimeError):
@@ -44,12 +54,15 @@ class MirrorStore:
     conversion processes: each process opens its own S3 client."""
 
     process_safe = True
+    header_reads = 64  # small files read at the same time (standard/convert.py)
 
     def __init__(
         self, slug: str, version: str, location: VersionLocation, manifest: bytes,
-        connections: int,
+        connections: int, bucket: str = MIRROR_BUCKET, keys: tuple[str, str] | None = None,
     ) -> None:  # fmt: skip
-        self.uri = f"s3://{MIRROR_BUCKET}/{slug}/{version}"
+        self.uri = f"s3://{bucket}/{slug}/{version}"
+        self._bucket = bucket  # the public bucket, or an access point's ARN
+        self._keys = keys
         self._prefix = f"{slug}/{version}/"
         self._location = location
         self._data = location.data_prefix
@@ -63,7 +76,10 @@ class MirrorStore:
     @property
     def client(self) -> Any:
         if self._client is None:
-            self._client = s3_client(region=MIRROR_REGION, connections=self._connections)
+            self._client = s3_client(
+                region=MIRROR_REGION, connections=max(self._connections, self.header_reads),
+                keys=self._keys,
+            )  # fmt: skip
         return self._client
 
     def _source_key(self, key: str) -> str:
@@ -87,7 +103,7 @@ class MirrorStore:
         if (local := self._local(key)) is not None:
             return len(local)
         try:
-            head = self.client.head_object(Bucket=MIRROR_BUCKET, Key=self._source_key(key))
+            head = self.client.head_object(Bucket=self._bucket, Key=self._source_key(key))
         except self.client.exceptions.ClientError:
             return None
         return int(head["ContentLength"])
@@ -96,7 +112,7 @@ class MirrorStore:
         if (local := self._local(key)) is not None:
             return local
         try:
-            body = self.client.get_object(Bucket=MIRROR_BUCKET, Key=self._source_key(key))
+            body = self.client.get_object(Bucket=self._bucket, Key=self._source_key(key))
         except self.client.exceptions.NoSuchKey:
             return None
         data: bytes = body["Body"].read()
@@ -104,7 +120,7 @@ class MirrorStore:
 
     def get_range(self, key: str, offset: int, length: int) -> bytes:
         response = self.client.get_object(
-            Bucket=MIRROR_BUCKET, Key=self._source_key(key),
+            Bucket=self._bucket, Key=self._source_key(key),
             Range=f"bytes={offset}-{offset + length - 1}",
         )  # fmt: skip
         data: bytes = response["Body"].read()
@@ -113,7 +129,7 @@ class MirrorStore:
     def open(self, key: str) -> BinaryIO:
         if (local := self._local(key)) is not None:
             return io.BytesIO(local)
-        body = self.client.get_object(Bucket=MIRROR_BUCKET, Key=self._source_key(key))["Body"]
+        body = self.client.get_object(Bucket=self._bucket, Key=self._source_key(key))["Body"]
         return body  # type: ignore[no-any-return]
 
     def list(self, prefix: str) -> Iterator[str]:
@@ -134,31 +150,65 @@ class MirrorStore:
         self._read_only()
 
 
-def mirror(dataset: Dataset, version: str, *, connections: int) -> MirrorStore:
+def access_point(slug: str, version: str, number: int) -> str:
+    """The ARN of a version's access point to PhysioNet's second bucket (see the module)."""
+    name = f"{slug}-v{version.replace('.', '-')}-{number:02d}"
+    return f"arn:aws:s3:{MIRROR_REGION}:{ACCESS_POINT_ACCOUNT}:accesspoint/{name}"
+
+
+def _sums(
+    slug: str, version: str, connections: int, keys: tuple[str, str] | None
+) -> tuple[Any, str, bytes] | None:
+    """(client, bucket, SHA256SUMS.txt) from the public bucket, else from the version's
+    access point with `keys`; None if neither has the version."""
+    key = f"{slug}/{version}/{SUMS}"
+    client = s3_client(region=MIRROR_REGION, connections=connections)
+    try:
+        sums = client.get_object(Bucket=MIRROR_BUCKET, Key=key)["Body"].read()
+        return client, MIRROR_BUCKET, sums
+    except client.exceptions.NoSuchKey:
+        pass
+    if keys is None:
+        return None
+    client = s3_client(region=MIRROR_REGION, connections=connections, keys=keys)
+    for number in range(1, ACCESS_POINTS + 1):
+        bucket = access_point(slug, version, number)
+        try:
+            return client, bucket, client.get_object(Bucket=bucket, Key=key)["Body"].read()
+        except client.exceptions.NoSuchKey:
+            return None
+        except client.exceptions.ClientError as exc:
+            if exc.response["Error"]["Code"] != "AccessDenied":
+                raise
+    return None
+
+
+def mirror(
+    dataset: Dataset, version: str, *, connections: int, keys: tuple[str, str] | None = None
+) -> MirrorStore:
     """The version on the AWS copy as a raw version (MirrorStore), with its manifest made
-    from SHA256SUMS.txt and one listing of the version folder."""
+    from SHA256SUMS.txt and one listing of the version folder. From the public bucket, else
+    with `keys` (an AWS account linked to PhysioNet) through the version's access point."""
     source = dataset.source
     if not isinstance(source, PhysioNetSource):
         raise TypeError(f"{dataset.id}: not a PhysioNet dataset")
     if source.credentialed:
         raise MirrorError(f"{dataset.id}: credentialed; not on the open AWS copy")
-    client = s3_client(region=MIRROR_REGION, connections=connections)
     prefix = f"{source.slug}/{version}/"
-    try:
-        sums_text = client.get_object(Bucket=MIRROR_BUCKET, Key=prefix + SUMS)["Body"].read()
-    except client.exceptions.NoSuchKey as exc:
-        raise MirrorError(f"{dataset.id} {version}: not on PhysioNet's AWS copy") from exc
+    found = _sums(source.slug, version, connections, keys)
+    if found is None:
+        where = "PhysioNet's AWS copy" + ("" if keys else " (public bucket; no AWS keys given)")
+        raise MirrorError(f"{dataset.id} {version}: not on {where}")
+    client, bucket, sums_text = found
     sums = dict(parse_sha256sums(sums_text.decode("utf-8")))
     sizes: dict[str, int] = {}
-    for page in client.get_paginator("list_objects_v2").paginate(
-        Bucket=MIRROR_BUCKET, Prefix=prefix
-    ):
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
         for item in page.get("Contents", []):
             sizes[item["Key"][len(prefix) :]] = int(item["Size"])
     missing = sorted(set(sums) - set(sizes))
     if missing:
         raise MirrorError(
-            f"{dataset.id} {version}: {len(missing)} files of {SUMS} are not on the AWS copy, "
+            f"{dataset.id} {version}: {len(missing)} files of {SUMS} are not in {bucket}, "
             f"e.g. {missing[0]}"
         )
     entries = []
@@ -168,16 +218,16 @@ def mirror(dataset: Dataset, version: str, *, connections: int) -> MirrorStore:
             FileEntry(
                 path=path, size=sizes[path], sha256=sums[path], md5=None,
                 source_checksum=f"sha256:{sums[path]}",
-                source_url=f"s3://{MIRROR_BUCKET}/{prefix}{path}",
+                source_url=f"s3://{bucket}/{prefix}{path}",
             )
         )  # fmt: skip
     for path in unlisted:  # not in SHA256SUMS.txt (itself, files added later): read once
-        data = client.get_object(Bucket=MIRROR_BUCKET, Key=prefix + path)["Body"].read()
+        data = client.get_object(Bucket=bucket, Key=prefix + path)["Body"].read()
         entries.append(
             FileEntry(
                 path=path, size=len(data), sha256=hashlib.sha256(data).hexdigest(),
                 md5=hashlib.md5(data).hexdigest(),  # noqa: S324 - recorded, not for security
-                source_url=f"s3://{MIRROR_BUCKET}/{prefix}{path}",
+                source_url=f"s3://{bucket}/{prefix}{path}",
             )
         )  # fmt: skip
     if [p for p in unlisted if p != SUMS]:
@@ -194,7 +244,10 @@ def mirror(dataset: Dataset, version: str, *, connections: int) -> MirrorStore:
         tool=f"biosignal-data {__version__}", files=sorted(entries, key=lambda e: e.path),
     )  # fmt: skip
     log.info(
-        "%s %s: %d files on the AWS copy (%.1f GB), %d checked against %s",
-        dataset.id, version, len(entries), sum(sizes.values()) / 1e9, len(sums), SUMS,
+        "%s %s: %d files on the AWS copy (%.1f GB, %s), %d checked against %s",
+        dataset.id, version, len(entries), sum(sizes.values()) / 1e9, bucket, len(sums), SUMS,
     )  # fmt: skip
-    return MirrorStore(source.slug, version, location, manifest.to_json(), connections)
+    return MirrorStore(
+        source.slug, version, location, manifest.to_json(), connections, bucket,
+        keys if bucket != MIRROR_BUCKET else None,
+    )  # fmt: skip

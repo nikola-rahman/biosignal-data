@@ -4,15 +4,17 @@ import hashlib
 import pickle
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import boto3
 import numpy as np
 import pytest
+from botocore.exceptions import ClientError
 from moto import mock_aws
 
 from biosignal_data.fetchers import physionet_mirror
 from biosignal_data.read.standard import StandardDataset
-from biosignal_data.standard.convert import convert, plan_standard
+from biosignal_data.standard.convert import HEADER_READS, convert, header_reads, plan_standard
 from biosignal_data.storage.stores import LocalStore
 from tests.conftest import make_dataset
 
@@ -81,6 +83,63 @@ def test_a_file_that_differs_from_sha256sums_fails_its_recording(
 def test_the_store_goes_to_a_conversion_process_without_its_client(copy: object) -> None:
     raw = physionet_mirror.mirror(DATASET, "1.0", connections=2)
     assert raw.process_safe
+    assert header_reads(raw) == 64 and header_reads(LocalStore(Path("x"))) == HEADER_READS
     raw.get_bytes(raw._data + "r1.hea")  # opens the client
     again = pickle.loads(pickle.dumps(raw))  # noqa: S301 - our own object, as spawn sends it
     assert again._client is None and again._manifest == raw._manifest
+
+
+class _AccessPoints:
+    """PhysioNet's second bucket behind access points, for an AWS account linked to
+    PhysioNet: in the mock, access point n is the bucket `ap-0n`; ap-01 refuses this
+    account (an access point that PhysioNet replaced), ap-02 has the version."""
+
+    def __init__(self, s3: Any) -> None:
+        self._s3 = s3
+        self.exceptions = s3.exceptions
+
+    def get_object(self, **kw: Any) -> Any:
+        if kw["Bucket"] == "ap-01":
+            raise ClientError({"Error": {"Code": "AccessDenied"}}, "GetObject")
+        return self._s3.get_object(**kw)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._s3, name)
+
+
+def test_a_version_behind_an_access_point_is_read_with_the_linked_accounts_keys(
+    copy: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s3: Any = copy
+    s3.create_bucket(Bucket="ap-02")
+    for key in [*FILES, "SHA256SUMS.txt"]:  # not in the public bucket: behind ap-02
+        body = s3.get_object(Bucket="physionet-open", Key=PREFIX + key)["Body"].read()
+        s3.put_object(Bucket="ap-02", Key=PREFIX + key, Body=body)
+        s3.delete_object(Bucket="physionet-open", Key=PREFIX + key)
+    clients: list[object] = []
+
+    def client(**kw: object) -> object:
+        clients.append(kw.get("keys"))
+        return s3 if kw.get("keys") is None else _AccessPoints(s3)
+
+    monkeypatch.setattr(physionet_mirror, "s3_client", client)
+    monkeypatch.setattr(physionet_mirror, "access_point", lambda slug, version, n: f"ap-{n:02d}")
+    with pytest.raises(physionet_mirror.MirrorError, match="no AWS keys given"):
+        physionet_mirror.mirror(DATASET, "1.0", connections=2)
+    raw = physionet_mirror.mirror(DATASET, "1.0", connections=2, keys=("id", "secret"))
+    assert raw.uri == "s3://ap-02/icentia11k-continuous-ecg/1.0"
+    dest = LocalStore(tmp_path / "bucket")
+    plan = plan_standard(dest, DATASET.id, "1.0", raw_store=raw)
+    assert convert(plan, dest, workers=1, part_bytes=1, work_dir=tmp_path / "work").complete
+    np.testing.assert_array_equal(
+        StandardDataset.open(dest, DATASET.id, "1.0").read("r1", "100Hz"), ECG[None, :]
+    )
+    assert ("id", "secret") in clients  # the store reads with the keys too
+    entries = {f.path: f for f in plan.raw.files}
+    assert entries["r1.dat"].source_url == f"s3://ap-02/{PREFIX}r1.dat"
+
+
+def test_the_access_point_arn_follows_physionet_build() -> None:
+    assert physionet_mirror.access_point("ltstdb", "1.0.0", 1) == (
+        "arn:aws:s3:us-east-1:724665945834:accesspoint/ltstdb-v1-0-0-01"
+    )

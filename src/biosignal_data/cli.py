@@ -61,6 +61,7 @@ from biosignal_data.console import (
     setup_logging,
 )
 from biosignal_data.fetchers import FetchError, FetchOptions
+from biosignal_data.fetchers.base import MissingCredentialsError, require_env
 from biosignal_data.index import AlreadyIndexed, IndexRules, build_index
 from biosignal_data.index.rules import RulesError, default_rules_path
 from biosignal_data.index.subjects import SubjectError
@@ -895,13 +896,30 @@ def _standardize_from_mirror(
         console.print(f"[red]✗[/] {dataset.id}: --from-mirror needs --version or a pinned version")
         return False
     try:
-        raw = physionet_mirror.mirror(dataset, version, connections=settings.workers)
-    except (physionet_mirror.MirrorError, TypeError) as exc:
+        raw = physionet_mirror.mirror(
+            dataset, version, connections=settings.workers, keys=_physionet_aws_keys()
+        )
+    except (physionet_mirror.MirrorError, MissingCredentialsError, TypeError) as exc:
         console.print(f"[red]✗[/] {dataset.id} {version}: {exc}", highlight=False, soft_wrap=True)
         return False
     return _standardize_one(
         dataset.id, version, store, settings, staging_dir, False, replace, raw_store=raw
     )
+
+
+PHYSIONET_AWS_KEYS = (
+    "BIOSIGNAL_PHYSIONET_AWS_ACCESS_KEY_ID",
+    "BIOSIGNAL_PHYSIONET_AWS_SECRET_ACCESS_KEY",
+)
+
+
+def _physionet_aws_keys() -> tuple[str, str] | None:
+    """The keys of an AWS account linked to PhysioNet, for versions behind an access point
+    (docs/access.md); None when neither variable is set."""
+    if not any(os.environ.get(n) for n in PHYSIONET_AWS_KEYS):
+        return None
+    key_id, secret = require_env(*PHYSIONET_AWS_KEYS)
+    return key_id, secret
 
 
 def _standardize_one(
