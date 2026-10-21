@@ -19,13 +19,14 @@ from __future__ import annotations
 import io
 from dataclasses import dataclass
 from functools import cached_property
+from typing import Any
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from biosignal_data.read.raw import complete_versions
-from biosignal_data.standard import blocks
+from biosignal_data.standard import blocks, kept_files
 from biosignal_data.standard.layout import ROOT, StandardLocation
 from biosignal_data.standard.manifest import StandardManifest
 from biosignal_data.storage.stores import S3Settings, Store, open_store
@@ -77,6 +78,15 @@ class StandardDataset:
     @cached_property
     def events(self) -> pa.Table:
         return self._table("events")
+
+    @cached_property
+    def _kept_files(self) -> dict[str, dict[str, Any]]:
+        return kept_files.index(self.store, self.location)
+
+    def file(self, path: str) -> bytes:
+        """A raw file that holds no signals, kept with the version (a table such as
+        ptbxl_database.csv, documentation), as published; checked against its SHA-256."""
+        return kept_files.read(self.store, self.location, path, self._kept_files)
 
     @cached_property
     def block_index(self) -> dict[tuple[str, str], blocks.ArrayBlocks]:

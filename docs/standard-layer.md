@@ -33,7 +33,9 @@ never from a source.
         data/<batch>-<n>.bin   the blocks, one after another, at most 64 MiB per object
         _manifest.json         lineage, files not converted and why, the layout settings
         raw_manifest.json      the raw version's manifest: every file with its SHA-256
-        files/<path>           the raw files that hold no signals, up to 16 MiB each
+        files.parquet          the raw files that hold no signals, up to 16 MiB each, packed
+        files/pack-<n>.bin     as published into objects of at most 64 MiB, one row each in
+                               files.parquet (path, object, offset, nbytes, sha256)
                                (tables such as ptbxl_database.csv, documentation)
         _parts/                progress of an unfinished run (removed on success)
         _SUCCESS               written last

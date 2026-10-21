@@ -36,7 +36,7 @@ import pyarrow as pa
 
 from biosignal_data import __version__
 from biosignal_data.read.raw import RawDataset
-from biosignal_data.standard import blocks, tables
+from biosignal_data.standard import blocks, kept_files, tables
 from biosignal_data.standard.discover import Discovery, Unit, discover, may_be_annotations
 from biosignal_data.standard.layout import DONE, TABLES, StandardLocation
 from biosignal_data.standard.manifest import NotConverted, StandardManifest
@@ -523,25 +523,28 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
     return manifest
 
 
-KEEP_BYTES = 16 * 2**20  # raw files not converted and at most this size are kept as files/
+KEEP_BYTES = 16 * 2**20  # raw files not converted and at most this size are kept (files/)
 
 
 def _keep_files(
     store: Store, plan: StandardPlan, location: StandardLocation, not_converted: dict[str, str]
 ) -> None:
-    """Copy the raw files that hold no signals (tables, documentation) into files/, so that
-    the standard version does not need the raw version: the index reads subject tables
-    from them, a benchmark its labels (PTB-XL: ptbxl_database.csv). Larger files stay
-    listed in the manifest as not converted only."""
-    for path in sorted(not_converted):
-        entry = plan.raw.entry(path)
-        if entry.size > KEEP_BYTES:
-            continue
+    """Pack the raw files that hold no signals (tables, documentation) into files/ (see
+    kept_files.py), so that the standard version does not need the raw version: the index
+    reads subject tables from them, a benchmark its labels (PTB-XL: ptbxl_database.csv).
+    Larger files stay listed in the manifest as not converted only. Each file is checked
+    against the raw manifest; files are read HEADER_READS at a time."""
+    paths = [p for p in sorted(not_converted) if plan.raw.entry(p).size <= KEEP_BYTES]
+
+    def read(path: str) -> tuple[str, bytes]:
         with plan.raw.store.open(plan.raw.location.data_key(path)) as f:
             data = f.read()
-        if hashlib.sha256(data).hexdigest() != entry.sha256:
+        if hashlib.sha256(data).hexdigest() != plan.raw.entry(path).sha256:
             raise RuntimeError(f"{path}: differs from the raw manifest")
-        store.put_bytes(location.file_key(path), data, "application/octet-stream")
+        return path, data
+
+    with ThreadPoolExecutor(max_workers=HEADER_READS) as pool:
+        kept_files.pack(store, location, pool.map(read, paths))
 
 
 def _in_unit_order(table: pa.Table, order: dict[str, int]) -> pa.Table:

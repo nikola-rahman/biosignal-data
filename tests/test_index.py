@@ -14,7 +14,8 @@ from biosignal_data.index import AlreadyIndexed, IndexRules, build_index, signal
 from biosignal_data.index.rules import RulesError, SubjectRule
 from biosignal_data.index.signals import SignalType
 from biosignal_data.index.subjects import subject_of
-from biosignal_data.standard import tables
+from biosignal_data.standard import kept_files, tables
+from biosignal_data.standard.layout import StandardLocation
 from biosignal_data.storage.stores import LocalStore
 
 
@@ -213,10 +214,10 @@ def test_excluded_recordings_and_subjects_from_a_raw_table(
     )
     store.put_bytes(f"{prefix}/_manifest.json", b'{"raw_version": "1.0.0"}')
     store.put_bytes(f"{prefix}/_SUCCESS", b"")
-    store.put_bytes(
-        "standard-blocks/physionet/ephnogram/1.0.0/files/t.csv",
-        "﻿Record Name,Subject ID\nECGPCG0001,S001\nECGPCG0002,S001\n".encode(),
-    )
+    kept_files.pack(
+        store, StandardLocation("physionet/ephnogram", "1.0.0"),
+        [("t.csv", "﻿Record Name,Subject ID\nECGPCG0001,S001\nECGPCG0002,S001\n".encode())],
+    )  # fmt: skip
     rules_path = tmp_path / "index.yaml"
     rules_path.write_text(
         "datasets:\n"
@@ -305,13 +306,14 @@ def test_a_benchmark_test_fold_from_a_table_is_held_out(store: LocalStore, tmp_p
     )
     store.put_bytes(f"{prefix}/_manifest.json", b'{"raw_version": "1.0.3"}')
     store.put_bytes(f"{prefix}/_SUCCESS", b"")
-    store.put_bytes(
-        "standard-blocks/physionet/ptb-xl/1.0.3/files/ptbxl_database.csv",
-        b"ecg_id,patient_id,strat_fold,filename_hr\n"
-        b"1,15709.0,3,records500/00000/00001_hr\n"
-        b"2,13243.0,10,records500/00000/00002_hr\n"
-        b"3,20372.0,9,records500/00000/00003_hr\n",
-    )
+    kept_files.pack(
+        store, StandardLocation("physionet/ptb-xl", "1.0.3"),
+        [("ptbxl_database.csv",
+          b"ecg_id,patient_id,strat_fold,filename_hr\n"
+          b"1,15709.0,3,records500/00000/00001_hr\n"
+          b"2,13243.0,10,records500/00000/00002_hr\n"
+          b"3,20372.0,9,records500/00000/00003_hr\n")],
+    )  # fmt: skip
     rules_path = tmp_path / "index.yaml"
     rules_path.write_text(
         "datasets:\n"

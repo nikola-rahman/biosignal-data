@@ -36,6 +36,7 @@ from biosignal_data.index.rules import (
 from biosignal_data.index.signals import signal_type
 from biosignal_data.index.subjects import split_of, subject_of
 from biosignal_data.read.raw import complete_versions
+from biosignal_data.standard import kept_files
 from biosignal_data.standard.layout import ROOT as STANDARD_ROOT
 from biosignal_data.standard.layout import StandardLocation
 from biosignal_data.storage.layout import SUCCESS, retrieval_version
@@ -266,10 +267,8 @@ def _column(
 ) -> dict[str, str]:  # fmt: skip
     """{key: value} of two columns of a delimited table of the dataset (in the standard
     version's files/); a key with two different values is an error."""
-    key = location.file_key(file)
-    data = store.get_bytes(key)
-    if data is None:
-        raise FileNotFoundError(key)
+    key = f"{location.prefix}: {file}"
+    data = kept_files.read(store, location, file)
     rows = csv.DictReader(io.StringIO(data.decode("utf-8-sig")), delimiter=delimiter)
     mapping: dict[str, str] = {}
     for row in rows:

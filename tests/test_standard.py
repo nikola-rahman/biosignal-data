@@ -239,9 +239,37 @@ def test_small_files_that_hold_no_signals_are_kept_with_the_version(
 ) -> None:
     plan = plan_standard(store, "physionet/mitdb", "1.0.0")
     assert convert(plan, store, workers=1, part_bytes=1, work_dir=tmp_path / "work").complete
-    location = plan.location
-    assert store.get_bytes(location.file_key("r1.xws")) == b"wave settings"  # not converted
-    assert not store.exists(location.file_key("r1.dat"))  # signals are in blocks, not files/
+    ds = StandardDataset.open(store, "physionet/mitdb", "1.0.0")
+    assert ds.file("r1.xws") == b"wave settings"  # not converted
+    assert ds.file("notes.csv") == b"a,b\n1,2\n"
+    with pytest.raises(FileNotFoundError):
+        ds.file("r1.dat")  # signals are in blocks, not files/
+    keys = list(store.list(plan.location.prefix + "/files/"))
+    assert keys == [plan.location.object_key("files/pack-0000.bin")]  # one pack, not a file each
+
+
+def test_kept_files_fill_packs_of_at_most_the_object_size(
+    store: LocalStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from biosignal_data.standard import kept_files  # noqa: PLC0415
+    from biosignal_data.standard.layout import StandardLocation  # noqa: PLC0415
+
+    monkeypatch.setattr(kept_files, "OBJECT_BYTES", 10)
+    location = StandardLocation("physionet/x", "1.0.0")
+    files = [("a.txt", b"12345"), ("b.txt", b"6789"), ("c.txt", b""), ("d.txt", b"abcdefgh")]
+    table = kept_files.pack(store, location, files)
+    assert table.column("object").to_pylist() == [
+        "files/pack-0000.bin",
+        "files/pack-0000.bin",
+        "files/pack-0000.bin",
+        "files/pack-0001.bin",
+    ]
+    rows = kept_files.index(store, location)
+    assert [kept_files.read(store, location, p, rows) for p, _ in files] == [d for _, d in files]
+    key = location.object_key("files/pack-0000.bin")
+    store.put_bytes(key, b"12345X789")  # one byte changed
+    with pytest.raises(ValueError, match="differs from its SHA-256"):
+        kept_files.read(store, location, "b.txt")
 
 
 def test_every_worker_gets_a_batch_of_a_small_dataset(

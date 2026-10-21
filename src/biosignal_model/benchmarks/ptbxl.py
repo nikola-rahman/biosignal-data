@@ -145,9 +145,7 @@ def load(store: Store, settings: PtbxlSettings, log: Log) -> tuple[Records, list
     dataset = StandardDataset.open(store, DATASET, "latest")
 
     def table(name: str) -> list[dict[str, str]]:  # kept with the standard version
-        data = store.get_bytes(dataset.location.file_key(name))
-        if data is None:
-            raise FileNotFoundError(dataset.location.file_key(name))
+        data = dataset.file(name)
         return list(csv.DictReader(io.StringIO(data.decode("utf-8-sig"))))
 
     rows = table("ptbxl_database.csv")
