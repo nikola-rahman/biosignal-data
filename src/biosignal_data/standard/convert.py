@@ -54,7 +54,7 @@ from biosignal_data.standard.sources import (
 )
 from biosignal_data.storage.layout import VersionLocation
 from biosignal_data.storage.manifest import Manifest, utcnow
-from biosignal_data.storage.stores import LocalStore, Store
+from biosignal_data.storage.stores import Store
 from biosignal_data.text import plural
 
 log = logging.getLogger(__name__)
@@ -193,7 +193,8 @@ def convert(
     `processes`: recordings are read, compressed and checked in this many processes (0: in
     the batch threads). Compression and the check of every block are CPU work that threads
     share badly (hd-semg 2.0.0: 16 threads kept 4 of 8 cores busy). Only for a raw version
-    on local disk (a staged ZIP): the plan goes to each process once."""
+    on local disk (a staged ZIP) or on PhysioNet's AWS copy (a store with `process_safe`):
+    the plan goes to each process once."""
     report = StandardReport(
         plan.raw.location.dataset_id,
         plan.raw.location.version,
@@ -210,10 +211,10 @@ def convert(
 
     lock = threading.Lock()
     units: ProcessPoolExecutor | None = None
-    if processes and not isinstance(plan.raw.store, LocalStore):
+    if processes and not getattr(plan.raw.store, "process_safe", False):
         log.warning(
-            "%s: the raw version is not on local disk; recordings are converted in the "
-            "batch threads, not in %d processes", report.location, processes,
+            "%s: the raw version's store cannot go to other processes; recordings are "
+            "converted in the batch threads, not in %d processes", report.location, processes,
         )  # fmt: skip
     elif processes:
         units = ProcessPoolExecutor(

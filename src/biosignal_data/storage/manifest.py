@@ -20,7 +20,11 @@ class FileEntry(BaseModel):
     path: str = Field(description="Path under data/, exactly as published by the source.")
     size: int
     sha256: str
-    md5: str
+    md5: str | None = Field(
+        None,
+        description="None where the bytes were checked against the source's SHA-256 "
+        "without being kept (a version read from PhysioNet's AWS copy).",
+    )
     source_checksum: str | None = Field(
         None, description="Checksum the source published, as '<algorithm>:<hex>', if any."
     )

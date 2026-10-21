@@ -286,6 +286,8 @@ class S3Store:
 class LocalStore:
     """A folder on disk with the same layout. Useful for tests and for staging small sets."""
 
+    process_safe = True  # it can go to conversion processes as it is
+
     def __init__(self, root: Path) -> None:
         self.root = root.expanduser().resolve()
         self.uri = self.root.as_uri()

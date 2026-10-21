@@ -765,6 +765,15 @@ def standardize(
             "disk (checked against its ETag and SHA256SUMS.txt) instead of reading <dest>/raw/.",
         ),
     ] = False,
+    from_mirror: Annotated[
+        bool,
+        typer.Option(
+            "--from-mirror",
+            help="PhysioNet only: read the version straight from PhysioNet's AWS copy, each "
+            "recording's files checked against SHA256SUMS.txt as they are converted (no raw "
+            "version, no ZIP; icentia11k).",
+        ),
+    ] = False,
     verbose: VerboseOpt = False,
     config: ConfigOpt = None,
     catalog: CatalogOpt = None,
@@ -791,6 +800,8 @@ def standardize(
     )
     if version is not None and len(datasets) != 1:
         raise _fail("--version applies to one dataset")
+    if from_zip and from_mirror:
+        raise _fail("--from-zip and --from-mirror exclude each other")
     if not dest:
         raise _fail("missing --dest (a local folder or s3://bucket[/prefix])")
     store = _store(dest, cfg, cfg_path, settings.workers)
@@ -808,6 +819,10 @@ def standardize(
                 ok = _standardize_from_zip(
                     d, version, store, settings, staging.dir, replace, website
                 )
+                failed += not ok
+                continue
+            if from_mirror:
+                ok = _standardize_from_mirror(d, version, store, settings, staging.dir, replace)
                 failed += not ok
                 continue
             ok = _standardize_one(d.id, version, store, settings, staging.dir, dry_run, replace)
@@ -865,6 +880,28 @@ def _standardize_from_zip(
         )  # fmt: skip
     finally:
         shutil.rmtree(staged.folder, ignore_errors=True)
+
+
+def _standardize_from_mirror(
+    dataset: Dataset, version: str | None, store: Store, settings: StandardizeConfig,
+    staging_dir: Path, replace: bool,
+) -> bool:  # fmt: skip
+    """Pipeline physionet-mirror: the version read from PhysioNet's AWS copy as it is
+    converted (fetchers/physionet_mirror.py)."""
+    from biosignal_data.fetchers import physionet_mirror  # noqa: PLC0415
+
+    version = version or dataset.pinned_version
+    if version is None:
+        console.print(f"[red]✗[/] {dataset.id}: --from-mirror needs --version or a pinned version")
+        return False
+    try:
+        raw = physionet_mirror.mirror(dataset, version, connections=settings.workers)
+    except (physionet_mirror.MirrorError, TypeError) as exc:
+        console.print(f"[red]✗[/] {dataset.id} {version}: {exc}", highlight=False, soft_wrap=True)
+        return False
+    return _standardize_one(
+        dataset.id, version, store, settings, staging_dir, False, replace, raw_store=raw
+    )
 
 
 def _standardize_one(
