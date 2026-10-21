@@ -66,7 +66,8 @@ def test_the_probe_chooses_on_fold_9_and_scores_fold_10() -> None:
     features[:, 0] += 3 * y[:, 0]
     features[:, 1] += 3 * y[:, 1]
     settings = ptbxl.PtbxlSettings(
-        rate=100, tasks=["all"], rows=2, read_threads=1, probe_l2=[1e-3, 1.0], probe_steps=50,
+        rate=100, tasks=["all"], rows=2, read_threads=1, workers=0, probes=True,
+        probe_l2=[1e-3, 1.0], probe_steps=50,
         finetune_epochs=1, finetune_learning_rate=1e-3, finetune_weight_decay=0.0,
         finetune_examples_per_step=8, finetune_discriminative_factor=0.1,
         finetune_lower_blocks_fraction=0.25, finetune_crop_s=None, seed=0,
@@ -87,7 +88,8 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model() -> None:
     records = _records(codes, [1] * 16 + [9] * 4 + [10] * 4)
     y, _, _ = ptbxl.labels(records, STATEMENTS, "diagnostic")
     settings = ptbxl.PtbxlSettings(
-        rate=100, tasks=["diagnostic"], rows=2, read_threads=1, probe_l2=[1.0], probe_steps=10,
+        rate=100, tasks=["diagnostic"], rows=2, read_threads=1, workers=0, probes=True,
+        probe_l2=[1.0], probe_steps=10,
         finetune_epochs=2, finetune_learning_rate=1e-3, finetune_weight_decay=0.0,
         finetune_examples_per_step=4, finetune_discriminative_factor=0.1,
         finetune_lower_blocks_fraction=0.25, finetune_crop_s=2.5, seed=0,
@@ -144,3 +146,53 @@ def test_crops_cover_a_record_without_overlap() -> None:
     np.testing.assert_array_equal(
         crop.signals[1].values, example.signals[1].values[start : start + 250]
     )
+
+
+def _small() -> ModelConfig:
+    return ModelConfig(
+        samples_per_token=50, max_channels=4, width=32, layers=2, heads=4, feed_forward=64,
+        min_wavelength_s=0.01, max_wavelength_s=1000.0, attention="dense",
+    )  # fmt: skip
+
+
+def test_a_trimmed_batch_gives_each_example_the_same_features() -> None:
+    config = _small()
+    model = Encoder(config).eval()
+    examples = _records([["NORM"]] * 5, [1] * 5).examples
+    packer = ptbxl._packer(config, 512, 4)  # 40 tokens per example
+    device = torch.device("cpu")
+    packer.reseed(1)
+    full, where_full = packer.pack(examples, trim=False)
+    packer.reseed(1)
+    trimmed, where = packer.pack(examples, trim=True)
+    assert where == where_full
+    assert trimmed.inputs.values.shape[:2] == (1, 256)  # 200 tokens, to a multiple of 128
+    assert full.inputs.values.shape[:2] == (4, 512)
+    with torch.no_grad():
+        a = ptbxl._mean_features(model, full, where, device)
+        b = ptbxl._mean_features(model, trimmed, where, device)
+        x = full.inputs
+        loop = torch.stack([model.features(x)[r][x.document[r] == d].mean(0) for r, d in where])
+    torch.testing.assert_close(a, b, rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(a, loop, rtol=1e-5, atol=1e-5)
+
+
+def test_batches_made_in_workers_are_the_same_as_in_the_main_process() -> None:
+    import random  # noqa: PLC0415
+
+    config = _small()
+    examples = _records([["NORM"]] * 12, [1] * 12).examples
+    groups = [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]]
+
+    def crop(example: Example, rng: random.Random) -> Example:
+        return ptbxl._random_crop(example, 2.5, rng)
+
+    made = {}
+    for workers in (0, 2):
+        packer = ptbxl._packer(config, 256, 2)
+        made[workers] = list(ptbxl._packed(examples, groups, crop, packer, "s/1", workers))
+    assert len(made[0]) == len(made[2]) == 3
+    for (a, wa), (b, wb) in zip(made[0], made[2], strict=True):
+        assert wa == wb
+        for name in ("values", "observed", "time_s", "slot", "document"):
+            torch.testing.assert_close(getattr(a.inputs, name), getattr(b.inputs, name))

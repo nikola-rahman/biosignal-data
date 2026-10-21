@@ -16,6 +16,8 @@ settings:
   tasks: [all]
   rows: 8
   read_threads: 32
+  workers: 6                  # data loader processes that crop and pack batches
+  probes: false
   probe_l2: [1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]
   probe_steps: 100
   finetune_epochs: 100

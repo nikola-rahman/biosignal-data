@@ -107,6 +107,11 @@ class _Tokens:
     signal_type: np.ndarray
 
 
+# A trimmed batch's tokens per row are a multiple of this: the block size of flex attention,
+# so that its block mask needs no padding of its own, and few distinct shapes are compiled.
+TRIM_TOKENS = 128
+
+
 class Packer:
     """Turns a stream of examples into batches of `rows` x `max_tokens` tokens. Every
     argument is the experiment's choice; none has a default."""
@@ -133,6 +138,11 @@ class Packer:
         self.mask_ratio = mask_ratio
         self._rng = random.Random(seed)  # noqa: S311 - not secret
 
+    def reseed(self, seed: int) -> None:
+        """Start the random choices (slots, masked tokens) again from `seed`: a batch made
+        in a data loader worker is then the same whichever worker makes it."""
+        self._rng = random.Random(seed)  # noqa: S311 - not secret
+
     def batches(self, examples: Iterable[Example]) -> Iterator[Batch]:
         rows: list[list[_Tokens]] = [[]]
         used = 0
@@ -154,10 +164,13 @@ class Packer:
         if count:
             yield self._batch(rows, count)
 
-    def pack(self, examples: list[Example]) -> tuple[Batch, list[tuple[int, int]]]:
+    def pack(self, examples: list[Example], *, trim: bool) -> tuple[Batch, list[tuple[int, int]]]:
         """All `examples` in one batch, in order, and the (row, document) of each: for
         reading the model's output of each example back (benchmarks). Raises if they do
-        not fit `rows` x `max_tokens`."""
+        not fit `rows` x `max_tokens`. `trim`: the batch has only the rows it uses, and
+        only as many tokens per row as the longest row holds, rounded up to a multiple of
+        TRIM_TOKENS; else every batch is `rows` x `max_tokens`. Padding is masked either
+        way, so the model's output for each example is the same."""
         rows: list[list[_Tokens]] = [[]]
         where: list[tuple[int, int]] = []
         used = 0
@@ -174,7 +187,11 @@ class Packer:
             where.append((len(rows) - 1, len(rows[-1])))
             rows[-1].append(tokens)
             used += n
-        return self._batch(rows, len(examples)), where
+        if not trim:
+            return self._batch(rows, len(examples)), where
+        longest = max(sum(len(tok.slot) for tok in row) for row in rows)
+        length = min(self.max_tokens, -(-longest // TRIM_TOKENS) * TRIM_TOKENS)
+        return self._batch(rows, len(examples), len(rows), length), where
 
     def tokens(self, example: Example) -> _Tokens:
         p = self.samples_per_token
@@ -228,8 +245,13 @@ class Packer:
             }
         )
 
-    def _batch(self, rows: list[list[_Tokens]], count: int) -> Batch:
-        r, length, p = self.rows, self.max_tokens, self.samples_per_token
+    def _batch(
+        self, rows: list[list[_Tokens]], count: int, r: int | None = None,
+        length: int | None = None,
+    ) -> Batch:  # fmt: skip
+        r = self.rows if r is None else r
+        length = self.max_tokens if length is None else length
+        p = self.samples_per_token
         values = np.zeros((r, length, p), dtype=np.float32)
         observed = np.zeros((r, length, p), dtype=bool)
         hidden = np.zeros((r, length), dtype=bool)

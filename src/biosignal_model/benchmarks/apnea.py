@@ -153,7 +153,7 @@ def _pooled(
     model: Encoder, m: Minutes, ids: list[int], packer: Packer, device: torch.device
 ) -> torch.Tensor:
     """The mean feature over the tokens of each labelled minute, [len(ids), width]."""
-    batch, where = packer.pack([m.examples[i] for i in ids])
+    batch, where = packer.pack([m.examples[i] for i in ids], trim=True)
     x = batch.inputs.to(device)
     with torch.autocast(device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"):
         features = model.features(x).float()

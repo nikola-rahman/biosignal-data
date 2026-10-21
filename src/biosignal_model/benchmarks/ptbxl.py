@@ -30,6 +30,7 @@ import csv
 import io
 import random
 import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -42,7 +43,7 @@ from scipy.stats import rankdata
 from biosignal_data.read.standard import StandardDataset
 from biosignal_data.storage.stores import Store
 from biosignal_data.training.loader import Channel, Example, Origin, Signal
-from biosignal_model.batch import Packer
+from biosignal_model.batch import Batch, Packer
 from biosignal_model.benchmarks import LOG_EVERY_STEPS, Log
 from biosignal_model.model import Encoder, ModelConfig
 
@@ -58,8 +59,10 @@ class PtbxlSettings(BaseModel):
 
     rate: Literal[100, 500]
     tasks: list[Literal["all", "diagnostic", "subdiagnostic", "superdiagnostic", "form", "rhythm"]]
-    rows: int  # rows of the model's max_tokens in one batch
+    rows: int  # rows of the model's max_tokens in one batch, at most
     read_threads: int  # requests to the store at the same time
+    workers: int  # data loader processes that crop and pack batches; 0: the main process
+    probes: bool  # also the linear probes on the frozen encoder (pretrained and random)
     probe_l2: list[float]
     probe_steps: int
     finetune_epochs: int  # the best epoch on fold 9 is the one scored
@@ -198,11 +201,68 @@ def _pooled(
     model: Encoder, examples: list[Example], packer: Packer, device: torch.device
 ) -> torch.Tensor:
     """The mean feature over all tokens of each example, [len(examples), width]."""
-    batch, where = packer.pack(examples)
+    batch, where = packer.pack(examples, trim=True)
+    return _mean_features(model, batch, where, device)
+
+
+def _mean_features(
+    model: Encoder, batch: Batch, where: list[tuple[int, int]], device: torch.device
+) -> torch.Tensor:
+    """The mean feature over the tokens of each (row, document) in `where`, in one pass
+    over the batch: [len(where), width]."""
     x = batch.inputs.to(device)
     with torch.autocast(device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"):
         features = model.features(x).float()
-    return torch.stack([features[row][x.document[row] == doc].mean(0) for row, doc in where])
+    rows, length, width = features.shape
+    key = (torch.arange(rows, device=device)[:, None] * length + x.document).flatten()
+    real = x.document.flatten() >= 0
+    sums = torch.zeros(rows * length, width, device=device, dtype=features.dtype)
+    sums.index_add_(0, key[real], features.reshape(-1, width)[real])
+    counts = torch.bincount(key[real], minlength=rows * length)
+    chosen = torch.tensor([r * length + d for r, d in where], device=device)
+    return sums[chosen] / counts[chosen, None]
+
+
+class _Packed(torch.utils.data.Dataset[tuple[Batch, list[tuple[int, int]]]]):
+    """Batch k packs the examples `groups[k]`, each through `prepare` (e.g. a random crop):
+    made in data loader workers, with random choices seeded by (seed, k), so a batch is the
+    same whichever worker makes it."""
+
+    def __init__(
+        self, examples: list[Example], groups: list[list[int]],
+        prepare: Callable[[Example, random.Random], Example], packer: Packer, seed: str,
+    ) -> None:  # fmt: skip
+        self.examples, self.groups, self.prepare = examples, groups, prepare
+        self.packer, self.seed = packer, seed
+
+    def __len__(self) -> int:
+        return len(self.groups)
+
+    def __getitem__(self, k: int) -> tuple[Batch, list[tuple[int, int]]]:
+        rng = random.Random(f"{self.seed}/{k}")  # noqa: S311 - not secret
+        self.packer.reseed(rng.getrandbits(63))
+        chosen = [self.prepare(self.examples[i], rng) for i in self.groups[k]]
+        return self.packer.pack(chosen, trim=True)
+
+
+def _as_is(item: Any) -> Any:
+    return item
+
+
+def _packed(
+    examples: list[Example], groups: list[list[int]],
+    prepare: Callable[[Example, random.Random], Example], packer: Packer, seed: str,
+    workers: int,
+) -> Iterable[tuple[Batch, list[tuple[int, int]]]]:  # fmt: skip
+    """The batches of `groups`, in order, prepared ahead by `workers` processes."""
+    return torch.utils.data.DataLoader(
+        _Packed(examples, groups, prepare, packer, seed), batch_size=None, shuffle=False,
+        num_workers=workers, collate_fn=_as_is, prefetch_factor=4 if workers else None,
+    )  # fmt: skip
+
+
+def _unchanged(example: Example, rng: random.Random) -> Example:
+    return example
 
 
 def _batches(n: int, packer: Packer, examples: list[Example], rows: int) -> list[list[int]]:
@@ -292,7 +352,11 @@ def end_to_end(
 
     def predict(indices: list[int]) -> np.ndarray:
         examples = [records.examples[i] for i in indices]
-        return _predict(model, head, examples, s.finetune_crop_s, packer, s.rows, device)
+        return _predict(model, head, examples, s.finetune_crop_s, packer, s.rows, device,
+                        s.workers, f"{s.seed}/predict")  # fmt: skip
+
+    def crop(example: Example, rng: random.Random) -> Example:
+        return _random_crop(example, s.finetune_crop_s, rng)
 
     val = [i for i in range(len(records.ids)) if records.folds[i] in VALIDATION]
     test = [i for i in range(len(records.ids)) if records.folds[i] in TEST]
@@ -306,10 +370,11 @@ def end_to_end(
         model.train()
         rng.shuffle(train)
         started, losses, window = time.monotonic(), [], []
-        for k in range(0, len(train), s.finetune_examples_per_step):
-            ids = train[k : k + s.finetune_examples_per_step]
-            chosen = [_random_crop(records.examples[i], s.finetune_crop_s, rng) for i in ids]
-            pooled = _pooled(model, chosen, packer, device)
+        n = s.finetune_examples_per_step
+        steps = [train[k : k + n] for k in range(0, len(train), n)]
+        batches = _packed(records.examples, steps, crop, packer, f"{s.seed}/{epoch}", s.workers)
+        for ids, (batch, where) in zip(steps, batches, strict=True):
+            pooled = _mean_features(model, batch, where, device)
             target = torch.from_numpy(y[ids]).to(device)
             loss = F.binary_cross_entropy_with_logits(head(pooled), target)
             optimizer.zero_grad(set_to_none=True)
@@ -347,7 +412,7 @@ def end_to_end(
 @torch.no_grad()
 def _predict(
     model: Encoder, head: torch.nn.Module, examples: list[Example], crop_s: float | None,
-    packer: Packer, rows: int, device: torch.device,
+    packer: Packer, rows: int, device: torch.device, workers: int, seed: str,
 ) -> np.ndarray:  # fmt: skip
     """The probabilities of each example: the mean over its crops."""
     model.eval()
@@ -357,9 +422,10 @@ def _predict(
             crops.append(c)
             owner.append(n)
     out = []
-    for ids in _batches(len(crops), packer, crops, rows):
-        chosen = [crops[i] for i in ids]
-        out.append(torch.sigmoid(head(_pooled(model, chosen, packer, device))).float().cpu())
+    groups = _batches(len(crops), packer, crops, rows)
+    for batch, where in _packed(crops, groups, _unchanged, packer, seed, workers):
+        pooled = _mean_features(model, batch, where, device)
+        out.append(torch.sigmoid(head(pooled)).float().cpu())
     p = torch.cat(out).numpy()
     sums = np.zeros((len(examples), p.shape[1]))
     np.add.at(sums, owner, p)
@@ -437,14 +503,16 @@ def run(
     pretrained.load_state_dict(checkpoint["model"])
     torch.manual_seed(settings.seed)
     untrained = Encoder(config).to(device)
-    features = {
-        "probe": embed(
-            pretrained, records.examples, max_tokens, settings.rows, device, log, "probe"
-        ),
-        "random": embed(
-            untrained, records.examples, max_tokens, settings.rows, device, log, "random"
-        ),
-    }
+    features = {}
+    if settings.probes:
+        features = {
+            "probe": embed(
+                pretrained, records.examples, max_tokens, settings.rows, device, log, "probe"
+            ),
+            "random": embed(
+                untrained, records.examples, max_tokens, settings.rows, device, log, "random"
+            ),
+        }
     results: dict[str, float] = {
         "records": float(len(records.ids)),
         "rate_hz": float(settings.rate),
