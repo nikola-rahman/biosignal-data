@@ -8,13 +8,14 @@ Nothing is converted to physical units: each channel has `scale` and `offset` in
 
 from __future__ import annotations
 
+import json
 import math
 import posixpath
 import re
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -377,6 +378,146 @@ class EdfSource:
 
     def close(self) -> None:
         pass
+
+
+# --- VitalDB (.vital) ---------------------------------------------------------------------
+
+# Stored type of each .vital sample format (vitaldb.utils.FMT_TYPE_LEN).
+_VITAL_DTYPES = {1: "<f4", 2: "<f8", 3: "i1", 4: "u1", 5: "<i2", 6: "<u2", 7: "<i4", 8: "<u4"}
+_VITAL_FLOAT = (1, 2)  # float32, float64: physical values; gain and offset are not applied
+_WIDER = {1: np.int16, 2: np.int32, 4: np.int64}  # an integer type one size wider
+VITAL_WAVE, VITAL_NUMBER, VITAL_TEXT = 1, 2, 5  # vitaldb.utils.TYPE_WAV, TYPE_NUM, TYPE_STR
+
+
+class VitalSource:
+    """A VitalDB file (VitalRecorder, .vital), read with the vitaldb package (the VitalDB
+    team's reader). Each wave track is a channel at its own rate; tracks at one rate share an
+    array of ceil((end - start) * rate) samples from the file's start, and each record is
+    placed where vitaldb's get_track_samples places it: at ceil((dt - start) * rate), a later
+    record over an earlier one where their times overlap (the overwritten samples are counted
+    in `problems`). Samples are stored as the file stores them; for the integer formats the
+    track's gain and offset are the scale (physical = stored * gain + offset, as vitaldb
+    computes it); the float formats are physical already (vitaldb ignores their gain). Tracks
+    of one rate with different formats share the smallest type that holds every stored value
+    exactly (numpy's promotion: uint16 and float32 give float32). Times no record covers are
+    missing (see _vital_group). vitaldb also reads physical values above 4e9 as missing;
+    they are stored as written here.
+
+    Text tracks (event markers) are events. Numeric tracks (heart rate, SpO2, drug rates: one
+    value every one or two seconds) are not converted yet: about 4 billion values in vitaldb
+    1.0.0, too many for the events table; `problems` counts them.
+    """
+
+    format = "vital"
+
+    def __init__(self, path: str, fetch: Fetch) -> None:
+        import vitaldb  # noqa: PLC0415 - readers load only when used
+
+        vf = vitaldb.VitalFile(str(fetch(path)))
+        self.files = [path]
+        self.problems: list[str] = []
+        start, end = float(vf.dtstart), float(vf.dtend)
+        self.start_time = datetime.fromtimestamp(start, UTC).replace(tzinfo=None) if start else None
+        self.duration_s = end - start if end > start else None
+        tracks = list(vf.trks.items())
+        self.header = json.dumps(
+            [{"track": name, "type": t.type, "fmt": t.fmt, "srate": t.srate, "unit": t.unit,
+              "gain": t.gain, "offset": t.offset, "mindisp": t.mindisp, "maxdisp": t.maxdisp,
+              "device": t.dname, "records": len(t.recs)} for name, t in tracks]
+        )  # fmt: skip
+        waves = [(n, t) for n, t in tracks if t.type == VITAL_WAVE and t.recs and t.srate > 0]
+        by_rate: dict[float, list[tuple[str, Any]]] = {}
+        for name, track in waves:
+            by_rate.setdefault(float(track.srate), []).append((name, track))
+        self.groups, self._arrays = [], []
+        for rate, members in sorted(by_rate.items(), reverse=True):
+            group, array = _vital_group(path, rate, members, start, end, self.problems)
+            self.groups.append(group)
+            self._arrays.append(array)
+        self.frame_rate = max((g.rate for g in self.groups), default=0.0)
+        self.events = [
+            Event(file=path, annotator="vital", onset_s=float(r["dt"]) - start,
+                  label=str(r["val"]), text=name)
+            for name, t in tracks if t.type == VITAL_TEXT for r in t.recs
+        ]  # fmt: skip
+        numbers = [(n, len(t.recs)) for n, t in tracks if t.type == VITAL_NUMBER and t.recs]
+        if numbers:
+            self.problems.append(
+                f"{path}: {len(numbers)} numeric tracks, {sum(n for _, n in numbers):,} values: "
+                "not converted yet"
+            )
+
+    def read(self, group: int, start: int, stop: int) -> np.ndarray:
+        return self._arrays[group][:, start:stop]
+
+    def close(self) -> None:
+        self._arrays = []
+
+
+def _vital_group(
+    path: str, rate: float, members: list[tuple[str, Any]], start: float, end: float,
+    problems: list[str],
+) -> tuple[Group, np.ndarray]:  # fmt: skip
+    """The wave tracks of one rate as one array. A sample of a record is data whatever its
+    value (vitaldb reads the formats' missing codes inside records as values: 65535 is a
+    saturated 16-bit sample); only times no record covers are missing. With such gaps, an
+    integer array is one size wider and its gaps hold the type's minimum, a value no track
+    can store (uint16 -> int32, gaps -2**31); a float array holds NaN there."""
+    length = math.ceil((end - start) * rate)
+    rows, covered = [], []
+    for name, track in members:
+        row = np.zeros(length, dtype=_VITAL_DTYPES[track.fmt])
+        written, overwritten = _place(row, track.recs, start, rate)
+        if overwritten:
+            problems.append(
+                f"{path}: {name}: {overwritten:,} samples overwritten by later records at the "
+                "same times (as vitaldb places them)"
+            )
+        rows.append(row)
+        covered.append(written)
+    dtype = np.result_type(*(row.dtype for row in rows))
+    gaps = [not written.all() for written in covered]
+    integer = dtype.kind in "iu"
+    if any(gaps) and integer and dtype.itemsize < 8:
+        dtype = np.result_type(dtype, _WIDER[dtype.itemsize])
+    missing = int(np.iinfo(dtype).min) if integer else None
+    array = np.empty((len(rows), length), dtype=dtype)
+    channels = []
+    for i, ((name, track), row, written) in enumerate(zip(members, rows, covered, strict=True)):
+        array[i] = row
+        array[i][~written] = missing if missing is not None else np.nan
+        scaled = track.fmt not in _VITAL_FLOAT  # vitaldb applies gain and offset to these
+        channels.append(
+            Channel(
+                name=name, unit=track.unit or "",
+                scale=float(track.gain) if scaled else 1.0,
+                offset=float(track.offset) if scaled else 0.0,
+                invalid_value=missing if gaps[i] else None,
+                source={"fmt": track.fmt, "gain": track.gain, "offset": track.offset,
+                        "device": track.dname, "mindisp": track.mindisp,
+                        "maxdisp": track.maxdisp},
+            )
+        )  # fmt: skip
+    return Group(rate, dtype, length, tuple(channels)), array
+
+
+def _place(
+    row: np.ndarray, records: list[dict[str, Any]], start: float, rate: float
+) -> tuple[np.ndarray, int]:
+    """Copy each record into `row` as vitaldb's get_track_samples does; return the samples
+    a record covers and how many a later record overwrote."""
+    written = np.zeros(len(row), dtype=bool)
+    overwritten = 0
+    for record in records:
+        values = np.asarray(record["val"])
+        first = math.ceil((float(record["dt"]) - start) * rate)
+        lo, hi = max(first, 0), min(first + len(values), len(row))
+        if hi <= lo:
+            continue
+        overwritten += int(written[lo:hi].sum())
+        row[lo:hi] = values[lo - first : hi - first]
+        written[lo:hi] = True
+    return written, overwritten
 
 
 def _edf_start(edf: Any) -> datetime | None:

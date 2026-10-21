@@ -7,7 +7,7 @@ any `<record>.<extension>` that is not a known kind of file is tried as an annot
 and reported if it does not read as one.
 
 EDF and BDF: every `.edf` / `.bdf` file is a recording, unless `RECORDS` lists the records
-(then only those listed).
+(then only those listed). VitalDB: every `.vital` file is a recording.
 
 A `RECORDS` line that names no files but is exactly one pair of existing records written
 without a line break between them is read as those two, and reported as a problem.
@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from biosignal_data.standard.rules import EdfAnnotationFiles
 
 EDF_SUFFIXES = (".edf", ".bdf")
+VITAL_SUFFIX = ".vital"  # VitalDB (VitalRecorder): every such file is a recording
 LISTS = ("RECORDS", "ANNOTATORS")
 # Extensions that are never WFDB annotation files: signals, documents, tables, images, code,
 # WAVE settings (.xws).
@@ -41,7 +42,7 @@ NOT_ANNOTATIONS = frozenset(
         "h5", "hdf5", "nwb", "xls", "xlsx", "doc", "docx", "ppt", "pptx", "wav", "mp3", "mp4",
         "avi", "m", "py", "c", "h", "sh", "r", "ipynb", "log", "ini", "cfg", "yaml", "yml",
         "sha256", "md5", "sig", "asc", "dcm", "fif", "set", "fdt", "vhdr", "vmrk", "eeg",
-        "cnt", "gdf", "xdf", "xws",
+        "cnt", "gdf", "xdf", "xws", "vital",
     }
 )  # fmt: skip
 _EXTENSION = re.compile(r"^[A-Za-z0-9_]{1,16}$")
@@ -52,7 +53,7 @@ class Unit:
     """One recording to convert."""
 
     id: str  # the record name or file path without its extension
-    format: Literal["wfdb", "edf"]
+    format: Literal["wfdb", "edf", "vital"]
     path: str  # WFDB: the record name (header without .hea); EDF: the file
     annotations: tuple[str, ...]  # WFDB annotation files of the record
     listed_annotators: bool  # annotators from ANNOTATORS: a file that does not read fails
@@ -109,14 +110,12 @@ def discover(
         names = [p[: -len(".hea")] for p in paths if p.endswith(".hea")]
         names += [p for p in paths if p.lower().endswith(EDF_SUFFIXES)]
 
+    names += [p for p in paths if p.lower().endswith(VITAL_SUFFIX)]  # never in RECORDS
     by_stem = _files_by_stem(paths)
     units: dict[str, Unit] = {}
     for name in sorted(set(names)):
-        if name + ".hea" in paths:
-            unit = Unit(name, "wfdb", name, (), bool(annotators))
-        elif name.lower().endswith(EDF_SUFFIXES) and name in paths:
-            unit = Unit(posixpath.splitext(name)[0], "edf", name, (), bool(annotators))
-        else:
+        unit = _unit(name, paths, bool(annotators))
+        if unit is None:
             problems.append(f"{name}: listed in RECORDS, but no such header or EDF file")
             continue
         is_annotator = annotators.__contains__ if annotators else may_be_annotations
@@ -132,6 +131,17 @@ def discover(
     views = _views(units, files)
     kept = [u for u in units.values() if u.id not in views]
     return Discovery(kept, lists, frozenset(annotators), problems, views)
+
+
+def _unit(name: str, paths: set[str], listed_annotators: bool) -> Unit | None:
+    """The recording `name` (a WFDB record name, an EDF or a .vital file), if it is there."""
+    if name + ".hea" in paths:
+        return Unit(name, "wfdb", name, (), listed_annotators)
+    if name in paths and name.lower().endswith(EDF_SUFFIXES):
+        return Unit(posixpath.splitext(name)[0], "edf", name, (), listed_annotators)
+    if name in paths and name.lower().endswith(VITAL_SUFFIX):
+        return Unit(posixpath.splitext(name)[0], "vital", name, (), listed_annotators)
+    return None
 
 
 def _has_files(name: str, paths: set[str]) -> bool:

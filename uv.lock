@@ -388,6 +388,7 @@ dependencies = [
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "typer" },
+    { name = "vitaldb" },
     { name = "wfdb" },
 ]
 
@@ -434,6 +435,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.11" },
     { name = "torch", marker = "extra == 'train'", specifier = ">=2.6" },
     { name = "typer", specifier = ">=0.12" },
+    { name = "vitaldb", specifier = ">=1.7.2" },
     { name = "wandb", marker = "extra == 'train'", specifier = ">=0.19" },
     { name = "wfdb", specifier = ">=4.1" },
 ]
@@ -5452,6 +5454,22 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/7f/be/4d1d59d309db76b5808fcfd78bd5996f4e7241366691c38fc331a3136398/virtualenv-21.14.11.tar.gz", hash = "sha256:593052d8477ea8c55a842387ce111bd08c72618f0c1133c302cafe335e570a57", size = 5503091, upload-time = "2026-10-18T07:06:34.716Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ce/6b/d85da8982b41190eafcb9df91dff9d83fc6989e98af4b5be4c8f85510c95/virtualenv-21.14.11-py3-none-any.whl", hash = "sha256:b319f8590a84e5de5f8f2c803ecd2237e9bc0ffa7c1e875e3169c107cecb7454", size = 5495268, upload-time = "2026-10-18T07:06:32.719Z" },
+]
+
+[[package]]
+name = "vitaldb"
+version = "1.7.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "pandas" },
+    { name = "requests" },
+    { name = "wfdb" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f4/1c/f48900276672017f7f72f3d2c0b94ac435c80fc0907ec663cedb6be76cf3/vitaldb-1.7.2.tar.gz", hash = "sha256:70e0ce784b13d52bbf6a315b742ab06d5ed0599b8b01f76182971a391dd64130", size = 67723, upload-time = "2026-06-08T04:10:46.252Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/97/940bf86430760cec92aa59e4e0159030b4fe174f35377e8df88bf8f8da44/vitaldb-1.7.2-py3-none-any.whl", hash = "sha256:9037b11ca172bf3a674275f1fd89db03a02c92e8c9eed15b6cf80b328cd2cb2e", size = 68910, upload-time = "2026-06-08T04:10:47.376Z" },
 ]
 
 [[package]]

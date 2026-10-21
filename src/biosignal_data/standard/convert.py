@@ -48,6 +48,7 @@ from biosignal_data.standard.sources import (
     Fetch,
     Source,
     UnsupportedError,
+    VitalSource,
     WfdbSource,
     wfdb_annotations,
 )
@@ -348,6 +349,8 @@ def convert_unit(plan: StandardPlan, store: Store | None, unit: Unit, work_dir: 
         def open_source() -> Source:
             if unit.format == "wfdb":
                 return WfdbSource(unit.path, fetch, raw.has)
+            if unit.format == "vital":
+                return VitalSource(unit.path, fetch)
             return EdfSource(unit.path, fetch)
 
         try:
@@ -463,7 +466,7 @@ def _batches(
     for unit in units:
         current.append(unit)
         size += by_stem.get(
-            posixpath.splitext(unit.path)[0] if unit.format == "edf" else unit.path, 0
+            posixpath.splitext(unit.path)[0] if unit.format in ("edf", "vital") else unit.path, 0
         )
         if size >= part_bytes or len(current) >= most:
             batches.append(current)
