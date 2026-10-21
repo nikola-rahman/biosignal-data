@@ -117,11 +117,41 @@ def test_a_member_that_differs_from_sha256sums_is_refused(mirror: object, tmp_pa
         physionet_zip.stage(DATASET, "1.0.0", tmp_path / "work", connections=2)
 
 
-def test_the_etag_of_a_multipart_upload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(physionet_zip, "PART", 4)
+def test_the_etag_of_a_multipart_upload(tmp_path: Path) -> None:
     path = tmp_path / "f"
     path.write_bytes(b"0123456789")  # parts 0123 | 4567 | 89
     parts = [hashlib.md5(p).digest() for p in (b"0123", b"4567", b"89")]  # noqa: S324
-    assert physionet_zip._etag(path) == hashlib.md5(b"".join(parts)).hexdigest() + "-3"  # noqa: S324
+    assert physionet_zip._etag(path, 4) == hashlib.md5(b"".join(parts)).hexdigest() + "-3"  # noqa: S324
     path.write_bytes(b"012")
-    assert physionet_zip._etag(path) == hashlib.md5(b"012").hexdigest()  # noqa: S324
+    assert physionet_zip._etag(path, 4) == hashlib.md5(b"012").hexdigest()  # noqa: S324
+
+
+def test_the_part_size_comes_from_the_etag_part_count() -> None:
+    mib = 2**20
+    assert physionet_zip._part_size(1_839_504_686, "x-220") == 8 * mib  # ptb-xl 1.0.3
+    assert physionet_zip._part_size(145_134_191_274, "x-8651") == 16 * mib  # hd-semg 2.0.0
+    assert physionet_zip._part_size(101_136_300_876, "x-6029") == 16 * mib  # vitaldb 1.0.0
+    assert physionet_zip._part_size(5, "plainmd5") == 5
+    with pytest.raises(physionet_zip.ZipCheckError):
+        physionet_zip._part_size(10 * mib, "x-7")  # no whole-MiB size gives 7 parts
+
+
+def test_a_complete_earlier_download_is_checked_not_downloaded_again(
+    mirror: object, tmp_path: Path
+) -> None:
+    body = _zip(FILES)
+    mirror.put_object(  # type: ignore[attr-defined]
+        Bucket="physionet-open", Key="mitdb/mitdb-1.0.0.zip", Body=body
+    )
+    folder = tmp_path / "work" / "zip-mitdb-1.0.0"
+    folder.mkdir(parents=True)
+    (folder / "archive.zip").write_bytes(body)
+    (folder / "store").mkdir()  # an earlier extraction: made again
+    (folder / "store" / "stale").write_bytes(b"x")
+    staged = physionet_zip.stage(DATASET, "1.0.0", tmp_path / "work", connections=2)
+    assert not (folder / "store" / "stale").exists()
+    assert sorted(f.path for f in staged.manifest.files) == ["RECORDS", "r1.dat", "r1.hea"]
+    (folder / "store").mkdir(exist_ok=True)
+    (folder / "archive.zip").write_bytes(body[:-1] + bytes([body[-1] ^ 1]))  # same size
+    with pytest.raises(physionet_zip.ZipCheckError, match="ETag"):
+        physionet_zip.stage(DATASET, "1.0.0", tmp_path / "work", connections=2)

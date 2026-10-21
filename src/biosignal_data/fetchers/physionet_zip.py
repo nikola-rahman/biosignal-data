@@ -47,7 +47,8 @@ if TYPE_CHECKING:
     from mypy_boto3_s3 import S3Client
 
 log = logging.getLogger(__name__)
-PART = 8 * 2**20  # PhysioNet uploads with boto3's default parts; the ETag counts them
+PART = 8 * 2**20  # download parts (S3 ranges)
+MIB = 2**20
 CHUNK = 2**20
 
 
@@ -70,8 +71,15 @@ def stage(dataset: Dataset, version: str, work: Path, *, connections: int) -> St
     if source.credentialed:
         raise ZipCheckError(f"{dataset.id}: credentialed; not on the open AWS copy")
     folder = work / f"zip-{source.slug}-{version}"
-    shutil.rmtree(folder, ignore_errors=True)
-    folder.mkdir(parents=True)
+    archive = folder / "archive.zip"
+    # A complete download from an earlier run is checked again (ETag, SHA256SUMS), not
+    # downloaded again (hd-semg: 145 GB); everything else of the folder is made again.
+    for leftover in folder.glob("*") if folder.exists() else []:
+        if leftover.is_dir():
+            shutil.rmtree(leftover)
+        elif leftover != archive:
+            leftover.unlink()
+    folder.mkdir(parents=True, exist_ok=True)
     client = s3_client(region=MIRROR_REGION, connections=connections)
     prefix = f"{source.slug}/{version}/"
     sums = dict(
@@ -83,23 +91,23 @@ def stage(dataset: Dataset, version: str, work: Path, *, connections: int) -> St
     )
     key = f"{source.slug}/{source.slug}-{version}.zip"
     head = client.head_object(Bucket=MIRROR_BUCKET, Key=key)
-    archive = folder / "archive.zip"
-    log.info(
-        "%s: downloading s3://%s/%s (%d bytes)",
-        dataset.id,
-        MIRROR_BUCKET,
-        key,
-        head["ContentLength"],
-    )
-    client.download_file(
-        MIRROR_BUCKET, key, str(archive),
-        Config=TransferConfig(multipart_chunksize=PART, max_concurrency=connections),
-    )  # fmt: skip
+    if archive.exists() and archive.stat().st_size == head["ContentLength"]:
+        log.info("%s: %s is on disk from an earlier run; checking it again", dataset.id, key)
+    else:
+        log.info(
+            "%s: downloading s3://%s/%s (%d bytes)",
+            dataset.id, MIRROR_BUCKET, key, head["ContentLength"],
+        )  # fmt: skip
+        client.download_file(
+            MIRROR_BUCKET, key, str(archive),
+            Config=TransferConfig(multipart_chunksize=PART, max_concurrency=connections),
+        )  # fmt: skip
     if archive.stat().st_size != head["ContentLength"]:
         raise ZipCheckError(
             f"{key}: {archive.stat().st_size} bytes, expected {head['ContentLength']}"
         )
-    if _etag(archive) != head["ETag"].strip('"'):
+    etag = head["ETag"].strip('"')
+    if _etag(archive, _part_size(head["ContentLength"], etag)) != etag:
         raise ZipCheckError(f"{key}: the MD5 of its parts differs from the S3 ETag")
 
     location = VersionLocation(dataset.id, version, "raw")
@@ -223,12 +231,27 @@ def _version_folder(key: str, names: list[str], sums: dict[str, str]) -> str:
     return tops[0]
 
 
-def _etag(path: Path) -> str:
-    """The S3 ETag of a file uploaded in PART-byte parts: MD5 of the part MD5s, `-<n>`;
-    a file of one part has the plain MD5."""
+def _part_size(size: int, etag: str) -> int:
+    """The part size of a multipart upload, from the part count in its ETag (`<md5>-<n>`):
+    the whole MiB that cuts `size` into exactly n parts. PhysioNet's uploads use 8 MiB, and
+    16 MiB for files whose 8 MiB parts would pass S3's 10,000 (hd-semg, vitaldb); the
+    uploader doubles the part size for those."""
+    if "-" not in etag:
+        return max(size, 1)  # one part: the plain MD5
+    parts = int(etag.rsplit("-", 1)[1])
+    part = -(-size // parts)  # the smallest size that gives n parts...
+    part = -(-part // MIB) * MIB  # ...rounded up to whole MiB, as uploaders choose them
+    if -(-size // part) != parts:
+        raise ZipCheckError(f"no whole-MiB part size cuts {size} bytes into {parts} parts")
+    return part
+
+
+def _etag(path: Path, part_size: int) -> str:
+    """The S3 ETag of a file uploaded in `part_size`-byte parts: MD5 of the part MD5s,
+    `-<n>`; a file of one part has the plain MD5."""
     digests = []
     with path.open("rb") as f:
-        while part := f.read(PART):
+        while part := f.read(part_size):
             digests.append(hashlib.md5(part).digest())  # noqa: S324 - the S3 ETag scheme
     if len(digests) == 1:
         return digests[0].hex()
