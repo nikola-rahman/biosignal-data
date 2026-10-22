@@ -86,9 +86,16 @@ def raw(store: LocalStore, tmp_path: Path) -> dict[str, np.ndarray]:
         "r2.atr": files["r1.atr"],
         "ANNOTATORS": b"atr\treference annotations\n",
         "sub/s1.edf": edf,
-        "m1.hea": b"m1/2 1 100 200\nm1_1 100\nm1_2 100\n",
+        # multi-segment: a layout, a segment, a gap of 50 frames, a segment the source does
+        # not publish, and a segment (mimic4wdb: segment headers give no start of their own)
+        "m1.hea": (
+            b"m1/5 1 100 350 10:00:00 01/02/2003\nm1_0 0\nm1_1 100\n~ 50\nm1_2 100\nm1_3 100\n"
+        ),
+        "m1_0.hea": b"m1_0 1 100 0\n~ 0 200 16 0 0 0 0 I\n",
         "m1_1.hea": b"m1_1 1 100 100\nm1_1.dat 16 200 16 0 0 0 0 I\n",
         "m1_1.dat": b"\x00" * 200,
+        "m1_3.hea": b"m1_3 1 100 100\nm1_3.dat 16 200 16 0 0 0 0 I\n",
+        "m1_3.dat": np.arange(100, dtype="<i2").tobytes(),
         "notes.csv": b"a,b\n1,2\n",
         "r1.at_": files["r1.atr"],  # an annotator not in ANNOTATORS
         "r0.atr": files["r1.atr"],  # annotations of a record that is not there
@@ -116,7 +123,7 @@ def test_recordings_converted_in_processes_are_the_same_as_in_threads(
 ) -> None:
     plan = plan_standard(store, "physionet/mitdb", "1.0.0")
     report = convert(plan, store, workers=2, part_bytes=1, work_dir=tmp_path / "work", processes=2)
-    assert report.complete and not report.failed and report.converted == 5
+    assert report.complete and not report.failed and report.converted == 6
     ds = StandardDataset.open(store, "physionet/mitdb", "1.0.0")
     np.testing.assert_array_equal(ds.read("r1", "200Hz"), raw["ecg"][None, :])
     np.testing.assert_array_equal(ds.read("sub/s1", "256Hz"), raw["eeg"][None, :])
@@ -156,11 +163,14 @@ def test_standard_version_is_exact_and_accounts_for_every_file(
     store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
 ) -> None:
     plan = plan_standard(store, "physionet/mitdb", "1.0.0")
-    assert [u.id for u in plan.units] == ["m1", "r1", "r2", "r3", "sub/s1"]
-    assert plan.discovery.problems == ["missing: listed in RECORDS, but no such header or EDF file"]
+    assert [u.id for u in plan.units] == ["m1_1", "m1_3", "r1", "r2", "r3", "sub/s1"]
+    assert plan.discovery.problems == [
+        "missing: listed in RECORDS, but no such header or EDF file",
+        "m1_2: a segment of m1, but no such header",
+    ]
 
     report = convert(plan, store, workers=2, part_bytes=1, work_dir=tmp_path / "work")
-    assert report.complete and not report.failed and report.converted == 5
+    assert report.complete and not report.failed and report.converted == 6
 
     prefix = "standard-blocks/physionet/mitdb/1.0.0"
     ds = StandardDataset.open(store, "physionet/mitdb", "1.0.0")
@@ -177,9 +187,14 @@ def test_standard_version_is_exact_and_accounts_for_every_file(
     assert objects == {k[len(prefix) + 1 :] for k in store.list(f"{prefix}/data/")}
 
     recordings = pq.read_table(store._path(f"{prefix}/recordings.parquet")).to_pylist()
-    assert [r["recording_id"] for r in recordings] == ["r1", "r2", "r3", "sub/s1"]
-    assert (recordings[2]["n_channels"], recordings[2]["signals"]) == (0, False)
-    r1, r2 = recordings[0], recordings[1]
+    ids = ["m1_1", "m1_3", "r1", "r2", "r3", "sub/s1"]
+    assert [r["recording_id"] for r in recordings] == ids
+    assert (recordings[4]["n_channels"], recordings[4]["signals"]) == (0, False)
+    r1, r2 = recordings[2], recordings[3]
+    # segments of m1: their start from m1's header (frames before them, the gap included)
+    assert recordings[0]["start_time"].isoformat() == "2003-02-01T10:00:00"
+    assert recordings[1]["start_time"].isoformat() == "2003-02-01T10:00:02.500000"
+    np.testing.assert_array_equal(ds.read("m1_3", "100Hz"), np.arange(100)[None, :])
     assert (r2["n_channels"], r2["signals"], r2["arrays"]) == (0, False, [])
     assert r2["source_files"] == ["r2.hea", "r2.atr"] and r2["duration_s"] == 10.0
     assert r1["source_files"] == ["r1.hea", "r1.dat", "r1.atr"]
@@ -211,8 +226,9 @@ def test_standard_version_is_exact_and_accounts_for_every_file(
 
     manifest = json.loads(store.get_bytes(f"{prefix}/_manifest.json") or b"")
     reasons = {n["path"]: n["reason"] for n in manifest["not_converted"]}
-    assert reasons["m1.hea"].startswith("multi-segment WFDB record")
-    assert reasons["m1_1.hea"].startswith("WFDB header of no converted record")
+    segmented = "multi-segment WFDB record: its segments are converted as recordings"
+    assert reasons["m1.hea"] == segmented and reasons["m1_0.hea"] == segmented
+    assert "m1_1.hea" not in reasons and "m1_3.dat" not in reasons
     assert reasons["notes.csv"] == "no reader for .csv files"
     assert reasons["r1.at_"] == "WFDB annotator 'at_' is not listed in ANNOTATORS"
     assert reasons["r0.atr"] == "WFDB annotation file of no converted record"
@@ -247,7 +263,7 @@ def test_a_failed_recording_keeps_the_others_and_runs_again(
     plan = plan_standard(store, "physionet/mitdb", "1.0.0")
     assert [u.id for u in plan.to_convert] == ["sub/s1"]
     report = convert(plan, store, workers=2, part_bytes=1, work_dir=tmp_path / "work")
-    assert report.complete and report.converted == 1 and report.skipped == 4
+    assert report.complete and report.converted == 1 and report.skipped == 5
 
 
 def test_discovery_without_lists_tries_unknown_extensions_as_annotations() -> None:
@@ -387,7 +403,7 @@ def test_every_worker_gets_a_batch_of_a_small_dataset(
     plan = plan_standard(store, "physionet/mitdb", "1.0.0")
     assert len(_batches(plan, plan.units, 10**12, 1)) == 1  # one worker: one batch
     batches = _batches(plan, plan.units, 10**12, 3)  # far below part_bytes
-    assert [len(b) for b in batches] == [2, 2, 1]
+    assert [len(b) for b in batches] == [2, 2, 2]
     assert [u for b in batches for u in b] == plan.units  # in order, none left out
 
 
@@ -461,13 +477,13 @@ def test_cli_dry_run_then_convert_then_already(
     runner = CliRunner()
     dry = runner.invoke(app, [*args, "--dry-run"])
     assert dry.exit_code == 0, dry.output
-    assert "5 recordings (1 EDF, 4 WFDB), 2 annotation files; 5 to convert" in dry.output
+    assert "6 recordings (1 EDF, 5 WFDB), 2 annotation files; 6 to convert" in dry.output
     assert "newest complete raw version 1.0.0" in dry.output
     assert not store.exists("standard-blocks/physionet/mitdb/1.0.0/_SUCCESS")
 
     done = runner.invoke(app, args)
     assert done.exit_code == 0, done.output
-    assert "4 recordings, 4 channels, 5 events" in done.output
+    assert "6 recordings, 6 channels, 5 events" in done.output
     assert "not converted: 1 file: no reader for .csv files" in done.output
     assert "ZarrUserWarning" not in done.output
     assert "already complete (--replace makes it again)" in runner.invoke(app, args).output
@@ -477,7 +493,7 @@ def test_cli_dry_run_then_convert_then_already(
     assert store.exists("standard-blocks/physionet/mitdb/1.0.0/_SUCCESS")
     replaced = runner.invoke(app, [*args, "--replace"])
     assert replaced.exit_code == 0, replaced.output
-    assert "4 recordings, 4 channels, 5 events" in replaced.output
+    assert "6 recordings, 6 channels, 5 events" in replaced.output
     assert store.exists("standard-blocks/physionet/mitdb/1.0.0/_SUCCESS")
 
 
@@ -490,7 +506,7 @@ def test_reader_opens_tables_and_reads_windows_in_physical_units(
             work_dir=tmp_path / "work")  # fmt: skip
     ds = StandardDataset.open(store, "physionet/mitdb", "latest")
     assert ds.location.version == "1.0.0"
-    assert ds.recordings.num_rows == 4 and ds.manifest.recordings == 4
+    assert ds.recordings.num_rows == 6 and ds.manifest.recordings == 6
     stored = ds.window("r1", "200Hz", 1.0, 0.5, physical=False)
     np.testing.assert_array_equal(stored, raw["ecg"][None, 200:300])
     physical = ds.window("r1", "200Hz", 1.0, 0.5)
@@ -745,11 +761,10 @@ def test_small_recordings_share_one_part_and_a_stopped_run_continues(
     plan = plan_standard(store, "physionet/mitdb", "1.0.0")
     assert [u.id for u in plan.to_convert] == ["sub/s1"]
     report = convert(plan, store, workers=2, part_bytes=10**9, work_dir=tmp_path / "work")
-    assert report.complete and report.converted == 1 and report.skipped == 4
+    assert report.complete and report.converted == 1 and report.skipped == 5
     location = plan.location
     recordings = pq.read_table(store._path(location.table_key("recordings"))).to_pylist()
-    # m1 (multi-segment) is not converted yet, as in the main test: no row
-    assert [r["recording_id"] for r in recordings] == ["r1", "r2", "r3", "sub/s1"]
+    assert [r["recording_id"] for r in recordings] == ["m1_1", "m1_3", "r1", "r2", "r3", "sub/s1"]
     assert not list(store.list(location.parts_prefix))
     ds = StandardDataset.open(store, "physionet/mitdb", "1.0.0")
     np.testing.assert_array_equal(ds.read("sub/s1", "256Hz"), raw["eeg"][None, :])

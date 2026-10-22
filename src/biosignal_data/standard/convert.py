@@ -393,7 +393,7 @@ def convert_unit(raw: RawFiles, store: Store | None, unit: Unit, work_dir: Path)
 
         def open_source() -> Source:
             if unit.format == "wfdb":
-                return WfdbSource(unit.path, fetch, raw.has)
+                return WfdbSource(unit.path, fetch, raw.has, unit.start_time)
             if unit.format == "vital":
                 return VitalSource(unit.path, fetch)
             return EdfSource(unit.path, fetch)
@@ -574,6 +574,10 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
 
     used = set(plan.discovery.lists) | {p for done, _ in loaded for p in done["used"]}
     skipped = {n["path"]: n["reason"] for done, _ in loaded for n in done["not_converted"]}
+    for path in plan.discovery.segmented:
+        skipped.setdefault(
+            path, "multi-segment WFDB record: its segments are converted as recordings"
+        )
     for view, owners in plan.discovery.views.values():
         reason = (
             f"a view of {', '.join(owners)}: its header shows their signal files side by "
@@ -714,7 +718,7 @@ def _leftover_reason(
         return "WFDB annotation file of no converted record"
     ext = ext.lower()
     if ext == "hea":
-        return "WFDB header of no converted record (e.g. a segment of a multi-segment record)"
+        return "WFDB header of no converted record"
     if ext in ("dat", "mat") and has_records:
         return f"not named by the header of a converted WFDB record (.{ext})"
     if ext in ("edf", "bdf") and has_records:

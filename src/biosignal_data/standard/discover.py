@@ -23,7 +23,8 @@ from __future__ import annotations
 import posixpath
 import re
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -58,6 +59,9 @@ class Unit:
     annotations: tuple[str, ...]  # WFDB annotation files of the record
     listed_annotators: bool  # annotators from ANNOTATORS: a file that does not read fails
     edf_annotations: tuple[str, ...] = ()  # EDF+ annotation files (standard.yaml rule)
+    # A segment of a multi-segment WFDB record, whose own header gives no start: its start,
+    # from its record's header (the record's start and the frames of the segments before it).
+    start_time: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,7 @@ class Discovery:
     problems: list[str]  # e.g. a RECORDS entry without files
     views: dict[str, tuple[Unit, tuple[str, ...]]] = field(default_factory=dict)
     # view record id -> (its unit, the records whose signal files it shows)
+    segmented: tuple[str, ...] = ()  # headers of multi-segment records and their layouts
 
 
 def discover(
@@ -126,13 +131,17 @@ def discover(
         if unit.id in units:
             raise ValueError(f"two recordings would get the id {unit.id!r}: rename one source")
         units[unit.id] = unit
-    files = _signal_files(units, read_texts)
+    files, headers = _signal_files(units, read_texts)
+    is_annotator = annotators.__contains__ if annotators else may_be_annotations
+    units, segmented = _segments_as_recordings(
+        units, files, headers, paths, by_stem, is_annotator, read_texts, problems
+    )
     units = _without_signal_files(units, files)
     if edf_annotation_files is not None:
         units = _with_edf_annotations(units, paths, edf_annotation_files, problems)
     views = _views(units, files)
     kept = [u for u in units.values() if u.id not in views]
-    return Discovery(kept, lists, frozenset(annotators), problems, views)
+    return Discovery(kept, lists, frozenset(annotators), problems, views, segmented)
 
 
 def _unit(name: str, paths: set[str], listed_annotators: bool) -> Unit | None:
@@ -164,14 +173,121 @@ def _joined(entry: str, folder: str, paths: set[str]) -> list[str] | None:
 
 def _signal_files(
     units: dict[str, Unit], read_texts: Callable[[list[str]], dict[str, str]]
-) -> dict[str, list[str] | None]:
-    """WFDB record path -> the signal files its header names (None: multi-segment)."""
+) -> tuple[dict[str, list[str] | None], dict[str, str]]:
+    """WFDB record path -> the signal files its header names (None: multi-segment), and
+    the headers read (path -> text)."""
     wfdb = [u.path for u in units.values() if u.format == "wfdb"]
     headers = read_texts([path + ".hea" for path in wfdb]) if wfdb else {}
-    return {
+    files = {
         path: signal_files(header_as_read(headers[path + ".hea"], path)[0], posixpath.dirname(path))
         for path in wfdb
     }
+    return files, headers
+
+
+def _segments_as_recordings(
+    units: dict[str, Unit], files: dict[str, list[str] | None], headers: dict[str, str],
+    paths: set[str], by_stem: dict[str, set[str]], is_annotator: Callable[[str], bool],
+    read_texts: Callable[[list[str]], dict[str, str]], problems: list[str],
+) -> tuple[dict[str, Unit], tuple[str, ...]]:  # fmt: skip
+    """Each multi-segment WFDB record as its segments: every segment with samples is a
+    single-segment record (its own header and signal files) and becomes a recording, with
+    the start its record's header gives it (mimic4wdb 0.1.0: 200 records, 3,859 segments,
+    238 channel sets: a monitor adds and removes signals). Gaps (`~`) take time and hold no
+    data; the layout segment (0 samples) holds no data. `files` gets the segments' signal
+    files. Returns the units and the headers of the records and their layouts."""
+
+    def multi_segment(unit: Unit) -> bool:
+        if unit.format != "wfdb" or files.get(unit.path) is not None:
+            return False
+        line = _record_line(header_as_read(headers[unit.path + ".hea"], unit.path)[0])
+        return line is not None and "/" in line[0]
+
+    records = [u for u in units.values() if multi_segment(u)]
+    if not records:
+        return units, ()
+    kept = {k: u for k, u in units.items() if u not in records}
+    segments: list[Unit] = []
+    segmented: list[str] = []
+    for record in records:
+        header = header_as_read(headers[record.path + ".hea"], record.path)[0]
+        found, layouts = _segments(header, record.path)
+        segmented += [record.path + ".hea", *(p for p in layouts if p in paths)]
+        for path, start in found:
+            if path + ".hea" not in paths:
+                problems.append(f"{path}: a segment of {record.path}, but no such header")
+                continue
+            annotations = tuple(
+                sorted(f"{path}.{ext}" for ext in by_stem.get(path, ()) if is_annotator(ext))
+            )
+            unit = Unit(path, "wfdb", path, annotations, record.listed_annotators, (), start)
+            if unit.id in kept:
+                raise ValueError(f"two recordings would get the id {unit.id!r}: rename one source")
+            kept[unit.id] = unit
+            segments.append(unit)
+    texts = read_texts([u.path + ".hea" for u in segments]) if segments else {}
+    for unit in segments:
+        header = header_as_read(texts[unit.path + ".hea"], unit.path)[0]
+        named = signal_files(header, posixpath.dirname(unit.path))
+        if named is None:  # a segment that is itself multi-segment: not in WFDB
+            problems.append(f"{unit.path}: a segment that is multi-segment itself; left out")
+            del kept[unit.id]
+            continue
+        files[unit.path] = named
+    for record in records:
+        del files[record.path]
+    return dict(sorted(kept.items())), tuple(sorted(segmented))
+
+
+def _segments(header: str, record: str) -> tuple[list[tuple[str, datetime | None]], list[str]]:
+    """A multi-segment header's segments with samples (path, start) and its layout headers.
+    The start of a segment is the record's start plus the frames before it at the frame
+    rate; None when the header gives no date and time."""
+    lines = _lines(header)
+    fields = lines[0].split()
+    rate = float(fields[2].split("/")[0]) if len(fields) > 2 else 250.0  # WFDB's default
+    start = _wfdb_start(
+        fields[4] if len(fields) > 4 else None, fields[5] if len(fields) > 5 else None
+    )
+    folder = posixpath.dirname(record)
+    found: list[tuple[str, datetime | None]] = []
+    layouts: list[str] = []
+    frames = 0
+    for line in lines[1:]:
+        name, length = line.split()[0], int(line.split()[1])
+        if name != "~":
+            path = posixpath.join(folder, name)
+            if length == 0:
+                layouts.append(path + ".hea")
+            else:
+                offset = timedelta(seconds=frames / rate)
+                found.append((path, None if start is None else start + offset))
+        frames += length
+    return found, layouts
+
+
+def _lines(header: str) -> list[str]:
+    """A WFDB header's lines without comments and blank lines."""
+    return [s.strip() for s in header.splitlines() if s.strip() and not s.lstrip().startswith("#")]
+
+
+def _record_line(header: str) -> list[str] | None:
+    """The fields of a WFDB header's record line (the first line), or None if it is empty."""
+    lines = _lines(header)
+    return lines[0].split() if lines else None
+
+
+def _wfdb_start(time: str | None, date: str | None) -> datetime | None:
+    """A WFDB header's start (`HH:MM:SS[.sss]` and `DD/MM/YYYY`), or None."""
+    if time is None or date is None:
+        return None
+    try:
+        parts = [float(p) for p in time.split(":")]
+        hours, minutes, seconds = [0.0] * (3 - len(parts)) + parts
+        day, month, year = (int(p) for p in date.split("/"))
+        return datetime(year, month, day) + timedelta(hours=hours, minutes=minutes, seconds=seconds)
+    except ValueError:
+        return None
 
 
 def _with_edf_annotations(
@@ -208,10 +324,7 @@ def _with_edf_annotations(
     for unit_id, unit in units.items():
         if unit.path in annotation_files:  # without RECORDS, such a file is no recording
             continue
-        kept[unit_id] = Unit(
-            unit.id, unit.format, unit.path, unit.annotations, unit.listed_annotators,
-            tuple(found.get(unit_id, ())),
-        )  # fmt: skip
+        kept[unit_id] = replace(unit, edf_annotations=tuple(found.get(unit_id, ())))
     return kept
 
 
@@ -225,10 +338,7 @@ def _without_signal_files(
     kept = {}
     for unit_id, unit in units.items():
         annotations = tuple(a for a in unit.annotations if a not in signals)
-        kept[unit_id] = Unit(
-            unit.id, unit.format, unit.path, annotations, unit.listed_annotators,
-            unit.edf_annotations,
-        )  # fmt: skip
+        kept[unit_id] = replace(unit, annotations=annotations)
     return kept
 
 

@@ -100,7 +100,11 @@ class WfdbSource:
 
     format = "wfdb"
 
-    def __init__(self, record: str, fetch: Fetch, available: Available) -> None:
+    def __init__(
+        self, record: str, fetch: Fetch, available: Available, start_time: datetime | None = None
+    ) -> None:
+        """`start_time`: the start when the header gives none (a segment of a multi-segment
+        record: from its record's header)."""
         import wfdb  # noqa: PLC0415 - readers load only when used
         from wfdb.io._signal import _digi_nan  # noqa: PLC0415
 
@@ -146,7 +150,7 @@ class WfdbSource:
         self.start_time = (
             datetime.combine(head.base_date, head.base_time)
             if head.base_date is not None and head.base_time is not None
-            else None
+            else start_time
         )
         self.duration_s = sig_len / head.fs if sig_len is not None else None
         lines = _signal_lines(self.header, head.n_sig)
