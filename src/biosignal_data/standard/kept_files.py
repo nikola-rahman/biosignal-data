@@ -5,6 +5,7 @@ standard version then does not need the raw version.
     <version>/files.parquet             one row per file: path, object, offset, nbytes, sha256
     <version>/files/pack-<n>.bin        the files one after another, as published, in objects
                                         of at most blocks.OBJECT_BYTES
+    <version>/files/large-<n>.bin       one file larger than that, as published
 
 The same pattern as the blocks: a dataset can keep hundreds of thousands of small files
 (ptb-xl-plus 1.0.1: about 280,000), and one object per file costs one request per file to
@@ -20,7 +21,7 @@ import logging
 from collections import deque
 from collections.abc import Iterable
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any
+from typing import Any, BinaryIO
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -43,10 +44,51 @@ UPLOADS = 4  # packs uploaded at the same time (one at a time: ~1 min for 1 GB, 
 log = logging.getLogger(__name__)
 
 
-def pack(store: Store, location: StandardLocation, files: Iterable[tuple[str, bytes]]) -> pa.Table:
-    """Write `files` ((path, data), in the order given) as packs and files.parquet; return
-    the table. Every upload carries its MD5, which the storage checks. Packs are uploaded
-    UPLOADS at a time; at most UPLOADS packs wait in memory."""
+LARGE_PREFIX = "files/large-"
+
+
+class _Hashing(io.RawIOBase):
+    """A stream that computes the SHA-256 of what is read from it, in order."""
+
+    def __init__(self, stream: BinaryIO) -> None:
+        self._stream, self.sha256, self.nbytes = stream, hashlib.sha256(), 0
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Any) -> int:
+        data = self._stream.read(len(buffer))
+        buffer[: len(data)] = data
+        self.sha256.update(data)
+        self.nbytes += len(data)
+        return len(data)
+
+
+def put_large(
+    store: Store, location: StandardLocation, n: int, path: str, stream: BinaryIO,
+    size: int, sha256: str,
+) -> dict[str, Any]:  # fmt: skip
+    """Stream one large file to files/large-<n>.bin, checked against `size` and `sha256`
+    (the object is removed if it differs); return its row of files.parquet."""
+    obj = f"{LARGE_PREFIX}{n:04d}.bin"
+    key = location.object_key(obj)
+    hashing = _Hashing(stream)
+    store.put_stream(key, io.BufferedReader(hashing, 8 * 2**20), size)
+    if hashing.nbytes != size or hashing.sha256.hexdigest() != sha256:
+        store.delete(key)
+        raise RuntimeError(f"{path}: differs from the raw manifest")
+    log.info("%s: %s (%s, %.0f MiB) written", location.dataset_id, obj, path, size / 2**20)
+    return {"path": path, "object": obj, "offset": 0, "nbytes": size, "sha256": sha256}
+
+
+def pack(
+    store: Store, location: StandardLocation, files: Iterable[tuple[str, bytes]],
+    written: Iterable[dict[str, Any]] = (),
+) -> pa.Table:  # fmt: skip
+    """Write `files` ((path, data), in the order given) as packs, and files.parquet with
+    their rows and the rows `written` (files already stored, put_large); return the table. Every
+    upload carries its MD5, which the storage checks. Packs are uploaded UPLOADS at a time;
+    at most UPLOADS packs wait in memory."""
     rows: list[dict[str, Any]] = []
     buffer = bytearray()
     n = 0
@@ -78,7 +120,7 @@ def pack(store: Store, location: StandardLocation, files: Iterable[tuple[str, by
         flush(pool)
         while uploads:
             uploads.popleft().result()
-    table = pa.Table.from_pylist(rows, schema=FILES)
+    table = pa.Table.from_pylist(rows + list(written), schema=FILES)
     sink = io.BytesIO()
     pq.write_table(table, sink)
     store.put_bytes(location.table_key("files"), sink.getvalue(), "application/vnd.apache.parquet")

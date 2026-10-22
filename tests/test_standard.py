@@ -317,6 +317,34 @@ def test_kept_files_fill_packs_of_at_most_the_object_size(
         kept_files.read(store, location, "b.txt")
 
 
+def test_every_file_not_converted_is_kept_large_ones_in_objects_of_their_own(
+    store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """mimic-iv-ecg 1.0: machine_measurements.csv (183 MB) was not kept while only files up
+    to 16 MiB were, and the mirror pipeline keeps no raw version."""
+    from biosignal_data.standard import convert as convert_module  # noqa: PLC0415
+    from biosignal_data.standard.convert import keep_files_again  # noqa: PLC0415
+
+    monkeypatch.setattr(convert_module, "LARGE_FILE_BYTES", 10)  # r1.xws (13 B) is large
+    plan = plan_standard(store, "physionet/mitdb", "1.0.0")
+    assert convert(plan, store, workers=1, part_bytes=1, work_dir=tmp_path / "work").complete
+    ds = StandardDataset.open(store, "physionet/mitdb", "1.0.0")
+    assert ds.file("notes.csv") == b"a,b\n1,2\n"
+    assert ds.file("r1.xws") == b"wave settings"
+    objects = sorted(k.rsplit("/", 1)[-1] for k in store.list(plan.location.prefix + "/files/"))
+    assert "large-0000.bin" in objects and "pack-0000.bin" in objects
+    # A version made before: files/ again from the raw version, checked against its manifest.
+    for key in list(store.list(plan.location.prefix + "/files")):
+        store.delete(key)
+    keep_files_again(store, "physionet/mitdb", "1.0.0", store)
+    again = StandardDataset.open(store, "physionet/mitdb", "1.0.0")
+    assert again.file("notes.csv") == b"a,b\n1,2\n" and again.file("r1.xws") == b"wave settings"
+    raw_key = plan.raw.location.data_key("notes.csv")
+    store.put_bytes(raw_key, b"a,b\n1,3\n")  # the source differs from the manifest
+    with pytest.raises(RuntimeError, match=r"notes\.csv: differs from the raw manifest"):
+        keep_files_again(store, "physionet/mitdb", "1.0.0", store)
+
+
 def test_kept_files_are_read_ahead_only_up_to_a_bound(store: LocalStore) -> None:
     """ltstdb 1.0.0: 64 readers from AWS against one uploader held all kept files in memory
     (14 GB); the read-ahead is bounded in bytes, and many packs upload in order."""

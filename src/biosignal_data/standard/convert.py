@@ -28,7 +28,7 @@ import shutil
 import tempfile
 import threading
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -604,7 +604,7 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
         problems=plan.discovery.problems + [p for done, _ in loaded for p in done["problems"]],
         not_converted=[NotConverted(path=p, reason=r) for p, r in sorted(skipped.items())],
     )
-    _keep_files(store, plan, location, skipped)
+    _keep_files(store, plan.raw, location, skipped)
     store.put_bytes(location.manifest_key, manifest.model_dump_json(indent=2).encode())
     # The raw version is a build input and may be deleted later; its manifest (every file
     # with its SHA-256; its SHA-256 is raw_manifest_sha256) stays with the standard version.
@@ -614,38 +614,67 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
     return manifest
 
 
-KEEP_BYTES = 16 * 2**20  # raw files not converted and at most this size are kept (files/)
+# Kept files larger than this get an object of their own (streamed), not a place in a pack.
+LARGE_FILE_BYTES = blocks.OBJECT_BYTES
 # Kept files read but not yet packed: without a bound, 64 readers from AWS against one
 # uploader held all of ltstdb's kept files in memory (14 GB, 2026-10-21).
 READ_AHEAD_BYTES = 4 * blocks.OBJECT_BYTES
 
 
 def _keep_files(
-    store: Store, plan: StandardPlan, location: StandardLocation, not_converted: dict[str, str]
+    store: Store, raw: RawDataset, location: StandardLocation, not_converted: Iterable[str]
 ) -> None:
-    """Pack the raw files that hold no signals (tables, documentation) into files/ (see
-    kept_files.py), so that the standard version does not need the raw version: the index
-    reads subject tables from them, a benchmark its labels (PTB-XL: ptbxl_database.csv).
-    Larger files stay listed in the manifest as not converted only. Each file is checked
-    against the raw manifest; files are read header_reads() at a time, at most
-    READ_AHEAD_BYTES ahead of the packing."""
-    paths = [p for p in sorted(not_converted) if plan.raw.entry(p).size <= KEEP_BYTES]
-    total = sum(plan.raw.entry(p).size for p in paths)
+    """Keep every raw file that holds no signals (tables, documentation, other formats) in
+    files/ (see kept_files.py), so that the standard version does not need the raw version,
+    which is a build input and may not exist at all (the physionet-mirror pipeline): the
+    index reads subject tables from them, a benchmark its labels (PTB-XL:
+    ptbxl_database.csv; mimic-iv-ecg: machine_measurements.csv, 183 MB). Files up to
+    LARGE_FILE_BYTES go into packs, read header_reads() at a time and at most
+    READ_AHEAD_BYTES ahead of the packing; larger ones are streamed to an object each. Every
+    file is checked against the raw manifest."""
+    paths = sorted(not_converted)
+    small = [p for p in paths if raw.entry(p).size <= LARGE_FILE_BYTES]
+    large = [p for p in paths if raw.entry(p).size > LARGE_FILE_BYTES]
+    total = sum(raw.entry(p).size for p in paths)
     log.info(
-        "%s: keeping %s (%.2f GB) in files/", location.dataset_id, plural(len(paths), "file"),
-        total / 1e9,
+        "%s: keeping %s (%.2f GB, %d in objects of their own) in files/",
+        location.dataset_id, plural(len(paths), "file"), total / 1e9, len(large),
     )  # fmt: skip
 
     def read(path: str) -> tuple[str, bytes]:
-        with plan.raw.store.open(plan.raw.location.data_key(path)) as f:
+        with raw.store.open(raw.location.data_key(path)) as f:
             data = f.read()
-        if hashlib.sha256(data).hexdigest() != plan.raw.entry(path).sha256:
+        if hashlib.sha256(data).hexdigest() != raw.entry(path).sha256:
             raise RuntimeError(f"{path}: differs from the raw manifest")
         return path, data
 
-    sizes = [plan.raw.entry(p).size for p in paths]
-    with ThreadPoolExecutor(max_workers=header_reads(plan.raw.store)) as pool:
-        kept_files.pack(store, location, _read_ahead(pool, read, paths, sizes))
+    rows = []
+    for n, path in enumerate(large):
+        with raw.store.open(raw.location.data_key(path)) as f:
+            rows.append(
+                kept_files.put_large(store, location, n, path, f, raw.entry(path).size,
+                                     raw.entry(path).sha256)
+            )  # fmt: skip
+    sizes = [raw.entry(p).size for p in small]
+    with ThreadPoolExecutor(max_workers=header_reads(raw.store)) as pool:
+        kept_files.pack(store, location, _read_ahead(pool, read, small, sizes), rows)
+
+
+def keep_files_again(store: Store, dataset_id: str, version: str, raw_store: Store) -> None:
+    """Write files/ and files.parquet of a complete standard version again, with every file
+    it did not convert (_keep_files), read from `raw_store` and checked against the raw
+    manifest kept with the version. For versions made while only files up to 16 MiB were
+    kept (before 2026-10-22: mimic-iv-ecg 1.0 lost machine_measurements.csv, 183 MB)."""
+    location = StandardLocation(dataset_id, version)
+    manifest = StandardManifest.model_validate_json(store.get_bytes(location.manifest_key) or b"")
+    if not store.exists(location.success_key):
+        raise FileNotFoundError(f"{store.uri}/{location.prefix} is not a complete version")
+    data = store.get_bytes(location.raw_manifest_key)
+    if data is None or hashlib.sha256(data).hexdigest() != manifest.raw_manifest_sha256:
+        raise RuntimeError(f"{location.prefix}: its raw manifest is missing or differs")
+    raw_location = VersionLocation(dataset_id, version, "raw")
+    raw = RawDataset(raw_store, raw_location, Manifest.from_json(data), Path())
+    _keep_files(store, raw, location, [n.path for n in manifest.not_converted])
 
 
 def _read_ahead(
