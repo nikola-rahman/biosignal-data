@@ -549,6 +549,7 @@ def finish(plan: StandardPlan, store: Store, workers: int) -> StandardManifest:
     with ThreadPoolExecutor(max_workers=workers) as pool:
         loaded = list(pool.map(load, part_names))
     joining.finish()
+    _check_objects(store, location, part_names, loaded)
     order = {u.id: i for i, u in enumerate(plan.units)}
     joined = {
         name: _in_unit_order(
@@ -623,6 +624,39 @@ LARGE_FILE_BYTES = blocks.OBJECT_BYTES
 # Kept files read but not yet packed: without a bound, 64 readers from AWS against one
 # uploader held all of ltstdb's kept files in memory (14 GB, 2026-10-21).
 READ_AHEAD_BYTES = 4 * blocks.OBJECT_BYTES
+
+
+class MissingObjectsError(RuntimeError):
+    """Block objects of finished batches are not in the store; those batches were reset."""
+
+
+def _check_objects(
+    store: Store,
+    location: StandardLocation,
+    part_names: list[str],
+    loaded: list[tuple[dict[str, Any], dict[str, pa.Table]]],
+) -> None:
+    """Every block object that a finished batch's rows point at must be in the store
+    before the version is joined. A batch with a missing object is reset (its part
+    removed), so that the next run converts it again; then this run stops. (2026-10-27: one
+    object of i-care 2.1, written by a batch with a done.json, was later not in the store,
+    and a training run stopped on it.)"""
+    listed = set(store.list(location.object_key(blocks.DATA) + "/"))
+    reset = []
+    for part, (_, parts) in zip(part_names, loaded, strict=True):
+        table = parts.get("blocks")
+        objects = set(table.column("object").to_pylist()) if table is not None else set()
+        if any(location.object_key(o) not in listed for o in objects):
+            reset.append(part)
+    if not reset:
+        return
+    for part in reset:
+        store.delete_many(list(store.list(location.part_key(part, ""))))
+    raise MissingObjectsError(
+        f"{location.prefix}: {len(reset):,} finished batch(es) point at block objects that "
+        f"are not in the store (e.g. {reset[0]}); they were reset: run the conversion again "
+        "to convert them again"
+    )
 
 
 def _keep_files(

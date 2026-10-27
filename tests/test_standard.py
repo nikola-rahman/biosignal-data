@@ -118,6 +118,29 @@ def test_objects_of_unfinished_batches_are_removed_at_the_end(
     assert list((tmp_path / "work").iterdir()) == []  # the local objects are removed
 
 
+def test_a_batch_whose_object_is_gone_is_converted_again_before_the_end(
+    store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import biosignal_data.standard.convert as module  # noqa: PLC0415
+
+    real_finish = module.finish
+    monkeypatch.setattr(module, "finish", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
+    plan = plan_standard(store, "physionet/mitdb", "1.0.0")
+    with pytest.raises(KeyboardInterrupt):  # every batch done, the end step not run
+        convert(plan, store, workers=1, part_bytes=1, work_dir=tmp_path / "work")
+    data = "standard-blocks/physionet/mitdb/1.0.0/data/"
+    gone = sorted(store.list(data))[0]
+    store.delete(gone)
+    with pytest.raises(module.MissingObjectsError, match="1 finished batch"):
+        real_finish(plan, store, 1)
+    assert not store.exists("standard-blocks/physionet/mitdb/1.0.0/_SUCCESS")
+    monkeypatch.setattr(module, "finish", real_finish)
+    report = convert(plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=1,
+                     part_bytes=1, work_dir=tmp_path / "work")  # fmt: skip
+    assert report.complete and report.converted == 1  # only the reset batch again
+    assert store.exists(gone)
+
+
 def test_recordings_converted_in_processes_are_the_same_as_in_threads(
     store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
 ) -> None:
