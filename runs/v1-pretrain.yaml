@@ -1,9 +1,12 @@
 # v1: model v0 (about 27 M parameters, the settings of v0-rtx6000-c2) pretrained from random
-# weights on index 2026-10-27: 45 PhysioNet datasets, copies across datasets left out, persons
-# in one split (index.yaml). The GPU, workers and cache are set after the speed tests.
+# weights for one pass over the training data of index 2026-10-27b: 45 PhysioNet datasets,
+# copies across datasets left out, persons in one split, channel types from the datasets'
+# documentation (index.yaml). 16.4 B training tokens / ~49,700 real tokens a step (24 %
+# padding, measured) = 330,000 steps. On one 2 x L40S node (torchrun, 2 processes):
+# ~0.56 h per 10,000 steps in the speed test, ~18.6 h.
 data:
   store: s3://biosignal-data
-  index: '2026-10-27'          # quoted: YAML reads a bare date as a date
+  index: '2026-10-27b'
   train_split: train
   validation_split: validation
   # Measured signals only: position (a device code for body position), other (device
@@ -12,11 +15,11 @@ data:
   signal_types: [ecg, eeg, eog, emg, resp, spo2, ppg, bp, hr, temp, accel, scg, pcg]
   datasets: null              # every dataset of the index
   cache_directory: /workspace/cache
-  cache_bytes: 214748364800   # 200 GiB (274 GB free on the pod)
+  cache_bytes: 900000000000   # 900 GB (1,116 GB free on the pod)
   block_s: 1800.0               # the unit of work; also the longest example
   shuffle_buffer: 128         # examples per worker; one example is up to 2 MB
   reads_in_flight: 16
-  workers: 10                 # of 12 cores: the rest for the training process
+  workers: 11                 # of each of the 2 GPU processes (24 cores)
 
 tokens:
   max_tokens: 8192
@@ -38,13 +41,13 @@ optim:
   learning_rate: 6.0e-4
   min_learning_rate: 6.0e-5
   warmup_steps: 500
-  steps: 30000
+  steps: 330000
   weight_decay: 0.05
   beta1: 0.9
   beta2: 0.95
   grad_clip: 1.0
   schedule: wsd
-  decay_steps: 3000
+  decay_steps: 33000          # the last 10 %, as in v0-rtx6000-c2
   decay_shape: 1-sqrt
 
 run:
@@ -55,7 +58,7 @@ run:
   log_every: 20
   validate_every: 1000
   validation_batches: 20
-  checkpoint_every: 1000
+  checkpoint_every: 5000      # ~0.3 GB each: 66 checkpoints
   checkpoint_prefix: models/v1-pretrain
   wandb_project: biosignal-fm
   wandb_entity: schnyox-s
