@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import math
+import os
+import socket
 from pathlib import Path
 
 import numpy as np
@@ -11,9 +14,9 @@ torch = pytest.importorskip("torch")
 from biosignal_data.storage.stores import LocalStore, StoreFactory  # noqa: E402
 from biosignal_data.training import Selection  # noqa: E402
 from biosignal_data.training.loader import Channel, Example, Origin, Signal  # noqa: E402
-from biosignal_model.batch import SIGNAL_TYPES, Packer  # noqa: E402
+from biosignal_model.batch import SIGNAL_TYPES, Batch, Inputs, Packer  # noqa: E402
 from biosignal_model.model import Encoder, ModelConfig, masked_loss  # noqa: E402
-from biosignal_model.train import TrainConfig, train  # noqa: E402
+from biosignal_model.train import OptimSection, TrainConfig, _forward_backward, train  # noqa: E402
 from tests.test_training_loader import _index  # noqa: E402
 
 
@@ -245,3 +248,86 @@ def test_the_wsd_schedule_is_constant_until_its_decay_and_extends_without_a_jump
     assert learning_rate(999, short) == pytest.approx(1e-4, rel=0.2)  # end of its decay
     assert learning_rate(950, short) == pytest.approx(1e-4 + 9e-4 * (1 - 0.5**0.5))
     assert learning_rate(999, long) == 1e-3  # the longer run is still stable there
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+def _join(rank: int, port: int) -> None:
+    os.environ.update(WORLD_SIZE="2", RANK=str(rank), LOCAL_RANK=str(rank),
+                      MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port))  # fmt: skip
+
+
+def _two_row_batch() -> Batch:
+    examples = [_example([40 + 8 * i, 24], [100.0, 50.0]) for i in range(12)]
+    return next(iter(_packer().batches(examples)))
+
+
+def _rows(x: Inputs, rows: slice) -> Inputs:
+    return Inputs(**{k: v[rows] for k, v in vars(x).items()})
+
+
+_NO_CLIP = OptimSection(
+    learning_rate=1e-3, min_learning_rate=1e-4, warmup_steps=1, steps=1, schedule="cosine",
+    decay_steps=None, decay_shape=None, weight_decay=0.0, beta1=0.9, beta2=0.95, grad_clip=1e9,
+)  # fmt: skip
+
+
+def _step_on_one_row(rank: int, port: int, out: str) -> None:
+    import torch.distributed as dist  # noqa: PLC0415
+    from torch.nn.parallel import DistributedDataParallel  # noqa: PLC0415
+
+    _join(rank, port)
+    dist.init_process_group("gloo")
+    torch.manual_seed(0)
+    model = Encoder(_config())
+    optimizer = torch.optim.AdamW(model.parameters())
+    x = _rows(_two_row_batch().inputs, slice(rank, rank + 1))
+    loss, _, _ = _forward_backward(
+        DistributedDataParallel(model), optimizer, x, torch.autocast("cpu", enabled=False),
+        1e-3, _NO_CLIP, 2,
+    )  # fmt: skip
+    if rank == 0:
+        torch.save({"loss": loss, "grads": [p.grad for p in model.parameters()]}, out)
+    dist.destroy_process_group()
+
+
+def test_two_processes_with_one_row_each_step_as_one_process_with_both(tmp_path: Path) -> None:
+    out = str(tmp_path / "two.pt")
+    torch.multiprocessing.spawn(_step_on_one_row, args=(_free_port(), out), nprocs=2)
+    torch.manual_seed(0)
+    model = Encoder(_config())
+    loss, _, _ = _forward_backward(
+        model, torch.optim.AdamW(model.parameters()), _two_row_batch().inputs,
+        torch.autocast("cpu", enabled=False), 1e-3, _NO_CLIP, 1,
+    )  # fmt: skip
+    two = torch.load(out, weights_only=True)
+    assert torch.allclose(two["loss"], loss, rtol=1e-5)
+    for mine, theirs in zip([p.grad for p in model.parameters()], two["grads"], strict=True):
+        assert torch.allclose(mine, theirs, rtol=1e-4, atol=1e-7)
+
+
+def _train_as_rank(rank: int, port: int, config_json: str, root: str) -> None:
+    _join(rank, port)
+    train(TrainConfig.model_validate_json(config_json), StoreFactory(root, None), "abc")
+
+
+def test_a_run_on_two_processes_writes_one_checkpoint_from_the_first(
+    store: LocalStore, tmp_path: Path
+) -> None:
+    config = _short_config(store, tmp_path)  # rows 2: one a process
+    torch.multiprocessing.spawn(
+        _train_as_rank, args=(_free_port(), config.model_dump_json(), str(store.root)), nprocs=2
+    )
+    saved = torch.load(store._path("models/t/step-00000010.pt"), weights_only=True)
+    assert saved["step"] == 10
+    assert all(torch.isfinite(t).all() for t in saved["model"].values())
+    assert json.loads(store.get_bytes("models/t/config.json") or b"{}")["gpus"] == 2
+    odd = config.model_copy(update={"tokens": config.tokens.model_copy(update={"rows": 3})})
+    with pytest.raises(Exception, match="cannot be split over 2 GPUs"):
+        torch.multiprocessing.spawn(
+            _train_as_rank, args=(_free_port(), odd.model_dump_json(), str(store.root)), nprocs=2
+        )

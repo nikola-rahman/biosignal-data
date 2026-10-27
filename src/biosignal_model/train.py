@@ -3,6 +3,10 @@
 Every setting is in one YAML file (see `TrainConfig`); nothing has a default. The run
 logs metrics to Weights & Biases (no artifacts: no checkpoints, data or code go there) and
 writes checkpoints to the store under `run.checkpoint_prefix`.
+
+On several GPUs, run it with torchrun (one process per GPU): `tokens.rows` stays the rows
+of one step over all GPUs, so each GPU packs rows / GPUs of them, and the loss is the one
+of the whole step. Only the first process logs, validates and writes checkpoints.
 """
 
 from __future__ import annotations
@@ -12,8 +16,10 @@ import itertools
 import json
 import logging
 import math
+import os
 import time
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -21,6 +27,7 @@ import torch
 import torch.distributed as dist
 import yaml
 from pydantic import BaseModel, ConfigDict
+from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 
 from biosignal_data.index.build import ROOT as INDEX_ROOT
@@ -48,14 +55,14 @@ class DataSection(_Section):
     block_s: float  # the unit of work: a block of a recording; also the longest example
     shuffle_buffer: int
     reads_in_flight: int
-    workers: int  # data loader processes
+    workers: int  # data loader processes, of each GPU's process
 
 
 class TokenSection(_Section):
     max_tokens: int
     samples_per_token: int
     max_channels: int
-    rows: int  # rows of max_tokens tokens in one batch
+    rows: int  # rows of max_tokens tokens in one step (over all GPUs)
     mask_ratio: float
 
 
@@ -129,35 +136,45 @@ class TrainConfig(_Section):
 
 
 class BatchStream(IterableDataset[Batch]):
-    """Batches of one split; each data loader worker of each rank packs its own part."""
+    """Batches of one split; each data loader worker of each rank packs its own part.
+    `rank`, `ranks`: this process's part of the data (0, 1: all of it); `rows`: the rows
+    of its batches."""
 
-    def __init__(self, source: ExampleSource, config: TrainConfig, datasets: list[str]):
+    def __init__(
+        self,
+        source: ExampleSource,
+        config: TrainConfig,
+        datasets: list[str],
+        rank: int,
+        ranks: int,
+        rows: int,
+    ):
         super().__init__()
         self.source = source
         self.config = config
         self.datasets = datasets
+        self.rank, self.ranks, self.rows = rank, ranks, rows
         self.epoch = 0
 
     def __iter__(self) -> Iterator[Batch]:
         info = get_worker_info()
         worker, workers = (info.id, info.num_workers) if info is not None else (0, 1)
-        rank, ranks = (
-            (dist.get_rank(), dist.get_world_size())
-            if dist.is_available() and dist.is_initialized()
-            else (0, 1)
-        )
-        part, parts = rank * workers + worker, ranks * workers
+        part, parts = self.rank * workers + worker, self.ranks * workers
         t = self.config.tokens
         packer = Packer(
             datasets=self.datasets, max_tokens=t.max_tokens,
-            samples_per_token=t.samples_per_token, max_channels=t.max_channels, rows=t.rows,
+            samples_per_token=t.samples_per_token, max_channels=t.max_channels, rows=self.rows,
             mask_ratio=t.mask_ratio,
             seed=(self.config.run.seed * 1_000_003 + self.epoch) * 1_009 + part,
         )  # fmt: skip
         yield from packer.batches(self.source.examples(self.epoch, part, parts))
 
 
-def _stream(config: TrainConfig, factory: StoreFactory, split: str) -> BatchStream:
+def _stream(
+    config: TrainConfig, factory: StoreFactory, split: str, rank: int, ranks: int
+) -> BatchStream:
+    """The batches of `split` for process `rank` of `ranks`: its part of the data, in
+    batches of its share of the step's rows."""
     d, t = config.data, config.tokens
     store = factory()
     selection = Selection.load(
@@ -174,7 +191,7 @@ def _stream(config: TrainConfig, factory: StoreFactory, split: str) -> BatchStre
         reads_in_flight=d.reads_in_flight, seed=config.run.seed,
     )  # fmt: skip
     datasets = sorted({r.dataset_id for r in selection.recordings})
-    return BatchStream(source, config, datasets)
+    return BatchStream(source, config, datasets, rank, ranks, t.rows // ranks)
 
 
 def _loader(stream: BatchStream, workers: int, device: torch.device) -> DataLoader[Batch]:
@@ -248,8 +265,20 @@ class _Window:
         self.wait += waited
         self.totals.add(batch.analysis.to(per_token.device), per_token)
 
-    def report(self) -> dict[str, float]:
+    def report(self, ranks: int) -> dict[str, float]:
+        """The window's metrics over all ranks (every rank calls it at the same step)."""
         seconds = time.perf_counter() - self.start
+        if ranks > 1:
+            sums = torch.tensor(
+                [self.tokens, self.padding, self.hidden, self.samples, self.examples,
+                 self.wait / ranks], device=self.totals.by_type.device, dtype=torch.float64,
+            )  # fmt: skip
+            dist.all_reduce(sums)
+            self.tokens, self.padding, self.hidden, self.samples, self.examples, self.wait = (
+                sums.tolist()
+            )
+            dist.all_reduce(self.totals.by_dataset)
+            dist.all_reduce(self.totals.by_type)
         return {
             "train/loss": self.loss / self.steps,
             "speed/tokens_per_s": self.tokens / seconds,
@@ -301,21 +330,25 @@ def _wandb_run(
 def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[str, float]:
     """Run the pretraining; returns the last logged metrics."""
     run_cfg, o = config.run, config.optim
+    rank, ranks, device = _process_group(run_cfg.device, config.tokens.rows)
+    first = rank == 0
     torch.manual_seed(run_cfg.seed)
-    device = torch.device(run_cfg.device)
     store = factory()
     index_manifest = store.get_bytes(f"{INDEX_ROOT}/{config.data.index}/_manifest.json")
     if index_manifest is None:
         raise FileNotFoundError(f"index {config.data.index} has no manifest")
-    train_stream = _stream(config, factory, config.data.train_split)
-    validation_stream = _stream(config, factory, config.data.validation_split)
-    validation_batches = _validation_batches(validation_stream, config)
+    train_stream, validation_stream, validation_batches = _data(config, factory, rank, ranks)
     model = Encoder(config.model_settings()).to(device)
     optimizer = _optimizer(model, o, device)
-    described = config.model_dump(mode="json") | {"code_commit": code_commit}
-    start, wandb_id = _resume(store, run_cfg, model, optimizer, described)
-    run = _wandb_run(
-        run_cfg, described, wandb_id, model, index_manifest, train_stream, validation_stream
+    described = config.model_dump(mode="json") | {"code_commit": code_commit, "gpus": ranks}
+    start, wandb_id = _resume(store, run_cfg, model, optimizer, described, write=first)
+    trained = _parallel(model, device, ranks)
+    run = (
+        _wandb_run(
+            run_cfg, described, wandb_id, model, index_manifest, train_stream, validation_stream
+        )
+        if first
+        else _Silent()
     )
     autocast = torch.autocast(
         device.type, dtype=torch.bfloat16, enabled=run_cfg.precision == "bf16"
@@ -331,10 +364,13 @@ def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[
         x = batch.inputs.to(device)
         waited = time.perf_counter() - before
         rate = learning_rate(step - 1, o)
-        loss, per_token, grad_norm = _forward_backward(model, optimizer, x, autocast, rate, o)
+        loss, per_token, grad_norm = _forward_backward(
+            trained, optimizer, x, autocast, rate, o, ranks
+        )
+        # The same decision on every rank: the loss is the step's, the gradients are shared.
         if not (torch.isfinite(loss) and torch.isfinite(grad_norm)):
             bad_in_a_row, bad_total = bad_in_a_row + 1, bad_total + 1
-            _bad_step(run_cfg, step, batch, loss, grad_norm, bad_in_a_row)
+            _bad_step(run_cfg, step, batch, loss, grad_norm, bad_in_a_row, rank, ranks)
             run.log({"train/bad_steps": bad_total}, step=step)
             optimizer.zero_grad(set_to_none=True)
             continue
@@ -342,41 +378,111 @@ def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[
         optimizer.step()
         window.add(batch, loss.item(), per_token, waited)
         if step % run_cfg.log_every == 0 or step == o.steps:
-            last = window.report() | {"train/grad_norm": float(grad_norm),
+            last = window.report(ranks) | {"train/grad_norm": float(grad_norm),
                                       "train/learning_rate": rate} | _memory(device)  # fmt: skip
             run.log(last, step=step)
             window = _Window(train_stream.datasets, device)
-        if step % run_cfg.validate_every == 0 or step == o.steps:
+        if first and (step % run_cfg.validate_every == 0 or step == o.steps):
             validation = _validate(
                 model, validation_batches, validation_stream.datasets, device, autocast
             )
             run.log(validation, step=step)
             last |= validation
             window.start = time.perf_counter()  # validation time is not training time
-        if step % run_cfg.checkpoint_every == 0 or step == o.steps:
+        if first and (step % run_cfg.checkpoint_every == 0 or step == o.steps):
             _checkpoint(store, run_cfg.checkpoint_prefix, step, model, optimizer, config, run.id)
             window.start = time.perf_counter()
-    run.finish()
+    _finish(run, ranks)
     return last
 
 
+def _finish(run: Any, ranks: int) -> None:
+    run.finish()
+    if ranks > 1:
+        dist.destroy_process_group()
+
+
+def _data(
+    config: TrainConfig, factory: StoreFactory, rank: int, ranks: int
+) -> tuple[BatchStream, BatchStream, list[Batch]]:
+    """This process's training batches, the validation stream, and the validation batches.
+    Validation runs on the first process only, with whole steps: the same batches as on
+    one GPU."""
+    train_stream = _stream(config, factory, config.data.train_split, rank, ranks)
+    validation_stream = _stream(config, factory, config.data.validation_split, 0, 1)
+    validation_batches = _validation_batches(validation_stream, config) if rank == 0 else []
+    return train_stream, validation_stream, validation_batches
+
+
+def _process_group(device: str, rows: int) -> tuple[int, int, torch.device]:
+    """Under torchrun with several processes (WORLD_SIZE > 1): join the process group;
+    returns this process's rank, the number of ranks and its device (its own GPU). Else
+    (0, 1, the configured device). The step's `rows` must split evenly over the ranks."""
+    ranks = int(os.environ.get("WORLD_SIZE", "1"))
+    if rows % ranks:
+        raise ValueError(f"tokens.rows {rows} cannot be split over {ranks} GPUs")
+    if ranks == 1:
+        return 0, 1, torch.device(device)
+    if device == "cuda":
+        local = int(os.environ["LOCAL_RANK"])
+        torch.cuda.set_device(local)
+        dist.init_process_group("nccl", timeout=timedelta(minutes=30))
+        return dist.get_rank(), ranks, torch.device("cuda", local)
+    dist.init_process_group("gloo", timeout=timedelta(minutes=30))  # CPU: for tests
+    return dist.get_rank(), ranks, torch.device(device)
+
+
+def _parallel(model: Encoder, device: torch.device, ranks: int) -> torch.nn.Module:
+    """The model as trained: wrapped in DDP (gradients averaged over the ranks) when there
+    are several ranks; the model itself otherwise."""
+    if ranks == 1:
+        return model
+    return DistributedDataParallel(
+        model, device_ids=[device.index] if device.type == "cuda" else None
+    )
+
+
+class _Silent:
+    """The W&B run of the processes other than the first: they log nothing."""
+
+    id = ""
+
+    def log(self, *_: Any, **__: Any) -> None:
+        pass
+
+    def finish(self) -> None:
+        pass
+
+
 def _forward_backward(
-    model: Encoder,
+    model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     x: Inputs,
     autocast: Any,
     rate: float,
     o: OptimSection,
+    ranks: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Loss, per-token errors and the gradient norm (before clipping) of one batch; the
-    gradients are left for the optimizer, which the caller applies or not."""
+    """Loss, per-token errors and the gradient norm (before clipping) of one step; the
+    gradients are left for the optimizer, which the caller applies or not. With several
+    ranks, the loss is that of the whole step (all ranks' errors over all ranks' count),
+    as on one GPU with all the rows."""
     for group in optimizer.param_groups:
         group["lr"] = rate
     with autocast:
         predicted = model(x)
     loss, per_token = masked_loss(predicted, x)
     optimizer.zero_grad(set_to_none=True)
-    loss.backward()  # type: ignore[no-untyped-call]
+    if ranks == 1:
+        loss.backward()  # type: ignore[no-untyped-call]
+    else:
+        count = per_token[..., 1].sum().clamp(min=1)
+        step = torch.stack([loss.detach() * count, per_token[..., 1].sum()])
+        dist.all_reduce(step)
+        everywhere = step[1].clamp(min=1)
+        # DDP averages the gradients over the ranks: times `ranks` gives their sum.
+        (loss * count / everywhere * ranks).backward()  # type: ignore[no-untyped-call]
+        loss = step[0] / everywhere
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), o.grad_clip)
     return loss, per_token, grad_norm
 
@@ -470,16 +576,21 @@ def _resume(
     model: Encoder,
     optimizer: torch.optim.Optimizer,
     described: dict[str, Any],
+    *,
+    write: bool,
 ) -> tuple[int, str | None]:
     """The step to continue after and the W&B run id: from the newest checkpoint when the
-    run resumes and there is one; else (0, None), and the run's config is written."""
+    run resumes and there is one; else (0, None), and the run's config is written (by the
+    first process: `write`)."""
     resumed = (
         _newest_checkpoint(store, run_cfg.checkpoint_prefix) if run_cfg.resume == "newest" else None
     )
     if resumed is None:
-        store.put_bytes(
-            f"{run_cfg.checkpoint_prefix}/config.json", json.dumps(described, indent=2).encode()
-        )
+        if write:
+            store.put_bytes(
+                f"{run_cfg.checkpoint_prefix}/config.json",
+                json.dumps(described, indent=2).encode(),
+            )
         return 0, None
     model.load_state_dict(resumed["model"])
     optimizer.load_state_dict(resumed["optimizer"])
@@ -494,10 +605,14 @@ def _bad_step(
     loss: torch.Tensor,
     grad_norm: torch.Tensor,
     in_a_row: int,
+    rank: int,
+    ranks: int,
 ) -> None:
-    """A step that is not applied: save its batch; too many in a row stop the run."""
+    """A step that is not applied: save its batch (each rank its own); too many in a row
+    stop the run."""
+    name = f"bad-step-{step:08d}" + (f"-rank{rank}" if ranks > 1 else "")
     _save_bad_batch(
-        run_cfg.bad_batch_directory, step, batch, loss.detach().item(), grad_norm.item()
+        run_cfg.bad_batch_directory, name, step, batch, loss.detach().item(), grad_norm.item()
     )
     if in_a_row >= run_cfg.max_bad_steps:
         raise FloatingPointError(
@@ -506,12 +621,14 @@ def _bad_step(
         )
 
 
-def _save_bad_batch(directory: Path, step: int, batch: Batch, loss: float, norm: float) -> None:
+def _save_bad_batch(
+    directory: Path, name: str, step: int, batch: Batch, loss: float, norm: float
+) -> None:
     """The batch of a step that was not applied, for finding why (inputs and analysis)."""
     directory.mkdir(parents=True, exist_ok=True)
     torch.save(
         {"step": step, "loss": loss, "grad_norm": norm, "inputs": vars(batch.inputs),
          "analysis": vars(batch.analysis)},
-        directory / f"bad-step-{step:08d}.pt",
+        directory / f"{name}.pt",
     )  # fmt: skip
     log.warning("step %d: loss %s, gradient norm %s; not applied, batch saved", step, loss, norm)

@@ -91,8 +91,16 @@ def test_splits_are_stable_and_close_to_80_10_10() -> None:
         ({"rule": "unknown"}, "cannot be certain"),
         ({"rule": "one_per_recording", "evidence": None}, "needs `evidence`"),
         ({"rule": "one_per_recording", "namespace": "n"}, "needs a pattern or table rule"),
-        ({"rule": "pattern", "pattern": "(x)", "namespace": "n", "certain": False,
-          "evidence": None}, "needs a pattern or table rule"),
+        (
+            {
+                "rule": "pattern",
+                "pattern": "(x)",
+                "namespace": "n",
+                "certain": False,
+                "evidence": None,
+            },
+            "needs a pattern or table rule",
+        ),
     ],
 )
 def test_invalid_subject_rules_are_rejected(fields: dict[str, object], message: str) -> None:

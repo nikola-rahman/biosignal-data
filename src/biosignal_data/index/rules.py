@@ -89,8 +89,9 @@ class ChannelRule(_Model):
 
 class ExcludeRule(_Model):
     """Recordings left out of the index: copies of, or extracts from, other recordings of
-    the same dataset or of another dataset of the index. Leaving a recording out is a claim about the data, so it needs a
-    source and a quote, or `checked`: how the samples were compared."""
+    the same dataset or of another dataset of the index. Leaving a recording out is a
+    claim about the data, so it needs a source and a quote, or `checked`: how the samples
+    were compared."""
 
     pattern: str  # a regex on the recording id
     reason: str
