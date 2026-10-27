@@ -1,7 +1,9 @@
 """The subject of a recording, and the split of a subject.
 
-A subject id is qualified by its dataset (`physionet/chbmit:chb01`): persons are never
-matched across datasets, because no source says who is who between them.
+A subject id is qualified by its dataset (`physionet/chbmit:chb01`): persons are matched
+across datasets only where the sources say that the datasets share one id for a person
+(a rule's `namespace`, e.g. `mimic-iv:10014354` for MIMIC-IV-ECG and the MIMIC-IV
+waveforms).
 
 The split of a subject comes from a hash of its qualified id alone, so it never changes,
 whatever is added to or removed from the index.
@@ -45,7 +47,7 @@ def subject_of(
     for group in rule.same_person:
         if subject in group:
             subject = group[0]  # one id for one person
-    return f"{dataset_id}:{subject}", rule.certain
+    return f"{rule.namespace or dataset_id}:{subject}", rule.certain
 
 
 def split_of(subject_id: str) -> str:

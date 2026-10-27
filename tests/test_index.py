@@ -61,6 +61,15 @@ def test_subjects_from_a_pattern_with_one_person_under_two_names() -> None:
     assert subject_of("physionet/chbmit", "chb21/chb21_01", rule)[0] == "physionet/chbmit:chb01"
 
 
+def test_datasets_of_one_namespace_give_a_person_one_subject_id() -> None:
+    ecg = _rule(rule="pattern", pattern=r"/p(\d{8})/s\d{8}/", namespace="mimic-iv")
+    waves = _rule(rule="pattern", pattern=r"/p(\d{8})/\d{8}/", namespace="mimic-iv")
+    one = subject_of("physionet/mimic-iv-ecg", "files/p1001/p10014354/s40689238/40689238", ecg)
+    two = subject_of("physionet/mimic4wdb", "waves/p100/p10014354/81739927/81739927_0001", waves)
+    assert one == two == ("mimic-iv:10014354", True)
+    assert split_of(one[0]) == split_of(two[0])
+
+
 def test_without_a_rule_each_recording_is_its_own_subject_and_not_certain() -> None:
     assert subject_of("x/y", "r1", None) == ("x/y:r1", False)
     assert subject_of("x/y", "r1", _rule(rule="one_per_recording")) == ("x/y:r1", True)
@@ -81,6 +90,9 @@ def test_splits_are_stable_and_close_to_80_10_10() -> None:
         ({"rule": "pattern"}, "exactly when rule is pattern"),
         ({"rule": "unknown"}, "cannot be certain"),
         ({"rule": "one_per_recording", "evidence": None}, "needs `evidence`"),
+        ({"rule": "one_per_recording", "namespace": "n"}, "needs a pattern or table rule"),
+        ({"rule": "pattern", "pattern": "(x)", "namespace": "n", "certain": False,
+          "evidence": None}, "needs a pattern or table rule"),
     ],
 )
 def test_invalid_subject_rules_are_rejected(fields: dict[str, object], message: str) -> None:

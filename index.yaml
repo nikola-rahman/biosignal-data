@@ -176,6 +176,7 @@ datasets:
         - [e0147, e0148]
         - [e0154, e0155]
         - [e0162, e0163]
+      namespace: edb-ltstdb  # 10 persons are also in ltstdb: see the ltstdb rule
       certain: true
       source: https://physionet.org/content/edb/1.0.0/
       evidence: >-
@@ -282,3 +283,339 @@ datasets:
         notes: >-
           Checked in ptbxl_database.csv (2026-10-20): no patient is in two folds; fold 9 has
           2,183 records, fold 10 has 2,198.
+
+  # Added 2026-10-27 for the datasets converted on 2026-10-21/22. Quotes checked against the
+  # pages on 2026-10-27; record names checked against the RECORDS files of the releases.
+
+  - id: physionet/challenge-2020
+    exclude:
+      - pattern: '.'
+        reason: a copy of a recording of challenge-2021
+        source: https://physionet.org/content/challenge-2021/1.0.3/
+        evidence: >-
+          The Challenge data include recordings from last year’s Challenge and many new
+          recordings for this year’s Challenge
+        checked: >-
+          2026-10-27: the RECORDS files of all 46 subfolders of challenge-2020 1.0.2 are
+          byte-identical to those of challenge-2021 1.0.3; the headers of HR00001 and E00001
+          are identical.
+
+  - id: physionet/challenge-2021
+    subject:
+      rule: unknown
+      certain: false
+      source: https://physionet.org/content/challenge-2021/1.0.3/
+      notes: >-
+        The headers give age, sex and diagnoses only, no patient. The CPSC (A, Q), Georgia
+        (E) and Chapman-Shaoxing/Ningbo (JS) records are each their own subject.
+    exclude:
+      - pattern: '(^|/)HR\d{5}$'
+        reason: a copy of a recording of ptb-xl
+        source: https://physionet.org/content/challenge-2021/1.0.3/
+        evidence: >-
+          derived from: PTB Diagnostic ECG Database v1.0.0 / PTB-XL, a large publicly
+          available electrocardiography dataset v1.0.1
+        checked: >-
+          2026-10-27: HR00001, HR10500 and HR21837 have the samples of PTB-XL 1.0.3
+          records500 ecg_id 1, 10500 and 21837 (same first values and checksums). The 38 HR
+          records with no PTB-XL 1.0.3 row are the identical-waveform duplicates that PTB-XL
+          removed (ptbxl_v102_changelog.txt, ptbxl_v103_changelog.txt).
+      - pattern: '(^|/)S\d{4}$'
+        reason: a copy of a recording of ptbdb
+        source: https://physionet.org/content/challenge-2021/1.0.3/
+        evidence: >-
+          derived from: PTB Diagnostic ECG Database v1.0.0 / PTB-XL, a large publicly
+          available electrocardiography dataset v1.0.1
+        checked: >-
+          2026-10-27: S0001, S0300, S0548 and S0549 are the records of lines 1, 300, 548 and
+          549 of ptbdb's RECORDS (same lengths; values halved by the gain 1000 instead of
+          2000 per mV; 12 of the 15 leads).
+      - pattern: '(^|/)I\d{4}$'
+        reason: a copy of a recording of incartdb
+        source: https://physionet.org/content/challenge-2021/1.0.3/
+        checked: >-
+          2026-10-27: I0001, I0040 and I0075 are incartdb I01, I40 and I75 (same first
+          values after the gain change); I0036 (I36) is absent.
+
+  - id: physionet/hd-semg
+    subject:
+      rule: pattern
+      pattern: '(?:^|/)subject_?(\d{2})_session_?[12]/'
+      certain: true
+      source: https://physionet.org/content/hd-semg/2.0.0/
+      evidence: >-
+        We acquired data from 20 subjects with each subject participating in our experiment
+        twice on separate days
+      notes: The same 20 subjects are in all five sub-datasets (pr, mvc, 1dof, ndof, random).
+    exclude:
+      - pattern: '_preprocess_'
+        reason: a filtered copy of another recording of the dataset
+        source: https://physionet.org/content/hd-semg/2.0.0/
+        evidence: >-
+          We provide both raw HD-sEMG signals and preprocessed HD-sEMG signals in our
+          dataset. ... filtered with a 10--500 Hz 8-order Butterworth bandpass filter
+
+  - id: physionet/hmc-sleep-staging
+    subject:
+      rule: unknown
+      certain: false
+      source: https://physionet.org/content/hmc-sleep-staging/1.1/
+      notes: >-
+        "Night recordings are identified by a sequence number SNXXX"; neither the page nor
+        the paper says whether two nights come from one person.
+
+  - id: physionet/i-care
+    subject:
+      rule: pattern
+      pattern: '(?:^|/)(\d{4})/\d{4}_\d{3}_\d{3}_[A-Z]+$'
+      certain: true
+      source: https://physionet.org/content/i-care/2.1/
+      evidence: >-
+        the binary signal file 0284_001_004_EEG.mat contains the first segment ... for
+        patient 0284 of the I-CARE patient cohort.
+
+  - id: physionet/incartdb
+    subject:
+      rule: pattern
+      pattern: '(?:^|/)(I\d{2})$'
+      same_person:
+        - [I01, I02]
+        - [I03, I04, I05]
+        - [I06, I07]
+        - [I09, I10, I11]
+        - [I12, I13, I14]
+        - [I16, I17]
+        - [I18, I19]
+        - [I20, I21, I22]
+        - [I23, I24]
+        - [I25, I26]
+        - [I27, I28]
+        - [I29, I30, I31, I32]
+        - [I33, I34]
+        - [I35, I36, I37]
+        - [I38, I39]
+        - [I40, I41]
+        - [I42, I43]
+        - [I44, I45, I46]
+        - [I47, I48]
+        - [I49, I50]
+        - [I51, I52, I53]
+        - [I54, I55, I56]
+        - [I57, I58]
+        - [I59, I60, I61]
+        - [I62, I63, I64]
+        - [I65, I66, I67]
+        - [I68, I69]
+        - [I70, I71]
+        - [I72, I73]
+        - [I74, I75]
+      certain: true
+      source: https://physionet.org/content/incartdb/1.0.0/
+      evidence: >-
+        Each .hea file also includes a patient number (1–32) that identifies the source
+        recording; all records with a given patient number were obtained from the same
+        Holter recording. For convenience, this information is also collected in the files
+        record-descriptions.txt and files-patients-diagnoses.txt.
+      notes: Groups from files-patients-diagnoses.txt (32 patients, 75 records).
+
+  - id: physionet/ltafdb
+    subject:
+      rule: unknown
+      certain: false
+      source: https://physionet.org/content/ltafdb/1.0.0/
+      notes: >-
+        "84 long-term ECG recordings of subjects with paroxysmal or sustained atrial
+        fibrillation"; the page does not say whether two records come from one person.
+
+  - id: physionet/ltdb
+    subject:
+      rule: unknown
+      certain: false
+      source: https://physionet.org/content/ltdb/1.0.0/
+      notes: '"a collection of 7 long-duration electrocardiogram (ECG) recordings"; persons not stated.'
+
+  - id: physionet/ludb
+    subject:
+      rule: one_per_recording
+      certain: true
+      source: https://physionet.org/files/ludb/1.0.1/README
+      evidence: Lobachevsky University Database (LUDB) contains 200 records from 200 subjects.
+
+  - id: physionet/mimic-iv-ecg
+    subject:
+      rule: pattern
+      pattern: '(?:^|/)p\d{4}/p(\d{8})/s\d{8}/'
+      namespace: mimic-iv
+      certain: true
+      source: https://physionet.org/content/mimic-iv-ecg/1.0/
+      evidence: >-
+        The ECGs are grouped into subdirectories based on subject_id. ... The subject ID
+        can be used to link a subject from MIMIC-IV-ECG to the other modules in the
+        MIMIC-IV Clinical Database.
+
+  - id: physionet/mimic4wdb
+    subject:
+      rule: pattern
+      pattern: '(?:^|/)p\d{3}/p(\d{8})/\d{8}/'
+      namespace: mimic-iv
+      certain: true
+      source: https://physionet.org/content/mimic4wdb/0.1.0/
+      evidence: >-
+        all records associated with a given patient are stored in a single folder named
+        after the patient's subject_id. ... Each patient has a unique number (subject_id)
+        which is used to identify the patient in MIMIC-IV.
+
+  - id: physionet/nsrdb
+    subject:
+      rule: unknown
+      certain: false
+      source: https://physionet.org/content/nsrdb/1.0.0/
+      notes: >-
+        "18 long-term ECG recordings of subjects ... 5 men ... and 13 women": 18 persons
+        for 18 records, but the page does not say one record per person.
+
+  - id: physionet/ptb-xl-plus
+    exclude:
+      - pattern: '.'
+        reason: derived from recordings of ptb-xl (median beats)
+        source: https://physionet.org/content/ptb-xl-plus/1.0.1/
+        evidence: >-
+          This is a derivative dataset of the PTB-XL project ... the filenames contain the
+          corresponding PTB-XL ECG identifiers
+
+  - id: physionet/ptbdb
+    subject:
+      rule: pattern
+      pattern: '^patient(\d{3})/'
+      certain: true
+      source: https://physionet.org/content/ptbdb/1.0.0/
+      evidence: >-
+        The database contains 549 records from 290 subjects ... Each subject is
+        represented by one to five records.
+
+  - id: physionet/qtdb
+    exclude:
+      - pattern: '(?:^|/)sel'
+        reason: an extract from a recording of another dataset (mitdb, stdb, svdb, nsrdb, edb, sddb, ltdb)
+        source: https://physionet.org/files/qtdb/1.0.0/doc/node4.html
+        evidence: >-
+          QT Database records have record names of the form sel nnnn , where nnnn is the
+          name of the original record in the source database.
+
+  - id: physionet/sddb
+    subject:
+      rule: unknown
+      certain: false
+      source: https://physionet.org/content/sddb/1.0.0/
+      notes: >-
+        "23 complete Holter recordings"; the clinical table numbers its subjects as the
+        records (30-52), but the page does not say one record per person.
+
+  - id: physionet/siena-scalp-eeg
+    subject:
+      rule: pattern
+      pattern: '^(PN\d{2})/'
+      certain: true
+      source: https://physionet.org/content/siena-scalp-eeg/1.0.0/
+      evidence: Each folder refers to a specific subject including between 1 and 5 data files
+
+  - id: physionet/sleep-edfx
+    subject:
+      rule: pattern
+      pattern: '(?:^|/)(S[CT]\d\d\d)\d[A-Z]\d-PSG$'
+      certain: true
+      source: https://physionet.org/content/sleep-edfx/1.0.0/
+      evidence: >-
+        Files are named in the form SC4ssNEO-PSG.edf where ss is the subject number, and N
+        is the night.
+      notes: >-
+        Group 1 keeps the study (SC4, ST7) with the subject number: the page does not say
+        that SC and ST subject numbers are the same persons.
+
+  - id: physionet/stdb
+    subject:
+      rule: unknown
+      certain: false
+      source: https://physionet.org/content/stdb/1.0.0/
+      notes: '"28 ECG recordings of varying lengths"; persons not stated.'
+
+  - id: physionet/svdb
+    subject:
+      rule: unknown
+      certain: false
+      source: https://physionet.org/content/svdb/1.0.0/
+      notes: '"78 half-hour ECG recordings"; persons not stated.'
+
+  - id: physionet/tpehgdb
+    subject:
+      rule: unknown
+      certain: false
+      source: https://physionet.org/content/tpehgdb/1.0.1/
+      notes: >-
+        "300 uterine EMG records from 300 pregnancies (one record per pregnancy)"; the page
+        does not say whether one woman had two pregnancies in the set.
+
+  - id: physionet/ltstdb
+    subject:
+      rule: pattern
+      pattern: '^(s\d{4})\d$'
+      # Records with an excerpt in edb, from their headers ("An excerpt of this recording is
+      # included in the European ST-T Database (record e0113)"): the person gets the edb id
+      # (the first of its edb group), so both datasets put the person in one split.
+      same_person:
+        - [e0103, s2015]
+        - [e0104, s2029]
+        - [e0105, s2016]
+        - [e0113, s2002]
+        - [e0123, s2030]  # e0125 (edb group e0123-e0126)
+        - [e0127, s2017]
+        - [e0129, s2031]
+        - [e0162, s2018]
+        - [e0603, s2058]
+        - [e0604, s2059]
+      namespace: edb-ltstdb
+      certain: true
+      source: https://physionet.org/content/ltstdb/1.0.0/
+      evidence: >-
+        Records obtained from the same subject have names that differ in the last digit
+        only. ... Ten additional recordings of the Long-Term ST Database are from the
+        collection originally gathered by the Pisa group for the European ST-T Database,
+        which contains two-hour excerpts of some of these same recordings.
+      notes: >-
+        86 records, 80 persons. The ten edb pairs were read from the record headers on
+        2026-10-27 (s20021 e0113, s20151 e0103, s20161 e0105, s20171 e0127, s20181 e0162,
+        s20291 e0104, s20301 e0125, s20311 e0129, s20581 e0603, s20591 e0604).
+
+  - id: physionet/shdb-af
+    subject:
+      rule: table
+      pattern: '^(\d{3})$'
+      table:
+        file: AdditionalData.csv
+        delimiter: ','
+        recording_column: Data_ID
+        subject_column: Subject_ID
+      certain: true
+      source: https://physionet.org/content/shdb-af/1.0.1/
+      evidence: >-
+        Each file name corresponds uniquely to a Data_ID, specifically matching the
+        'Data_ID' field in the AdditionalData.csv.
+      notes: 128 records from 122 subjects (checked in AdditionalData.csv, 2026-10-27).
+
+  - id: physionet/vitaldb
+    subject:
+      rule: table
+      pattern: '^vital_files/0*(\d+)$'
+      table:
+        file: clinical_data.csv
+        delimiter: ','
+        recording_column: caseid
+        subject_column: subjectid
+      certain: true
+      source: https://physionet.org/content/vitaldb/1.0.0/
+      evidence: >-
+        Individual identifiers of the hospital ID (subjectid) was also added for
+        reoperation case identification
+      notes: >-
+        6,388 cases; 237 subjects have more than one case (up to 14). vitaldb-arrhythmia
+        has annotations only (no recordings with signals), so it needs no rule.

@@ -53,6 +53,10 @@ class SubjectRule(_Model):
     pattern: str | None = None
     table: SubjectTable | None = None
     same_person: list[list[str]] = Field(default_factory=list)  # subject ids of one person
+    # Persons shared with other datasets: their subject ids are qualified by this name, not
+    # by the dataset, so one person gets one split in all of them. Every dataset of a
+    # namespace takes the same id for the same person (the source says so, in `evidence`).
+    namespace: str | None = None
     certain: bool
     source: HttpUrl
     evidence: str | None = None  # an exact quote from the source
@@ -71,6 +75,8 @@ class SubjectRule(_Model):
             raise ValueError("an unknown rule cannot be certain")
         if self.certain and not self.evidence:
             raise ValueError("a certain rule needs `evidence`, quoted from the source")
+        if self.namespace is not None and not (with_pattern and self.evidence):
+            raise ValueError("a `namespace` needs a pattern or table rule and `evidence`")
         return self
 
 
@@ -83,7 +89,7 @@ class ChannelRule(_Model):
 
 class ExcludeRule(_Model):
     """Recordings left out of the index: copies of, or extracts from, other recordings of
-    the same dataset. Leaving a recording out is a claim about the data, so it needs a
+    the same dataset or of another dataset of the index. Leaving a recording out is a claim about the data, so it needs a
     source and a quote, or `checked`: how the samples were compared."""
 
     pattern: str  # a regex on the recording id

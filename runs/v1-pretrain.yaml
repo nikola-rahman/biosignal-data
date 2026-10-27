@@ -1,0 +1,65 @@
+# v1: model v0 (about 27 M parameters, the settings of v0-rtx6000-c2) pretrained from random
+# weights on index 2026-10-27: 45 PhysioNet datasets, copies across datasets left out, persons
+# in one split (index.yaml). The GPU, workers and cache are set after the speed tests.
+data:
+  store: s3://biosignal-data
+  index: 2026-10-27
+  train_split: train
+  validation_split: validation
+  # Measured signals only: position (a device code for body position), other (device
+  # status, markers) and unknown (no rule knows the name) are left out (2026-10-20), and
+  # sound (capslpdb's snoring microphones) too (2026-10-20).
+  signal_types: [ecg, eeg, eog, emg, resp, spo2, ppg, bp, hr, temp, accel, scg, pcg]
+  datasets: null              # every dataset of the index
+  cache_directory: /workspace/cache
+  cache_bytes: 214748364800   # 200 GiB (274 GB free on the pod)
+  block_s: 1800.0               # the unit of work; also the longest example
+  shuffle_buffer: 128         # examples per worker; one example is up to 2 MB
+  reads_in_flight: 16
+  workers: 10                 # of 12 cores: the rest for the training process
+
+tokens:
+  max_tokens: 8192
+  samples_per_token: 64
+  max_channels: 32
+  rows: 8                     # 65,536 tokens a step
+  mask_ratio: 0.5
+
+model:
+  width: 512                  # about 27 M parameters
+  layers: 8
+  heads: 8
+  feed_forward: 1536
+  min_wavelength_s: 0.01
+  max_wavelength_s: 10000.0
+  attention: flex
+
+optim:
+  learning_rate: 6.0e-4
+  min_learning_rate: 6.0e-5
+  warmup_steps: 500
+  steps: 30000
+  weight_decay: 0.05
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: wsd
+  decay_steps: 3000
+  decay_shape: 1-sqrt
+
+run:
+  name: v1-pretrain
+  seed: 0
+  device: cuda
+  precision: bf16
+  log_every: 20
+  validate_every: 1000
+  validation_batches: 20
+  checkpoint_every: 1000
+  checkpoint_prefix: models/v1-pretrain
+  wandb_project: biosignal-fm
+  wandb_entity: schnyox-s
+  wandb_mode: online
+  max_bad_steps: 20
+  bad_batch_directory: /workspace/debug/bad-batches
+  resume: newest
