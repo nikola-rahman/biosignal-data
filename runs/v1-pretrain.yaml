@@ -3,7 +3,7 @@
 # in one split (index.yaml). The GPU, workers and cache are set after the speed tests.
 data:
   store: s3://biosignal-data
-  index: 2026-10-27
+  index: '2026-10-27'          # quoted: YAML reads a bare date as a date
   train_split: train
   validation_split: validation
   # Measured signals only: position (a device code for body position), other (device
