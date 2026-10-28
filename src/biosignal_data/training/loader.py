@@ -53,14 +53,17 @@ import math
 import queue
 import random
 import threading
+import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from http.client import HTTPException
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pyarrow.parquet as pq
+from botocore.exceptions import BotoCoreError
 
 from biosignal_data.index.build import ROOT as INDEX_ROOT
 from biosignal_data.standard import blocks
@@ -411,19 +414,29 @@ class ExampleSource:
         return get
 
 
-READ_ATTEMPTS = 3
+READ_ATTEMPTS = 5
+RETRY_WAIT_S = 1.0  # then 2, 4, 8 s
+
+# Transport failures, tried again: a timeout, a socket error, and a response cut off in the
+# middle. botocore raises the last as ResponseStreamingError (a BotoCoreError, not an
+# OSError), and http.client as IncompleteRead (an HTTPException); v1-pretrain stopped at
+# step ~201,000 on one such cut read from the S3 storage (2026-10-28). A missing object
+# (NoSuchKey, a ClientError) is not tried again.
+TRANSIENT = (TimeoutError, OSError, BotoCoreError, HTTPException)
 
 
 def _read_with_retries(read: Callable[[], bytes], what: str) -> bytes:
     """One ranged read; one that times out or fails in transport is tried again, up to
-    READ_ATTEMPTS times (botocore also retries each request; see storage.stores)."""
+    READ_ATTEMPTS times, with growing waits (botocore also retries each request; see
+    storage.stores)."""
     for attempt in range(1, READ_ATTEMPTS + 1):
         try:
             return read()
-        except (TimeoutError, OSError) as exc:
+        except TRANSIENT as exc:
             if attempt == READ_ATTEMPTS:
                 raise
             log.warning("read of %s failed (%s); trying again", what, exc)
+            time.sleep(RETRY_WAIT_S * 2 ** (attempt - 1))
     raise AssertionError("unreachable")
 
 

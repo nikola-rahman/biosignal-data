@@ -203,19 +203,37 @@ def test_the_blocks_of_long_recordings_are_spread_over_the_epoch(
     assert 8 <= first_half <= 22  # about half of the long recording comes in each half
 
 
-def test_a_read_that_times_out_is_tried_again() -> None:
+def test_a_read_that_times_out_or_is_cut_off_is_tried_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from http.client import IncompleteRead  # noqa: PLC0415
+
+    from botocore.exceptions import ClientError, ResponseStreamingError  # noqa: PLC0415
+
     from biosignal_data.training import loader  # noqa: PLC0415
 
+    monkeypatch.setattr(loader, "RETRY_WAIT_S", 0.0)
+
     class Flaky:
-        def __init__(self, fails: int) -> None:
-            self.fails = fails
+        def __init__(self, errors: list[Exception]) -> None:
+            self.errors = errors
 
         def __call__(self) -> bytes:
-            if self.fails:
-                self.fails -= 1
-                raise TimeoutError("no answer")
+            if self.errors:
+                raise self.errors.pop(0)
             return b"block"
 
-    assert loader._read_with_retries(Flaky(2), "x") == b"block"
+    cut = IncompleteRead(b"x" * 10, 90)
+    transient = [
+        TimeoutError("no answer"),
+        ResponseStreamingError(error=cut),
+        cut,
+        OSError("reset"),
+    ]
+    assert loader._read_with_retries(Flaky(list(transient)), "x") == b"block"
     with pytest.raises(TimeoutError):
-        loader._read_with_retries(Flaky(3), "x")
+        loader._read_with_retries(Flaky([TimeoutError("no answer")] * loader.READ_ATTEMPTS), "x")
+    missing = ClientError({"Error": {"Code": "NoSuchKey", "Message": "gone"}}, "GetObject")
+    calls = Flaky([missing])
+    with pytest.raises(ClientError):  # a missing object is not tried again
+        loader._read_with_retries(calls, "x")
