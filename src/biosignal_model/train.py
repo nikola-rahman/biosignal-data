@@ -33,6 +33,7 @@ from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 
 from biosignal_data.index.build import ROOT as INDEX_ROOT
 from biosignal_data.storage.stores import Store, StoreFactory
+from biosignal_data.training import mixture
 from biosignal_data.training.loader import ExampleSource, Selection
 from biosignal_model.batch import SIGNAL_TYPES, Analysis, Batch, Inputs, Packer, concat
 from biosignal_model.model import Encoder, ModelConfig, masked_loss
@@ -42,6 +43,17 @@ log = logging.getLogger(__name__)
 
 class _Section(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class MixtureSection(_Section):
+    """How much of each dataset an epoch reads (biosignal_data.training.mixture): UniMax
+    over `clusters` of datasets, then over the datasets of each cluster, with `budget_tokens`
+    for one epoch and at most `max_epochs` passes over any dataset."""
+
+    rule: Literal["unimax"]
+    budget_tokens: float
+    max_epochs: float
+    clusters: dict[str, list[str]]
 
 
 class DataSection(_Section):
@@ -57,6 +69,8 @@ class DataSection(_Section):
     shuffle_buffer: int
     reads_in_flight: int
     workers: int  # data loader processes, of each GPU's process
+    # None: every block once per epoch (the mix follows the data); the training split only
+    mixture: MixtureSection | None
 
 
 class TokenSection(_Section):
@@ -185,11 +199,20 @@ def _stream(
     )  # fmt: skip
     if not selection.recordings:
         raise ValueError(f"index {d.index}: no recordings in split {split!r} for this selection")
+    m = d.mixture if split == d.train_split else None
+    passes = (
+        mixture.passes(
+            mixture.dataset_tokens(selection, t.samples_per_token), m.clusters,
+            m.budget_tokens, m.max_epochs,
+        )
+        if m is not None
+        else None
+    )  # fmt: skip
     source = ExampleSource(
         selection, factory, cache_directory=d.cache_directory, cache_bytes=d.cache_bytes,
         max_tokens=t.max_tokens, samples_per_token=t.samples_per_token,
         max_channels=t.max_channels, block_s=d.block_s, shuffle_buffer=d.shuffle_buffer,
-        reads_in_flight=d.reads_in_flight, seed=config.run.seed,
+        reads_in_flight=d.reads_in_flight, seed=config.run.seed, passes=passes,
     )  # fmt: skip
     datasets = sorted({r.dataset_id for r in selection.recordings})
     return BatchStream(source, config, datasets, rank, ranks, rows)
@@ -323,6 +346,7 @@ def _wandb_run(
             "parameters": sum(p.numel() for p in model.parameters()),
             "index_manifest": json.loads(index_manifest),
             "train_recordings": len(train_stream.source.selection.recordings),
+            "passes": train_stream.source.passes,
             "validation_recordings": len(validation_stream.source.selection.recordings),
         },
     )  # fmt: skip

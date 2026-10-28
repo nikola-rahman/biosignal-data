@@ -77,7 +77,7 @@ def _source(store: LocalStore, tmp_path: Path, selection: Selection, **kw: objec
     fields: dict[str, object] = {
         "cache_directory": tmp_path / "cache", "cache_bytes": 10**9, "max_tokens": 40,
         "samples_per_token": 16, "max_channels": 4, "block_s": 10.0, "shuffle_buffer": 8,
-        "reads_in_flight": 3, "seed": 7,
+        "reads_in_flight": 3, "seed": 7, "passes": None,
     }  # fmt: skip
     return ExampleSource(selection, lambda: store, **(fields | kw))  # type: ignore[arg-type]
 
@@ -237,3 +237,35 @@ def test_a_read_that_times_out_or_is_cut_off_is_tried_again(
     calls = Flaky([missing])
     with pytest.raises(ClientError):  # a missing object is not tried again
         loader._read_with_retries(calls, "x")
+
+
+def test_unimax_shares_the_budget_equally_with_a_cap_on_passes() -> None:
+    from biosignal_data.training.mixture import passes, unimax  # noqa: PLC0415
+
+    # a: equal share 20, but 4 passes of 1 = 4; the 16 left over go to b and c (28 each).
+    assert unimax({"a": 1.0, "b": 10.0, "c": 100.0}, 60.0, 4) == {"a": 4.0, "b": 28.0, "c": 28.0}
+    # Two clusters of 50 tokens each; inside "big", x (10) gets 4 passes, y the rest.
+    got = passes({"x": 10.0, "y": 90.0, "z": 5.0}, {"big": ["x", "y"], "small": ["z", "w"]},
+                 budget=100.0, max_epochs=4)  # fmt: skip
+    assert got["z"] == 4.0  # capped: 20 of its 50
+    assert got["x"] == 4.0 and abs(got["y"] - 40.0 / 90.0) < 1e-12  # 80 for "big": 40 + 40
+    with pytest.raises(ValueError, match="in no cluster: z"):
+        passes({"z": 1.0}, {"big": ["x"]}, budget=10.0, max_epochs=4)
+
+
+def test_a_mixture_repeats_blocks_and_cuts_each_reading_afresh(
+    store: LocalStore, tmp_path: Path
+) -> None:
+    _index(store, {f"r{i}": 30.0 for i in range(4)})  # 3 blocks each: 12 blocks
+    selection = Selection.load(store, "i1", split="train", signal_types=None)
+    source = _source(store, tmp_path, selection, passes={"d/x": 2.5})
+    order = source.blocks_of(0, 0, 1)
+    assert len(order) == 30  # every block twice, half of them a third time
+    keys = [(b.recording.recording_id, b.index, b.copy) for b in order]
+    assert len(set(keys)) == 30 and {b.copy for b in order} == {0, 1, 2}
+    zero, one = (next(b for b in order if b.recording.recording_id == "r0" and b.index == 0
+                      and b.copy == c) for c in (0, 1))  # fmt: skip
+    starts = [[e.origin.start_s for e in source.cut(b, 0)] for b in (zero, one)]
+    assert starts[0] != starts[1]  # a repeated block is cut at other points
+    fewer = _source(store, tmp_path, selection, passes={"d/x": 0.5}).blocks_of(0, 0, 1)
+    assert len(fewer) == 6

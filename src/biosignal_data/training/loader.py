@@ -5,7 +5,7 @@ selection = Selection.load(store, "2026-10-20", split="train", signal_types=None
 source = ExampleSource(
     selection, store_factory, cache_directory=Path("/data/cache"), cache_bytes=200 * 2**30,
     max_tokens=8192, samples_per_token=64, max_channels=32, block_s=1800.0, shuffle_buffer=4096,
-    reads_in_flight=8, seed=0,
+    reads_in_flight=8, seed=0, passes=None,
 )
 for example in source.examples(epoch=0, part=0, parts=1):
     example.signals  # the model input: values, rate and start time of each channel
@@ -54,9 +54,9 @@ import queue
 import random
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from http.client import HTTPException
 from pathlib import Path
 from typing import Any
@@ -119,6 +119,7 @@ class Block:
     recording: Recording
     index: int
     last: bool
+    copy: int = 0  # the block's n-th reading in an epoch (a mixture repeats blocks)
 
 
 @dataclass(frozen=True)
@@ -237,7 +238,10 @@ class ExampleSource:
         shuffle_buffer: int,
         reads_in_flight: int,
         seed: int,
+        passes: Mapping[str, float] | None,
     ) -> None:
+        """`passes`: readings of each dataset's blocks in one epoch (training.mixture), or
+        None: every block once."""
         if samples_per_token < 1 or max_channels < 1:
             raise ValueError("samples_per_token and max_channels are at least 1")
         if max_tokens <= 2 * max_channels:
@@ -259,6 +263,11 @@ class ExampleSource:
         self.shuffle_buffer = shuffle_buffer
         self.reads_in_flight = reads_in_flight
         self.seed = seed
+        if passes is not None:
+            missing = {r.dataset_id for r in selection.recordings} - set(passes)
+            if missing or any(v < 0 for v in passes.values()):
+                raise ValueError(f"passes: none or negative for {sorted(missing) or passes}")
+        self.passes = dict(passes) if passes is not None else None
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
@@ -277,8 +286,31 @@ class ExampleSource:
         for recording in self.selection.recordings:
             n = max(1, math.ceil(recording.duration_s / self.block_s))
             order += [Block(recording, i, i == n - 1) for i in range(n)]
+        if self.passes is not None:
+            order = self._repeated(order, epoch)
         random.Random(f"{self.seed}/{epoch}").shuffle(order)  # noqa: S311 - not secret
         return order[part::parts]
+
+    def _repeated(self, order: list[Block], epoch: int) -> list[Block]:
+        """The blocks of each dataset `passes` times: whole passes, then a random part of
+        its blocks for the fraction (different in each epoch). A repeated block is cut
+        afresh (its `copy` is in the seed of its cuts)."""
+        if self.passes is None:
+            return order
+        by_dataset: dict[str, list[Block]] = {}
+        for block in order:
+            by_dataset.setdefault(block.recording.dataset_id, []).append(block)
+        rng = random.Random(f"{self.seed}/{epoch}/passes")  # noqa: S311 - not secret
+        out: list[Block] = []
+        for dataset in sorted(by_dataset):
+            found = by_dataset[dataset]
+            whole, part = divmod(self.passes[dataset], 1.0)
+            for copy in range(int(whole)):
+                out += [replace(b, copy=copy) for b in found]
+            out += [
+                replace(b, copy=int(whole)) for b in rng.sample(found, round(part * len(found)))
+            ]
+        return out
 
     def examples(self, epoch: int, part: int, parts: int) -> Iterator[Example]:
         """The examples of `blocks_of(epoch, part, parts)`, shuffled. Which examples
@@ -335,6 +367,7 @@ class ExampleSource:
         recording = block.recording
         rng = random.Random(  # noqa: S311 - not secret
             f"{self.seed}/{epoch}/{recording.dataset_id}/{recording.recording_id}/{block.index}"
+            + (f"/{block.copy}" if block.copy else "")
         )
         names = {c.array for c in recording.channels}
         arrays = {name: recording.array_blocks(name) for name in names}

@@ -1,0 +1,89 @@
+# v2: v1-pretrain (model v0, about 27 M parameters, 330,000 steps, index 2026-10-27b) with
+# better sampling: hierarchical UniMax (Chung et al. 2023) over 10 clusters of datasets by
+# recording setting, then over the datasets of each cluster, at most 4 passes over any
+# dataset (Muennighoff et al. 2023: up to ~4 epochs of repeats cost little); one epoch has
+# the budget of v1's one pass (16.4 B tokens), so i-care goes from 61 % to 18 % of the
+# tokens, 12-lead ECG from 4 % to 16 %. Each step joins rows of several data workers, and
+# the validation batches are kept in the store (the same on every start and resume).
+data:
+  store: s3://biosignal-data
+  index: '2026-10-27b'
+  train_split: train
+  validation_split: validation
+  # Measured signals only: position (a device code for body position), other (device
+  # status, markers) and unknown (no rule knows the name) are left out (2026-10-20), and
+  # sound (capslpdb's snoring microphones) too (2026-10-20).
+  signal_types: [ecg, eeg, eog, emg, resp, spo2, ppg, bp, hr, temp, accel, scg, pcg]
+  datasets: null              # every dataset of the index
+  cache_directory: /workspace/cache
+  cache_bytes: 200000000000   # 200 GB (263 GB free on the pod)
+  block_s: 1800.0               # the unit of work; also the longest example
+  shuffle_buffer: 128         # examples per worker; one example is up to 2 MB
+  reads_in_flight: 16
+  workers: 11                 # of each of the 2 GPU processes (24 cores)
+  mixture:
+    rule: unimax
+    budget_tokens: 16425702255  # the training tokens of index 2026-10-27b: v1's one pass
+    max_epochs: 4
+    clusters:
+      icu-eeg: [physionet/i-care]
+      icu-intraop-waveforms: [physionet/vitaldb, physionet/mimic4wdb]
+      sleep-psg: [physionet/challenge-2018, physionet/capslpdb, physionet/hmc-sleep-staging,
+                  physionet/sleep-edfx, physionet/apnea-ecg]
+      scalp-eeg: [physionet/chbmit, physionet/siena-scalp-eeg, physionet/eegmmidb]
+      ecg-12lead: [physionet/mimic-iv-ecg, physionet/challenge-2021, physionet/ptb-xl,
+                   physionet/ptbdb, physionet/ludb, physionet/brugada-huca]
+      ecg-holter: [physionet/ltstdb, physionet/shdb-af, physionet/ltafdb, physionet/sddb,
+                   physionet/incartdb, physionet/afdb, physionet/nsrdb, physionet/edb,
+                   physionet/ltdb, physionet/mitdb, physionet/svdb, physionet/stdb]
+      ecg-short-wearable: [physionet/challenge-2017, physionet/butqdb, physionet/ecgiddb]
+      lab-cardio: [physionet/autonomic-aging-cardiovascular, physionet/fantasia,
+                   physionet/cebsdb, physionet/ephnogram]
+      emg: [physionet/hd-semg, physionet/grabmyo]
+      obstetric: [physionet/ctu-uhb-ctgdb, physionet/tpehgdb, physionet/adfecgdb]
+
+tokens:
+  max_tokens: 8192
+  samples_per_token: 64
+  max_channels: 32
+  rows: 8                     # 65,536 tokens a step
+  mask_ratio: 0.5
+
+model:
+  width: 512                  # about 27 M parameters
+  layers: 8
+  heads: 8
+  feed_forward: 1536
+  min_wavelength_s: 0.01
+  max_wavelength_s: 10000.0
+  attention: flex
+
+optim:
+  learning_rate: 6.0e-4
+  min_learning_rate: 6.0e-5
+  warmup_steps: 500
+  steps: 330000
+  weight_decay: 0.05
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: wsd
+  decay_steps: 33000          # the last 10 %, as in v0-rtx6000-c2
+  decay_shape: 1-sqrt
+
+run:
+  name: v2-unimax
+  seed: 0
+  device: cuda
+  precision: bf16
+  log_every: 20
+  validate_every: 1000
+  validation_batches: 20
+  checkpoint_every: 5000      # ~0.3 GB each: 66 checkpoints
+  checkpoint_prefix: models/v2-unimax
+  wandb_project: biosignal-fm
+  wandb_entity: schnyox-s
+  wandb_mode: online
+  max_bad_steps: 20
+  bad_batch_directory: /workspace/debug/bad-batches
+  resume: newest
