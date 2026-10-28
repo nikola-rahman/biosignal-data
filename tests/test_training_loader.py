@@ -269,3 +269,16 @@ def test_a_mixture_repeats_blocks_and_cuts_each_reading_afresh(
     assert starts[0] != starts[1]  # a repeated block is cut at other points
     fewer = _source(store, tmp_path, selection, passes={"d/x": 0.5}).blocks_of(0, 0, 1)
     assert len(fewer) == 6
+
+
+def test_the_pieces_of_an_epoch_read_every_example_once(store: LocalStore, tmp_path: Path) -> None:
+    _index(store, {f"r{i}": 30.0 for i in range(5)})
+    selection = Selection.load(store, "i1", split="train", signal_types=None)
+    source = _source(store, tmp_path, selection)
+
+    def key(e: object) -> tuple[str, float]:
+        return (e.origin.recording_id, e.origin.start_s)  # type: ignore[attr-defined]
+
+    whole = sorted(key(e) for e in source.examples(0, 0, 1))
+    pieces = sorted(key(e) for k in range(3) for e in source.examples(0, 0, 1, k, 3))
+    assert whole == pieces and len(whole) > 3

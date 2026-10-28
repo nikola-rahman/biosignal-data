@@ -70,6 +70,10 @@ class DataSection(_Section):
     shuffle_buffer: int
     reads_in_flight: int
     workers: int  # data loader processes, of each GPU's process
+    # Each epoch is read in this many pieces, each by new data loader processes: a worker's
+    # memory grows as it reads (v2-unimax: ~5 GB a worker after an hour, 22 workers, and the
+    # pod's 147 GB ran out); fresh workers start small again. 1: one set for the epoch.
+    pieces_per_epoch: int
     # None: every block once per epoch (the mix follows the data); the training split only
     mixture: MixtureSection | None
 
@@ -171,6 +175,7 @@ class BatchStream(IterableDataset[Batch]):
         self.datasets = datasets
         self.rank, self.ranks, self.rows = rank, ranks, rows
         self.epoch = 0
+        self.piece, self.pieces = 0, 1
 
     def __iter__(self) -> Iterator[Batch]:
         info = get_worker_info()
@@ -181,9 +186,12 @@ class BatchStream(IterableDataset[Batch]):
             datasets=self.datasets, max_tokens=t.max_tokens,
             samples_per_token=t.samples_per_token, max_channels=t.max_channels, rows=self.rows,
             mask_ratio=t.mask_ratio,
-            seed=(self.config.run.seed * 1_000_003 + self.epoch) * 1_009 + part,
+            seed=((self.config.run.seed * 1_000_003 + self.epoch) * 1_009 + part) * 101
+            + self.piece,
         )  # fmt: skip
-        yield from packer.batches(self.source.examples(self.epoch, part, parts))
+        yield from packer.batches(
+            self.source.examples(self.epoch, part, parts, self.piece, self.pieces)
+        )
 
 
 def _stream(
@@ -388,7 +396,13 @@ def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[
     last: dict[str, float] = {}
     # A resumed run numbers its epochs from its first step: the data in a new order.
     batches = _steps(
-        _epochs(train_stream, config.data.workers, device, first_epoch=start),
+        _epochs(
+            train_stream,
+            config.data.workers,
+            device,
+            first_epoch=start,
+            pieces=config.data.pieces_per_epoch,
+        ),
         config.tokens.rows // ranks,
     )
     bad_in_a_row, bad_total = 0, 0
@@ -533,11 +547,16 @@ def _memory(device: torch.device) -> dict[str, float]:
 
 
 def _epochs(
-    stream: BatchStream, workers: int, device: torch.device, first_epoch: int
+    stream: BatchStream, workers: int, device: torch.device, first_epoch: int, pieces: int
 ) -> Iterator[Batch]:
+    """The batches of epoch after epoch, each epoch in `pieces` pieces, each piece read by
+    new data loader processes."""
+    stream.pieces = pieces
     for epoch in itertools.count(first_epoch):
         stream.epoch = epoch
-        yield from _loader(stream, workers, device)
+        for piece in range(pieces):
+            stream.piece = piece
+            yield from _loader(stream, workers, device)
 
 
 def _steps(rows: Iterator[Batch], per_step: int) -> Iterator[Batch]:

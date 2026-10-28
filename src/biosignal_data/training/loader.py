@@ -329,12 +329,18 @@ class ExampleSource:
         chosen = np.concatenate(picked)
         return recording[chosen], index[chosen], np.concatenate(copies)
 
-    def examples(self, epoch: int, part: int, parts: int) -> Iterator[Example]:
-        """The examples of `blocks_of(epoch, part, parts)`, shuffled. Which examples
-        come is fixed by `seed` and `epoch`; their order also depends on which read ends
-        first."""
-        blocks = self.blocks_of(epoch, part, parts)
-        rng = random.Random(f"{self.seed}/{epoch}/{part}")  # noqa: S311 - not secret
+    def examples(
+        self, epoch: int, part: int, parts: int, piece: int = 0, pieces: int = 1
+    ) -> Iterator[Example]:
+        """The examples of `blocks_of(epoch, part, parts)`, shuffled; with `pieces` > 1
+        only piece `piece` of them (every pieces-th block: the pieces of an epoch together
+        read each block once). Which examples come is fixed by `seed` and `epoch`; their
+        order also depends on which read ends first."""
+        if not 0 <= piece < pieces:
+            raise ValueError(f"piece {piece} is not in 0..{pieces - 1}")
+        blocks = self.blocks_of(epoch, part, parts)[piece::pieces]
+        key = f"{self.seed}/{epoch}/{part}" + (f"/{piece}" if pieces > 1 else "")
+        rng = random.Random(key)  # noqa: S311 - not secret
         out: queue.Queue[Example | _Done] = queue.Queue(maxsize=self.shuffle_buffer)
         stop = threading.Event()
 

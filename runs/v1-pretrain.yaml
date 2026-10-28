@@ -20,6 +20,7 @@ data:
   shuffle_buffer: 128         # examples per worker; one example is up to 2 MB
   reads_in_flight: 16
   workers: 11                 # of each of the 2 GPU processes (24 cores)
+  pieces_per_epoch: 1
   mixture: null               # every block once per epoch (the mix follows the data)
 
 tokens:
