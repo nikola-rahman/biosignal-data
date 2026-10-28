@@ -11,6 +11,7 @@ of the whole step. Only the first process logs, validates and writes checkpoints
 
 from __future__ import annotations
 
+import hashlib
 import io
 import itertools
 import json
@@ -33,7 +34,7 @@ from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 from biosignal_data.index.build import ROOT as INDEX_ROOT
 from biosignal_data.storage.stores import Store, StoreFactory
 from biosignal_data.training.loader import ExampleSource, Selection
-from biosignal_model.batch import SIGNAL_TYPES, Analysis, Batch, Inputs, Packer
+from biosignal_model.batch import SIGNAL_TYPES, Analysis, Batch, Inputs, Packer, concat
 from biosignal_model.model import Encoder, ModelConfig, masked_loss
 
 log = logging.getLogger(__name__)
@@ -171,10 +172,10 @@ class BatchStream(IterableDataset[Batch]):
 
 
 def _stream(
-    config: TrainConfig, factory: StoreFactory, split: str, rank: int, ranks: int
+    config: TrainConfig, factory: StoreFactory, split: str, rank: int, ranks: int, rows: int
 ) -> BatchStream:
     """The batches of `split` for process `rank` of `ranks`: its part of the data, in
-    batches of its share of the step's rows."""
+    batches of `rows` rows."""
     d, t = config.data, config.tokens
     store = factory()
     selection = Selection.load(
@@ -191,7 +192,7 @@ def _stream(
         reads_in_flight=d.reads_in_flight, seed=config.run.seed,
     )  # fmt: skip
     datasets = sorted({r.dataset_id for r in selection.recordings})
-    return BatchStream(source, config, datasets, rank, ranks, t.rows // ranks)
+    return BatchStream(source, config, datasets, rank, ranks, rows)
 
 
 def _loader(stream: BatchStream, workers: int, device: torch.device) -> DataLoader[Batch]:
@@ -356,7 +357,10 @@ def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[
     window = _Window(train_stream.datasets, device)
     last: dict[str, float] = {}
     # A resumed run numbers its epochs from its first step: the data in a new order.
-    batches = _epochs(train_stream, config.data.workers, device, first_epoch=start)
+    batches = _steps(
+        _epochs(train_stream, config.data.workers, device, first_epoch=start),
+        config.tokens.rows // ranks,
+    )
     bad_in_a_row, bad_total = 0, 0
     for step in range(start + 1, o.steps + 1):
         before = time.perf_counter()
@@ -408,9 +412,14 @@ def _data(
     """This process's training batches, the validation stream, and the validation batches.
     Validation runs on the first process only, with whole steps: the same batches as on
     one GPU."""
-    train_stream = _stream(config, factory, config.data.train_split, rank, ranks)
-    validation_stream = _stream(config, factory, config.data.validation_split, 0, 1)
-    validation_batches = _validation_batches(validation_stream, config) if rank == 0 else []
+    # Each data worker packs single rows; a step joins rows of several workers (_steps).
+    train_stream = _stream(config, factory, config.data.train_split, rank, ranks, 1)
+    validation_stream = _stream(
+        config, factory, config.data.validation_split, 0, 1, config.tokens.rows
+    )
+    validation_batches = (
+        _validation_batches(validation_stream, config, factory()) if rank == 0 else []
+    )
     return train_stream, validation_stream, validation_batches
 
 
@@ -501,18 +510,52 @@ def _epochs(
         yield from _loader(stream, workers, device)
 
 
-def _validation_batches(stream: BatchStream, config: TrainConfig) -> list[Batch]:
-    """The validation batches, read once before training: every validation then uses the
-    very same batches (examples and hidden tokens), so its values compare, and no reading
-    holds up the GPU. With several data workers the order in which examples come is not
-    fixed, so reading them again would give other batches."""
+def _steps(rows: Iterator[Batch], per_step: int) -> Iterator[Batch]:
+    """Batches of `per_step` consecutive single-row batches. The data loader takes its
+    workers' outputs in turn, so the rows of one step come from different workers, each
+    reading its own blocks: a step mixes per_step times as many recordings as a batch
+    packed by one worker (v1-pretrain: ~16 blocks a GPU step)."""
+    while True:
+        yield concat(list(itertools.islice(rows, per_step)))
+
+
+VALIDATION_ROOT = "models/validation-sets"
+
+
+def _validation_batches(stream: BatchStream, config: TrainConfig, store: Store) -> list[Batch]:
+    """The validation batches: every validation uses the very same batches (examples and
+    hidden tokens), so its values compare, and no reading holds up the GPU. They are read
+    once and kept in the store under a key of everything that makes them (index, split,
+    selection, tokens, number, seed, block length), so a resumed run and every other run
+    with the same settings use them too. (Read again, they would differ: with several data
+    workers the order in which examples come is not fixed; v1-pretrain's two resumes drew
+    other batches, and its validation loss jumped.)"""
+    d, t = config.data, config.tokens
+    made_of = {
+        "index": d.index, "split": d.validation_split, "signal_types": d.signal_types,
+        "datasets": d.datasets, "block_s": d.block_s, "tokens": t.model_dump(mode="json"),
+        "batches": config.run.validation_batches, "seed": config.run.seed,
+    }  # fmt: skip
+    digest = hashlib.sha256(json.dumps(made_of, sort_keys=True).encode()).hexdigest()[:16]
+    key = f"{VALIDATION_ROOT}/{d.index}/{digest}.pt"
+    data = store.get_bytes(key)
+    if data is not None:
+        log.info("validation batches from %s", key)
+        found: list[Batch] = torch.load(io.BytesIO(data), weights_only=False)
+        return found
     stream.epoch = 0
-    return list(
+    batches = list(
         itertools.islice(
             _loader(stream, config.data.workers, torch.device("cpu")),
             config.run.validation_batches,
         )
     )
+    out = io.BytesIO()
+    torch.save(batches, out)
+    store.put_bytes(key, out.getvalue())
+    store.put_bytes(f"{VALIDATION_ROOT}/{d.index}/{digest}.json", json.dumps(made_of).encode())
+    log.info("validation batches written to %s", key)
+    return batches
 
 
 @torch.no_grad()

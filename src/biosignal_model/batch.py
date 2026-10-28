@@ -92,6 +92,18 @@ class Batch:
     samples: int  # observed samples in the batch
 
 
+def concat(batches: list[Batch]) -> Batch:
+    """One batch of the rows of `batches`, in order (rows of one length: not trimmed)."""
+    return Batch(
+        inputs=Inputs(**{k: torch.cat([vars(b.inputs)[k] for b in batches])
+                         for k in vars(batches[0].inputs)}),
+        analysis=Analysis(**{k: torch.cat([vars(b.analysis)[k] for b in batches])
+                             for k in vars(batches[0].analysis)}),
+        examples=sum(b.examples for b in batches),
+        samples=sum(b.samples for b in batches),
+    )  # fmt: skip
+
+
 @dataclass
 class _Tokens:
     """The tokens of one example, before packing."""

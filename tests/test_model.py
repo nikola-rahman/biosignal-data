@@ -14,9 +14,16 @@ torch = pytest.importorskip("torch")
 from biosignal_data.storage.stores import LocalStore, StoreFactory  # noqa: E402
 from biosignal_data.training import Selection  # noqa: E402
 from biosignal_data.training.loader import Channel, Example, Origin, Signal  # noqa: E402
-from biosignal_model.batch import SIGNAL_TYPES, Batch, Inputs, Packer  # noqa: E402
+from biosignal_model.batch import SIGNAL_TYPES, Batch, Inputs, Packer, concat  # noqa: E402
 from biosignal_model.model import Encoder, ModelConfig, masked_loss  # noqa: E402
-from biosignal_model.train import OptimSection, TrainConfig, _forward_backward, train  # noqa: E402
+from biosignal_model.train import (  # noqa: E402
+    OptimSection,
+    TrainConfig,
+    _forward_backward,
+    _stream,
+    _validation_batches,
+    train,
+)
 from tests.test_training_loader import _index  # noqa: E402
 
 
@@ -331,3 +338,33 @@ def test_a_run_on_two_processes_writes_one_checkpoint_from_the_first(
         torch.multiprocessing.spawn(
             _train_as_rank, args=(_free_port(), odd.model_dump_json(), str(store.root)), nprocs=2
         )
+
+
+def test_single_rows_joined_are_the_rows_packed_together() -> None:
+    examples = [_example([40 + 8 * i, 24], [100.0, 50.0]) for i in range(12)]
+    together = next(iter(_packer(rows=2).batches(examples)))
+    singles = list(_packer(rows=1).batches(examples))[:2]
+    joined = concat(singles)
+    for k, v in vars(together.inputs).items():
+        assert torch.equal(v, vars(joined.inputs)[k]), k
+    for k, v in vars(together.analysis).items():
+        assert torch.equal(v, vars(joined.analysis)[k]), k
+    assert (joined.examples, joined.samples) == (together.examples, together.samples)
+
+
+def test_the_validation_batches_are_kept_and_the_same_on_every_start(
+    store: LocalStore, tmp_path: Path
+) -> None:
+    config = _short_config(store, tmp_path)
+    factory = StoreFactory(str(store.root), None)
+    stream = _stream(config, factory, "test", 0, 1, config.tokens.rows)
+    first = _validation_batches(stream, config, store)
+    kept = [k for k in store.list("models/validation-sets/i1/") if k.endswith(".pt")]
+    assert len(kept) == 1
+    store.put_bytes("index/i1/_moved", b"")  # nothing else changes: the same key is read
+    again = _validation_batches(_stream(config, factory, "test", 0, 1, config.tokens.rows),
+                                config, store)  # fmt: skip
+    assert len(first) == len(again) == config.run.validation_batches
+    for a, b in zip(first, again, strict=True):
+        assert torch.equal(a.inputs.values, b.inputs.values)
+        assert torch.equal(a.inputs.hidden, b.inputs.hidden)
