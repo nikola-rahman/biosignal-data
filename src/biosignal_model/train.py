@@ -11,6 +11,7 @@ of the whole step. Only the first process logs, validates and writes checkpoints
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import io
 import itertools
@@ -219,6 +220,11 @@ def _stream(
 
 
 def _loader(stream: BatchStream, workers: int, device: torch.device) -> DataLoader[Batch]:
+    # The objects made so far (the selection: every recording and its block index) leave
+    # the garbage collector's care: a collection in a forked worker would otherwise write to
+    # all of them, and the worker would copy their memory pages (each held ~5 GB).
+    gc.collect()
+    gc.freeze()
     return DataLoader(
         stream, batch_size=None, num_workers=workers, pin_memory=device.type == "cuda",
         persistent_workers=False, prefetch_factor=2 if workers else None,

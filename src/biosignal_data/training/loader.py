@@ -47,6 +47,7 @@ distributed ranks), after a shuffle that depends on `seed` and `epoch` only.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import math
@@ -56,7 +57,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from http.client import HTTPException
 from pathlib import Path
 from typing import Any
@@ -279,38 +280,54 @@ class ExampleSource:
         """The blocks that `part` of `parts` reads in `epoch`, in reading order: the blocks
         of all recordings, shuffled together, so that every phase of an epoch has the same
         mix of datasets (a long recording is spread over the whole epoch, not read at its
-        end)."""
+        end). The order of all parts is made as arrays (12 bytes a block), and only this
+        part's blocks become objects: every data loader worker makes the order, and with
+        a mixture there are millions of blocks (v2-unimax: 22 workers of ~5 GB each ran
+        the training out of memory with one object per block in each)."""
         if not 0 <= part < parts:
             raise ValueError(f"part {part} is not in 0..{parts - 1}")
-        order = []
-        for recording in self.selection.recordings:
-            n = max(1, math.ceil(recording.duration_s / self.block_s))
-            order += [Block(recording, i, i == n - 1) for i in range(n)]
+        recordings = self.selection.recordings
+        counts = np.array(
+            [max(1, math.ceil(r.duration_s / self.block_s)) for r in recordings], dtype=np.int64
+        )
+        recording = np.repeat(np.arange(len(recordings), dtype=np.int64), counts)
+        index = np.arange(recording.size, dtype=np.int64) - np.repeat(
+            np.cumsum(counts) - counts, counts
+        )
+        copy = np.zeros(recording.size, dtype=np.int64)
         if self.passes is not None:
-            order = self._repeated(order, epoch)
-        random.Random(f"{self.seed}/{epoch}").shuffle(order)  # noqa: S311 - not secret
-        return order[part::parts]
+            recording, index, copy = self._repeated(recording, index, epoch)
+        order = _rng(f"{self.seed}/{epoch}").permutation(recording.size)[part::parts]
+        return [
+            Block(recordings[r], int(i), int(i) == counts[r] - 1, int(c))
+            for r, i, c in zip(recording[order], index[order], copy[order], strict=True)
+        ]
 
-    def _repeated(self, order: list[Block], epoch: int) -> list[Block]:
+    def _repeated(
+        self, recording: np.ndarray, index: np.ndarray, epoch: int
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """The blocks of each dataset `passes` times: whole passes, then a random part of
-        its blocks for the fraction (different in each epoch). A repeated block is cut
-        afresh (its `copy` is in the seed of its cuts)."""
+        its blocks for the fraction (different in each epoch), as (recording, index, copy)
+        arrays. A repeated block is cut afresh (its `copy` is in the seed of its cuts)."""
         if self.passes is None:
-            return order
-        by_dataset: dict[str, list[Block]] = {}
-        for block in order:
-            by_dataset.setdefault(block.recording.dataset_id, []).append(block)
-        rng = random.Random(f"{self.seed}/{epoch}/passes")  # noqa: S311 - not secret
-        out: list[Block] = []
-        for dataset in sorted(by_dataset):
-            found = by_dataset[dataset]
-            whole, part = divmod(self.passes[dataset], 1.0)
-            for copy in range(int(whole)):
-                out += [replace(b, copy=copy) for b in found]
-            out += [
-                replace(b, copy=int(whole)) for b in rng.sample(found, round(part * len(found)))
-            ]
-        return out
+            return recording, index, np.zeros(recording.size, dtype=np.int64)
+        names = sorted({r.dataset_id for r in self.selection.recordings})
+        number = {name: k for k, name in enumerate(names)}
+        dataset_of = np.array([number[r.dataset_id] for r in self.selection.recordings])
+        dataset = dataset_of[recording]
+        rng = _rng(f"{self.seed}/{epoch}/passes")
+        picked, copies = [], []
+        for k, name in enumerate(names):
+            found = np.flatnonzero(dataset == k)
+            whole, part = divmod(self.passes[name], 1.0)
+            for c in range(int(whole)):
+                picked.append(found)
+                copies.append(np.full(found.size, c, dtype=np.int64))
+            extra = rng.choice(found, round(part * found.size), replace=False)
+            picked.append(extra)
+            copies.append(np.full(extra.size, int(whole), dtype=np.int64))
+        chosen = np.concatenate(picked)
+        return recording[chosen], index[chosen], np.concatenate(copies)
 
     def examples(self, epoch: int, part: int, parts: int) -> Iterator[Example]:
         """The examples of `blocks_of(epoch, part, parts)`, shuffled. Which examples
@@ -471,6 +488,11 @@ def _read_with_retries(read: Callable[[], bytes], what: str) -> bytes:
             log.warning("read of %s failed (%s); trying again", what, exc)
             time.sleep(RETRY_WAIT_S * 2 ** (attempt - 1))
     raise AssertionError("unreachable")
+
+
+def _rng(key: str) -> np.random.Generator:
+    """A random generator seeded by a text (the run's seed, the epoch, ...)."""
+    return np.random.default_rng(int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "big"))
 
 
 def _duration(row: dict[str, Any]) -> float:
