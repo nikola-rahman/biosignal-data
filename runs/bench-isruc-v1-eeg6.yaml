@@ -1,12 +1,13 @@
 # ISRUC-Sleep cohort I, 5-class sleep staging (fine-tuning and linear probing of v1-pretrain step
-# 330,000), on the 6 EEG channels of CBraMod (F3-A2, C3-A2, O1-A2, F4-A1, C4-A1, O2-A1), in
-# physical units at their native rates, unfiltered. The protocol and the training recipe of
-# CBraMod (arXiv 2412.07236; github.com/wjq-learning/CBraMod: finetune_main.py defaults,
-# finetune_trainer.py, models/model_for_isruc.py): subjects 1-80 / 81-90 / 91-100, 20-epoch
-# sequences, AdamW, encoder 1e-4 and head 1e-3 * sqrt(64 / 256), weight decay 5e-2, cosine decay
-# per step to 1e-6 over 50 epochs, label smoothing 0.1, gradient clipping 1, batch 64 sequences
-# (the default of finetune_main.py; whether their ISRUC run used another batch is not stated), the
-# epoch chosen by the validation kappa. See src/biosignal_model/benchmarks/isruc.py.
+# 330,000), on CBraMod's channels: columns 2-7 of each file (F3, C3, O1, F4, C4, O2 against the
+# opposite mastoid; subject 8: C3, O1, C4, O2, X1, X2), in physical units at their native rates,
+# unfiltered. The protocol and the training recipe of CBraMod (arXiv 2412.07236;
+# github.com/wjq-learning/CBraMod: finetune_main.py defaults, finetune_trainer.py,
+# models/model_for_isruc.py): subjects 1-80 / 81-90 / 91-100, 20-epoch sequences, AdamW, encoder
+# 1e-4 and head 1e-3 * sqrt(64 / 256), weight decay 5e-2, cosine decay per step to 1e-6 over 50
+# epochs, label smoothing 0.1, gradient clipping 1, batch 64 sequences (the default of
+# finetune_main.py; whether their ISRUC run used another batch is not stated), the epoch chosen by
+# the validation kappa. See src/biosignal_model/benchmarks/isruc.py.
 store: s3://biosignal-data
 checkpoint: models/v1-pretrain/step-00330000.pt
 device: cuda

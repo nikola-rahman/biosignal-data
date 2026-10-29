@@ -75,8 +75,10 @@ validation set" and "subject 91 to 100 as test set"; its code checked on 2026-10
 night in sequences of 20 epochs of 30 s, the rest of a night unused; each epoch through the
 encoder, a Transformer layer over the 20 epoch features; the epoch of training chosen by the
 validation kappa. Balanced accuracy, Cohen's kappa and weighted F1 over the test epochs.
-`channels: eeg6` takes CBraMod's 6 EEG channels (F3-A2, C3-A2, O1-A2, F4-A1, C4-A1, O2-A1),
-`channels: all` every channel of the recording; both unfiltered, in physical units at their
+`channels: eeg6` takes CBraMod's channels, columns 2-7 of each file (F3, C3, O1, F4, C4, O2
+against the opposite mastoid, named -A1/-A2 or -M1/-M2; subject 8 has no F3 and F4, so its
+columns are C3, O1, C4, O2, X1, X2), `channels: all` every channel of the recording (19 to
+24); both unfiltered, in physical units at their
 native rates (CBraMod filters 0.3-35 Hz and notches 50 Hz). Published on this split (CBraMod,
 Table 7; mean ± std): CBraMod 0.7865 ± 0.0110 / 0.7442 ± 0.0152 / 0.8011 ± 0.0099, LaBraM-Base
 0.7633 / 0.7231 / 0.7810, USleep 0.7586 / 0.7209 / 0.7805 (balanced accuracy / kappa /
