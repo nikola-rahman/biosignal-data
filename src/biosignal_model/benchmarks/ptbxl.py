@@ -641,27 +641,20 @@ def end_to_end(
         if rungs is not None and epoch in rungs.epochs:
             # The branch: from the main run's state at this rung, kept and put back after it.
             last = epoch == rungs.epochs[-1]
-            kept = None if last else copy.deepcopy({
-                "model": model.state_dict(), "head": head.state_dict(),
-                "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(),
-                "torch": torch.get_rng_state(), "rng": rng.getstate(), "train": list(train),
-                "cuda": torch.cuda.get_rng_state_all() if device.type == "cuda" else None,
-            })  # fmt: skip
+            kept = None if last else _Kept.of(model, head, optimizer, scheduler, rng, train)
             cooldown = cooldown_epochs(rungs, epoch)
             fork_lrs = [g["lr"] for g in optimizer.param_groups]
             branch_rng = random.Random()  # noqa: S311 - not secret
             branch_rng.setstate(rng.getstate())
             order = list(train)
-            total = cooldown * per_epoch
             for b in range(cooldown):
                 branch_rng.shuffle(order)
-                done = b * per_epoch
-                train_epoch(epoch + 1 + b, order, lambda k, done=done: 1.0 - (done + k) / total)
+                decay = _linear_to_zero(b * per_epoch, cooldown * per_epoch)
+                train_epoch(epoch + 1 + b, order, decay)
             p_val, p_train, p_test = predict(val), predict(train_eval), predict(test)
             auc_val, _ = macro_auc(y[val], p_val)
             auc_test, n_test = macro_auc(y[test], p_test)
             val_loss, train_eval_loss = _bce(y[val], p_val), _bce(y[train_eval], p_train)
-            at = f"rung_{epoch}"
             rung = {
                 "epoch": float(epoch), "cooldown_epochs": float(cooldown),
                 "validation_macro_auc": auc_val, "test_macro_auc": auc_test,
@@ -671,27 +664,67 @@ def end_to_end(
                 f"test_macro_auc_{k}": v for k, v in groups_auc(y[test], p_test).items()
             }  # fmt: skip
             log({f"{prefix}/rung_{k}": v for k, v in rung.items()})
-            scores |= {f"{at}/{k}": v for k, v in rung.items()}
+            scores |= {f"rung_{epoch}/{k}": v for k, v in rung.items()}
             if auc_val > best_val:  # fold 9 chooses the rung
                 best_val, best_test, best_epoch, labels_n = auc_val, auc_test, epoch, n_test
                 best_groups = groups_auc(y[test], p_test)
                 chosen = p_val, p_test
             if kept is not None:
-                model.load_state_dict(kept["model"])
-                head.load_state_dict(kept["head"])
-                optimizer.load_state_dict(kept["optimizer"])
-                scheduler.load_state_dict(kept["scheduler"])
-                torch.set_rng_state(kept["torch"])
-                if kept["cuda"] is not None:
-                    torch.cuda.set_rng_state_all(kept["cuda"])
-                rng.setstate(kept["rng"])
-                train[:] = kept["train"]
+                kept.put_back(model, head, optimizer, scheduler, rng, train)
         if s.fine_tuning_patience is not None and epoch - best_epoch >= s.fine_tuning_patience:
             break
     return {"macro_auc": best_test, "labels": float(labels_n), "epoch": float(best_epoch),
             "validation_macro_auc": best_val, "epochs_run": float(epoch)} | {
         f"macro_auc_{name}": value for name, value in best_groups.items()
     } | scores, chosen  # fmt: skip
+
+
+def _linear_to_zero(done: int, total: int) -> Callable[[int], float]:
+    """The rate factor of a cooldown branch's step k of an epoch after `done` of its `total`
+    steps: linear from 1 to 0."""
+    return lambda k: 1.0 - (done + k) / total
+
+
+@dataclass
+class _Kept:
+    """The main run's state at a rung: weights, optimizer, scheduler, random states, data
+    order."""
+
+    model: dict[str, Any]
+    head: dict[str, Any]
+    optimizer: dict[str, Any]
+    scheduler: dict[str, Any]
+    torch_rng: torch.Tensor
+    cuda_rng: list[torch.Tensor] | None
+    rng: tuple[Any, ...]
+    train: list[int]
+
+    @staticmethod
+    def of(
+        model: torch.nn.Module, head: torch.nn.Module, optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler.LRScheduler, rng: random.Random, train: list[int],
+    ) -> _Kept:  # fmt: skip
+        return _Kept(
+            copy.deepcopy(model.state_dict()), copy.deepcopy(head.state_dict()),
+            copy.deepcopy(optimizer.state_dict()), copy.deepcopy(scheduler.state_dict()),
+            torch.get_rng_state(),
+            torch.cuda.get_rng_state_all() if torch.cuda.is_initialized() else None,
+            rng.getstate(), list(train),
+        )  # fmt: skip
+
+    def put_back(
+        self, model: torch.nn.Module, head: torch.nn.Module, optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler.LRScheduler, rng: random.Random, train: list[int],
+    ) -> None:  # fmt: skip
+        model.load_state_dict(self.model)
+        head.load_state_dict(self.head)
+        optimizer.load_state_dict(self.optimizer)
+        scheduler.load_state_dict(self.scheduler)
+        torch.set_rng_state(self.torch_rng)
+        if self.cuda_rng is not None:
+            torch.cuda.set_rng_state_all(self.cuda_rng)
+        rng.setstate(self.rng)
+        train[:] = self.train
 
 
 def cooldown_epochs(rungs: CooldownRungs, epoch: int) -> int:
