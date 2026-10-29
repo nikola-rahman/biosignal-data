@@ -1,0 +1,62 @@
+# PTB-XL task "all" at 100 Hz: the supervised S4 of Mehari & Strodthoff (arXiv 2211.07579; 100 Hz,
+# "all": 0.9417 +- 0.0035), trained from random weights through our pipeline (records, labels,
+# folds, macro-AUC) with its recipe: the best published model from scratch, as the target for our
+# tokenizers (user, 2026-10-29). The checkpoint is only read by the CLI. Recipe and sources:
+# src/biosignal_model/benchmarks/s4.py.
+store: s3://biosignal-data
+checkpoint: models/v2-unimax/step-00330000.pt
+device: cuda
+settings:
+  rate: 100
+  tasks: [all]
+  rows: 8
+  read_threads: 32
+  workers: 6                  # data loader processes that crop and pack batches
+  methods: [reference_s4]
+  reference: null              # the reference_xresnet1d101 recipe; not run
+  reference_s4:
+    input_size_s: 2.5           # input_size 250 (train_ecg_model.py default)
+    valid_stride_fraction: 1.0  # val_stride None -> stride input_size (ecg_dataset_wrapper.py)
+    validation_on: logits       # ModelCheckpoint monitor val/val_macro_agg (logits averaged)
+    test_on: probabilities      # test_scores = sigscores_agg (sigmoid, then averaged)
+    batch_size: 128             # batch_size default
+    epochs: 100                 # epochs default
+    learning_rate: 1.0e-3       # lr default, constant (no scheduler)
+    weight_decay: 1.0e-3        # ECGLightningModel wd default
+    betas: [0.9, 0.999]         # torch AdamW defaults
+    eps: 1.0e-8
+    d_model: 512                # d_model default
+    d_state: 8                  # d_state default
+    n_layers: 4                 # n_layers default
+    dropout: 0.2                # s4_dropout default
+    dt_min: 1.0e-3              # HippoSSKernel defaults
+    dt_max: 1.0e-1
+  reference_s4_channels: null   # the channel-set S4; not run
+  linear_probing: false
+  fixed_slots: false           # a random channel slot per record, as in pretraining
+  linear_probing_l2: [1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]
+  linear_probing_steps: 100
+  fine_tuning_epochs: 100
+  fine_tuning_patience: null
+  fine_tuning_learning_rate: 1.0e-3
+  fine_tuning_weight_decay: 1.0e-3
+  fine_tuning_examples_per_step: 64
+  fine_tuning_discriminative_factor: 0.1
+  fine_tuning_lower_blocks_fraction: 0.25
+  fine_tuning_crop_s: 2.5
+  evaluation_stride_fraction: 1.0    # crops without overlap (arXiv 2509.25095)
+  evaluation_aggregate: mean
+  fine_tuning_slot_group: lower
+  fine_tuning_betas: [0.9, 0.999]
+  fine_tuning_warmup_epochs: 0.0
+  fine_tuning_schedule: constant
+  fine_tuning_grad_clip: null
+  fine_tuning_head: linear
+  from_scratch_samples_per_token: null
+  from_scratch_tokenizer: null
+  from_scratch_model: null           # the checkpoint's size, no dropout
+  fine_tuning_rungs: null
+  seed: 0
+wandb_project: biosignal-fm
+wandb_entity: schnyox-s
+wandb_mode: online
