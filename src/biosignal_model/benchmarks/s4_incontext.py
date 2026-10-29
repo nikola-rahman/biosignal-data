@@ -216,7 +216,7 @@ def train_and_score(
     data = torch.from_numpy(x.astype(np.float32)).to(device)  # normalize False: as recorded
     target = torch.from_numpy(y.astype(np.float32)).to(device)
     patient = torch.from_numpy(patients.astype(np.int64)).to(device)
-    size = int(round(s.input_size_s * rate))
+    size = round(s.input_size_s * rate)
     model = S4InContextModel(s, x.shape[1], y.shape[1], size).to(device)
     log({f"{prefix}/parameters": float(sum(p.numel() for p in model.parameters())),
          f"{prefix}/memory_records": float(len(tr))})  # fmt: skip
@@ -224,7 +224,7 @@ def train_and_score(
                                   eps=s.eps, weight_decay=s.weight_decay)  # fmt: skip
     per_epoch = len(tr) // s.batch_size  # drop_last
     length = x.shape[2]
-    starts = crop_starts(length, size, int(round(size * s.valid_stride_fraction)))
+    starts = crop_starts(length, size, round(size * s.valid_stride_fraction))
 
     def refresh() -> tuple[Memory, float]:
         started = time.monotonic()
@@ -246,8 +246,8 @@ def train_and_score(
                 crops = torch.stack([batch[:, :, a : a + size] for a in starts], 1)
                 who = patient[index].repeat_interleave(len(starts))  # crops in record order
                 icl, aux = model(crops.flatten(0, 1), who, memory)
-                for p, out in ((icl, icl_out), (aux, aux_out)):
-                    p = p.view(len(batch), len(starts), -1)
+                for flat, out in ((icl, icl_out), (aux, aux_out)):
+                    p = flat.view(len(batch), len(starts), -1)
                     out.append((torch.sigmoid(p) if on == "probabilities" else p).mean(1))
         return torch.cat(icl_out).cpu().numpy(), torch.cat(aux_out).cpu().numpy()
 

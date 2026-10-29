@@ -12,17 +12,14 @@ torch = pytest.importorskip("torch")
 from biosignal_model.benchmarks import s4_incontext as ic  # noqa: E402
 from biosignal_model.benchmarks.s4 import S4Settings  # noqa: E402
 
-BASE = dict(
+SETTINGS = ic.S4InContextSettings(
     input_size_s=0.5, valid_stride_fraction=1.0, validation_on="logits",
     test_on="probabilities", batch_size=4, epochs=2, learning_rate=1e-3, weight_decay=1e-3,
     betas=(0.9, 0.999), eps=1e-8, d_model=16, d_state=8, n_layers=2, dropout=0.2,
     dt_min=1e-3, dt_max=1e-1, loss="bce", class_balanced_beta=None, asymmetric=None,
     ema_decay=None, augmentation=None, schedule="constant", warmup_epochs=0,
-    patience_epochs=None, distillation=None, save_chosen_to=None,
-)  # fmt: skip
-SETTINGS = ic.S4InContextSettings(
-    **BASE, context_k=3, icl_layers=2, icl_heads=2, icl_feed_forward=32, aux_weight=1.0,
-    context_labels="labels",
+    patience_epochs=None, distillation=None, save_chosen_to=None, context_k=3, icl_layers=2,
+    icl_heads=2, icl_feed_forward=32, aux_weight=1.0, context_labels="labels",
 )  # fmt: skip
 
 
