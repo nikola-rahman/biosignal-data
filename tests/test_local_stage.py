@@ -21,10 +21,10 @@ from biosignal_model.channel_batch import (  # noqa: E402
 )
 from biosignal_model.local_stage import (  # noqa: E402
     S4D,
-    _plan,
     IdentityLocalSpec,
     LocalStage,
     S4DLocalSpec,
+    _plan,
     fast_size,
     local_stage,
 )

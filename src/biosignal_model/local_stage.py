@@ -45,8 +45,9 @@ base (ECG leads, EEG electrodes, the EMG grid); at each sample time, multi-head 
 across them (pre-norm, residual), with no channel identity: the stage is equivariant to the
 order of the channels. The channels of such a group are adjacent in the stage's order, so the
 attention reads a view [groups, channels, length, width]; only a group whose channels differ
-in length (at a recording's end) is gathered, with a mask. Channels on another time base are mixed later, by the global model.
-For grids, a neighbour convolution needs the grid positions (descriptors): a later step.
+in length (at a recording's end) is gathered, with a mask. Channels on another time base are
+mixed later, by the global model. For grids, a neighbour convolution needs the grid positions
+(descriptors): a later step.
 
 Activation checkpointing per layer (`checkpoint`), so the memory is one layer's activations
 plus one [S, width] tensor a layer.
@@ -57,7 +58,7 @@ from __future__ import annotations
 import functools
 import math
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 import numpy as np
 import torch
@@ -188,10 +189,10 @@ def _plan(x: ChannelInputs) -> _Plan:
     lengths = c.length.tolist()
     offsets = c.offset.tolist()
     groups: dict[tuple[int, int, float, float], list[int]] = {}
-    for k, key in enumerate(zip(c.row.tolist(), c.document.tolist(), rates,
-                                c.start_s.tolist(), strict=True)):  # fmt: skip
+    for k, base in enumerate(zip(c.row.tolist(), c.document.tolist(), rates,
+                                 c.start_s.tolist(), strict=True)):  # fmt: skip
         if lengths[k]:
-            groups.setdefault(key, []).append(k)
+            groups.setdefault(base, []).append(k)
     # per bucket (rate, length): the groups of equal length (size >= 2), then the rest
     viewed: dict[tuple[float, int], list[list[int]]] = {}
     single: dict[tuple[float, int], list[int]] = {}
@@ -457,11 +458,12 @@ class S4DLocalStage(LocalStage):
         """Per layer, the kernel length per rate: one host sync a forward."""
         if not plan.rates:
             return [{} for _ in self.layers]
-        slowest = torch.stack([layer.ssm.slowest(plan.rates) for layer in self.layers]).tolist()
+        ssms = [cast(_Layer, layer).ssm for layer in self.layers]
+        slowest = torch.stack([ssm.slowest(plan.rates) for ssm in ssms]).tolist()
         return [
-            {r: layer.ssm.kernel_length(s, plan.longest[r])
+            {r: ssm.kernel_length(s, plan.longest[r])
              for r, s in zip(plan.rates, row, strict=True)}
-            for layer, row in zip(self.layers, slowest, strict=True)
+            for ssm, row in zip(ssms, slowest, strict=True)
         ]  # fmt: skip
 
     def forward(self, x: ChannelInputs) -> torch.Tensor:
