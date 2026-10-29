@@ -7,6 +7,7 @@ A dataset without an entry is converted by the general rules of discover.py only
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, ValidationError
@@ -40,9 +41,35 @@ class EdfAnnotationFiles(_Model):
     notes: str | None = None
 
 
+class EdfSuffixes(_Model):
+    """EDF files that the dataset names with another suffix (ISRUC-Sleep: `.rec`): they are
+    recordings like `.edf` files. Converting checks that each is an EDF file (its header)."""
+
+    suffixes: list[str] = Field(min_length=1)  # lowercase, with the dot
+    source: HttpUrl
+    evidence: str  # an exact quote from the source
+    notes: str | None = None
+
+
+class PickleRecordings(_Model):
+    """Recordings that the dataset publishes only as Python pickles of NumPy arrays
+    (PPG-DaLiA: `S<n>/S<n>.pkl`, the synchronised signals and the labels). `reader` names the
+    reader for the dataset's layout (standard/sources.py); `pattern` is a regex on the raw
+    path. The pickles are read with an unpickler that builds NumPy arrays and Python
+    containers only, never other objects."""
+
+    reader: Literal["ppg-dalia"]
+    pattern: str
+    source: HttpUrl
+    evidence: str  # an exact quote from the source
+    notes: str | None = None
+
+
 class DatasetRules(_Model):
     id: str
     edf_annotation_files: EdfAnnotationFiles | None = None
+    edf_suffixes: EdfSuffixes | None = None
+    pickle_recordings: PickleRecordings | None = None
 
 
 class StandardRules(_Model):

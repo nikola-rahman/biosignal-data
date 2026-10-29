@@ -524,6 +524,128 @@ def _place(
     return written, overwritten
 
 
+# --- PPG-DaLiA (.pkl) ----------------------------------------------------------------------
+
+# What an unpickler may build from a dataset's pickles: NumPy arrays, scalars and dtypes (by
+# the names NumPy 1 and 2 pickle them under), and the bytes of Python 2 strings. Nothing
+# else: a pickle that names any other callable is refused, so reading one runs no code.
+_PICKLE_ALLOWED = {
+    ("numpy.core.multiarray", "_reconstruct"), ("numpy._core.multiarray", "_reconstruct"),
+    ("numpy.core.multiarray", "scalar"), ("numpy._core.multiarray", "scalar"),
+    ("numpy", "ndarray"), ("numpy", "dtype"), ("_codecs", "encode"),
+}  # fmt: skip
+
+
+def load_pickle(path: Path) -> Any:
+    """A pickle of NumPy arrays and Python containers (also from Python 2: its strings as
+    latin-1), built without running any other code (_PICKLE_ALLOWED)."""
+    import pickle  # noqa: PLC0415
+
+    class _Restricted(pickle.Unpickler):
+        def find_class(self, module: str, name: str) -> Any:
+            if (module, name) not in _PICKLE_ALLOWED:
+                raise pickle.UnpicklingError(f"refused: {module}.{name}")
+            return super().find_class(module, name)
+
+    with path.open("rb") as f:
+        return _Restricted(f, encoding="latin1").load()  # noqa: S301 - restricted above
+
+
+# PPG-DaLiA's signals in S<n>.pkl (its readme, section III): name -> (rate, channel names, unit).
+# Wrist: Empatica E4; chest: RespiBAN. ACC of the E4 is in 1/64 g; the readme gives no unit
+# for BVP, chest ACC, ECG and RESP, so those are left empty. The chest's EDA, EMG and Temp
+# "only include dummy data and should thus be ignored" (readme); they are kept as published.
+_DALIA_SIGNALS = {
+    ("wrist", "BVP"): (64.0, ("BVP",), ""),
+    ("wrist", "ACC"): (32.0, ("ACC_x", "ACC_y", "ACC_z"), "1/64 g"),
+    ("wrist", "EDA"): (4.0, ("EDA",), "uS"),
+    ("wrist", "TEMP"): (4.0, ("TEMP",), "degC"),
+    ("chest", "ACC"): (700.0, ("chest_ACC_x", "chest_ACC_y", "chest_ACC_z"), ""),
+    ("chest", "ECG"): (700.0, ("chest_ECG",), ""),
+    ("chest", "Resp"): (700.0, ("chest_Resp",), ""),
+    ("chest", "EDA"): (700.0, ("chest_EDA",), ""),
+    ("chest", "EMG"): (700.0, ("chest_EMG",), ""),
+    ("chest", "Temp"): (700.0, ("chest_Temp",), ""),
+}
+DALIA_WINDOW_S, DALIA_SHIFT_S = 8.0, 2.0  # of 'label' (readme, section III.3)
+
+
+class DaliaSource:
+    """A subject's S<n>.pkl of PPG-DaLiA: "synchronised raw sensor data and labels" (readme),
+    read with load_pickle. The signals are stored as the pickle holds them (float64); scale
+    1, offset 0. Signals at one rate share an array; a signal of another length than the
+    others at its rate is refused. Events: 'label' (the ECG-based heart rate of each 8 s
+    window, shifted by 2 s: annotator `label`, label `heart_rate`, the value as `text`),
+    'rpeaks' (annotator `rpeaks`, the sample of the chest ECG), and 'activity' (4 Hz, one
+    event per run of the same ID: annotator `activity`, label the ID). 'questionnaire' and
+    'subject' go into the header."""
+
+    format = "ppg-dalia"
+
+    def __init__(self, path: str, fetch: Fetch) -> None:
+        data = load_pickle(fetch(path))
+        self.files = [path]
+        self.problems: list[str] = []
+        self.start_time = None
+        signals = data["signal"]
+        by_rate: dict[float, list[tuple[str, np.ndarray, str]]] = {}
+        for (device, key), (rate, names, unit) in _DALIA_SIGNALS.items():
+            values = np.asarray(signals[device][key])
+            values = values.reshape(len(values), -1).T  # (samples, n) -> (n, samples)
+            if values.shape[0] != len(names):
+                raise ValueError(f"{path}: {device}/{key} has {values.shape[0]} channels")
+            for name, row in zip(names, values, strict=True):
+                by_rate.setdefault(rate, []).append((name, row, unit))
+        unknown = {(d, k) for d in signals for k in signals[d]} - set(_DALIA_SIGNALS)
+        if unknown:
+            raise ValueError(f"{path}: signals not in the readme: {sorted(unknown)}")
+        self.groups, self._arrays = [], []
+        for rate, members in sorted(by_rate.items(), reverse=True):
+            lengths = {len(row) for _, row, _ in members}
+            if len(lengths) != 1:
+                raise ValueError(f"{path}: signals at {rate:g} Hz have lengths {sorted(lengths)}")
+            array = np.stack([row for _, row, _ in members])
+            channels = tuple(
+                Channel(name=name, unit=unit, scale=1.0, offset=0.0, invalid_value=None,
+                        source={"dtype": str(row.dtype)})
+                for name, row, unit in members
+            )  # fmt: skip
+            self.groups.append(Group(rate, array.dtype, array.shape[1], channels))
+            self._arrays.append(array)
+        self.duration_s = max(g.length / g.rate for g in self.groups)
+        self.frame_rate = max(g.rate for g in self.groups)
+        hr = np.asarray(data["label"], dtype=np.float64).ravel()
+        self.events = [
+            Event(file=path, annotator="label", onset_s=i * DALIA_SHIFT_S, label="heart_rate",
+                  duration_s=DALIA_WINDOW_S, text=repr(float(v)))
+            for i, v in enumerate(hr)
+        ]  # fmt: skip
+        self.events += [
+            Event(file=path, annotator="rpeaks", onset_s=int(k) / 700.0, label="R", sample=int(k))
+            for k in np.asarray(data["rpeaks"]).ravel()
+        ]
+        activity = np.asarray(data["activity"]).ravel()
+        changes = np.flatnonzero(np.diff(activity)) + 1
+        starts = np.concatenate([[0], changes])
+        stops = np.concatenate([changes, [len(activity)]])
+        self.events += [
+            Event(file=path, annotator="activity", onset_s=a / 4.0, label=str(int(activity[a])),
+                  duration_s=(b - a) / 4.0)
+            for a, b in zip(starts, stops, strict=True)
+        ]  # fmt: skip
+        quest = dict(data.get("questionnaire", {}))
+        self.header = json.dumps(
+            {"subject": str(data.get("subject")), "keys": sorted(map(str, data)),
+             "questionnaire": {str(k): str(v) for k, v in quest.items()}}
+        )  # fmt: skip
+
+    def read(self, group: int, start: int, stop: int) -> np.ndarray:
+        return self._arrays[group][:, start:stop]
+
+    def close(self) -> None:
+        self._arrays = []
+
+
 def _edf_start(edf: Any) -> datetime | None:
     """The start as written; None where the file anonymizes the date (EDF+ "X")."""
     import edfio  # noqa: PLC0415

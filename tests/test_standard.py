@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -19,7 +20,13 @@ from biosignal_data.standard.convert import (
     plan_standard,
 )
 from biosignal_data.standard.discover import discover
-from biosignal_data.standard.rules import DatasetRules, EdfAnnotationFiles, StandardRules
+from biosignal_data.standard.rules import (
+    DatasetRules,
+    EdfAnnotationFiles,
+    EdfSuffixes,
+    PickleRecordings,
+    StandardRules,
+)
 from biosignal_data.storage.stores import LocalStore
 from tests.conftest import FakeFetcher, make_dataset
 
@@ -899,3 +906,117 @@ def test_a_paired_annotation_file_that_starts_at_another_time_fails_its_recordin
 def test_standard_yaml_is_valid() -> None:
     rules = StandardRules.load()
     assert rules.get("physionet/sleep-edfx") is not None
+
+
+ISRUC_RULES = StandardRules(
+    datasets=[
+        DatasetRules(
+            id="isr-uc/isruc-sleep",
+            edf_suffixes=EdfSuffixes(
+                suffixes=[".rec"], source="https://sleeptight.isr.uc.pt/",
+                evidence="Each Zipfile contains 1-Raw Data in *.Rec format",
+            ),
+        )
+    ]
+)  # fmt: skip
+
+
+def test_rec_files_are_edf_recordings_where_the_dataset_rule_says_so(
+    store: LocalStore, tmp_path: Path
+) -> None:
+    """ISRUC-Sleep publishes its EDF files as `<n>/<n>.rec`, next to the hypnograms."""
+    edf, eeg, slow = edf_file(tmp_path)
+    files = {"1/1.rec": edf, "1/1_1.txt": b"0\n1\n", "1/1_1.xlsx": b"PK"}
+    dataset = make_dataset(id="isr-uc/isruc-sleep")
+    ingest(dataset, store, fetcher=FakeFetcher(dataset, files), workers=2)
+    no_rule = StandardRules(datasets=[])
+    assert plan_standard(store, "isr-uc/isruc-sleep", "1.0.0", rules=no_rule).units == []
+    plan = plan_standard(store, "isr-uc/isruc-sleep", "1.0.0", rules=ISRUC_RULES)
+    assert [(u.id, u.format, u.path) for u in plan.units] == [("1/1", "edf", "1/1.rec")]
+    report = convert(plan, store, workers=1, part_bytes=1, work_dir=tmp_path / "work")
+    assert report.complete
+    ds = StandardDataset.open(store, "isr-uc/isruc-sleep", "1.0.0")
+    np.testing.assert_array_equal(ds.read("1/1", "256Hz")[0], eeg)
+    np.testing.assert_array_equal(ds.read("1/1", "1Hz")[0], slow)
+    assert ds.file("1/1_1.txt") == b"0\n1\n"  # the hypnogram is kept with the version
+
+
+DALIA_RULES = StandardRules(
+    datasets=[
+        DatasetRules(
+            id="uci/ppg-dalia",
+            pickle_recordings=PickleRecordings(
+                reader="ppg-dalia", pattern=r"^PPG_FieldStudy/S\d+/S\d+\.pkl$",
+                source="https://archive.ics.uci.edu/dataset/495/ppg+dalia",
+                evidence="SX.pkl: contains synchronised data and labels",
+            ),
+        )
+    ]
+)  # fmt: skip
+
+
+def _dalia_pickle(seconds: int) -> tuple[bytes, dict[str, Any]]:
+    """A subject's pickle as PPG-DaLiA lays it out, with `seconds` of random signals."""
+    import pickle  # noqa: PLC0415
+
+    def r(rate: int, n: int) -> np.ndarray:
+        return RNG.normal(size=(seconds * rate, n))
+
+    data = {
+        "signal": {
+            "chest": {"ACC": r(700, 3), "ECG": r(700, 1), "EMG": r(700, 1), "EDA": r(700, 1),
+                      "Temp": r(700, 1), "Resp": r(700, 1)},
+            "wrist": {"ACC": r(32, 3), "BVP": r(64, 1), "EDA": r(4, 1), "TEMP": r(4, 1)},
+        },
+        "label": RNG.uniform(50, 150, (seconds - 8) // 2 + 1),
+        "rpeaks": np.arange(0, seconds * 700, 600),
+        "activity": np.repeat([[0.0], [1.0], [0.0]], seconds * 4 // 3 + 1, axis=0)[: seconds * 4],
+        "questionnaire": {"AGE": 30, "Gender": " m"},
+        "subject": "S1",
+    }  # fmt: skip
+    return pickle.dumps(data, protocol=2), data
+
+
+def test_ppg_dalia_pickles_become_recordings_with_their_labels_as_events(
+    store: LocalStore, tmp_path: Path
+) -> None:
+    blob, data = _dalia_pickle(20)
+    files = {"PPG_FieldStudy/S1/S1.pkl": blob, "PPG_FieldStudy/S1/S1_quest.csv": b"# AGE;30\n"}
+    dataset = make_dataset(id="uci/ppg-dalia")
+    ingest(dataset, store, fetcher=FakeFetcher(dataset, files), workers=2)
+    plan = plan_standard(store, "uci/ppg-dalia", "1.0.0", rules=DALIA_RULES)
+    assert [(u.id, u.format) for u in plan.units] == [("PPG_FieldStudy/S1/S1", "ppg-dalia")]
+    report = convert(plan, store, workers=1, part_bytes=1, work_dir=tmp_path / "work")
+    assert report.complete
+    ds = StandardDataset.open(store, "uci/ppg-dalia", "1.0.0")
+    record = "PPG_FieldStudy/S1/S1"
+    np.testing.assert_array_equal(ds.read(record, "64Hz")[0], data["signal"]["wrist"]["BVP"][:, 0])
+    np.testing.assert_array_equal(ds.read(record, "32Hz"), data["signal"]["wrist"]["ACC"].T)
+    chest = ds.read(record, "700Hz")
+    np.testing.assert_array_equal(chest[3], data["signal"]["chest"]["ECG"][:, 0])
+    events = ds.events.to_pylist()
+    hr = [e for e in events if e["annotator"] == "label"]
+    assert [float(e["text"]) for e in hr] == data["label"].tolist()
+    assert [(e["onset_s"], e["duration_s"]) for e in hr[:2]] == [(0.0, 8.0), (2.0, 8.0)]
+    runs = [
+        (e["onset_s"], e["duration_s"], e["label"]) for e in events if e["annotator"] == "activity"
+    ]
+    assert [label for _, _, label in runs] == ["0", "1", "0"] and sum(d for _, d, _ in runs) == 20
+    assert sum(e["annotator"] == "rpeaks" for e in events) == len(data["rpeaks"])
+
+
+def test_a_pickle_that_would_run_code_is_refused(tmp_path: Path) -> None:
+    import pickle  # noqa: PLC0415
+
+    from biosignal_data.standard.sources import load_pickle  # noqa: PLC0415
+
+    class Evil:
+        def __reduce__(self) -> tuple[Any, tuple[str]]:
+            return (print, ("ran",))
+
+    path = tmp_path / "evil.pkl"
+    path.write_bytes(pickle.dumps({"x": Evil()}))
+    with pytest.raises(pickle.UnpicklingError, match="refused: builtins.print"):
+        load_pickle(path)
+    path.write_bytes(pickle.dumps({"x": np.arange(3.0)}, protocol=2))
+    np.testing.assert_array_equal(load_pickle(path)["x"], np.arange(3.0))
