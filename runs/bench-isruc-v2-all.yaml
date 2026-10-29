@@ -1,4 +1,4 @@
-# ISRUC-Sleep cohort I, 5-class sleep staging (fine-tuning and linear probing of v2-unimax step
+# ISRUC-Sleep cohort I, 5-class sleep staging (fine-tuning of v2-unimax step
 # 330,000), on every channel of the recording (19 in subject 1: 8 EEG and EOG, X1-X8, DC3, DC8,
 # SaO2, at 200, 25 and 12.5 Hz), in physical units at their native rates, unfiltered. The protocol
 # and the training recipe of CBraMod (arXiv 2412.07236; github.com/wjq-learning/CBraMod:

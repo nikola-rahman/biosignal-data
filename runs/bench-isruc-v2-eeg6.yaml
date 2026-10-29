@@ -1,4 +1,4 @@
-# ISRUC-Sleep cohort I, 5-class sleep staging (fine-tuning and linear probing of v2-unimax step
+# ISRUC-Sleep cohort I, 5-class sleep staging (fine-tuning of v2-unimax step
 # 330,000), on CBraMod's channels: columns 2-7 of each file (F3, C3, O1, F4, C4, O2 against the
 # opposite mastoid; subject 8: C3, O1, C4, O2, X1, X2), in physical units at their native rates,
 # unfiltered. The protocol and the training recipe of CBraMod (arXiv 2412.07236;

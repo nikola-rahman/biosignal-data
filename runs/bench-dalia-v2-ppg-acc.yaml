@@ -1,4 +1,4 @@
-# PPG-DaLiA, heart rate of each 8 s window (2 s shift) (fine-tuning and linear probing of
+# PPG-DaLiA, heart rate of each 8 s window (2 s shift) (fine-tuning of
 # v2-unimax step 330,000), from the wrist PPG (BVP, 64 Hz) and accelerometer (3 axes, 32 Hz), in
 # physical units at their native rates, unfiltered. Leave one subject out as Deep PPG (Reiss et
 # al. 2019): each subject the test subject once, the next two (cyclically) the validation subjects
