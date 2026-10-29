@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -7,7 +9,7 @@ torch = pytest.importorskip("torch")
 
 from biosignal_data.training.loader import Channel, Example, Origin, Signal  # noqa: E402
 from biosignal_model.batch import SamplesTokenizer  # noqa: E402
-from biosignal_model.benchmarks import ptbxl  # noqa: E402
+from biosignal_model.benchmarks import BenchmarkRun, ptbxl  # noqa: E402
 from biosignal_model.model import Encoder, ModelConfig  # noqa: E402
 
 STATEMENTS = [  # a few rows of scp_statements.csv
@@ -467,3 +469,12 @@ def test_drop_path_drops_whole_items_in_training_only() -> None:
     assert torch.equal(per_item.min(1).values, per_item.max(1).values)  # whole items
     assert 0.2 < (per_item[:, 0] == 0).float().mean().item() < 0.3
     assert torch.equal(_drop_path(y, 0.25, training=False), y)
+
+
+def test_every_ptbxl_run_file_is_valid() -> None:
+    files = sorted((Path(__file__).parents[1] / "runs").glob("bench-ptbxl-*.yaml"))
+    assert files
+    for f in files:
+        settings = ptbxl.PtbxlSettings.model_validate(BenchmarkRun.load(f).settings)
+        if f.name.startswith("bench-ptbxl-rungs-"):
+            assert settings.fine_tuning_rungs is not None, f.name
