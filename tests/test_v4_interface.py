@@ -36,7 +36,10 @@ D2 = HierarchicalTokenizer(
     local_width=16, local_layers=2, local_states=8, pool_heads=4, residual_pool="mean",
 )  # fmt: skip
 ALL = [
-    SamplesTokenizer(kind="samples"), D1, D2, D2.model_copy(update={"residual_pool": "attention"})
+    SamplesTokenizer(kind="samples"),
+    D1,
+    D2,
+    D2.model_copy(update={"residual_pool": "attention"}),
 ]
 IDS = ["samples", "duration", "hierarchical", "hierarchical-attention"]
 RUNS = Path(__file__).resolve().parents[1] / "runs"
@@ -94,6 +97,7 @@ def _records(n: int, dataset: str) -> list[Example]:
     rng = np.random.default_rng(0)
     channels = tuple(Channel("100Hz", k, 100.0, 1.0, 0.0, None, f"L{k}", "ecg", "mV")
                      for k in range(2))  # fmt: skip
+
     def signals() -> tuple[Signal, ...]:
         return tuple(Signal(rng.normal(size=500).astype(np.float32), 100.0, 0.0) for _ in range(2))
 
