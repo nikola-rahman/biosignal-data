@@ -17,6 +17,7 @@ from biosignal_data.training.loader import Channel, Example, Origin, Signal  # n
 from biosignal_model.batch import SIGNAL_TYPES, Batch, Inputs, Packer, concat  # noqa: E402
 from biosignal_model.model import Encoder, ModelConfig, masked_loss  # noqa: E402
 from biosignal_model.train import (  # noqa: E402
+    ADDED_LATER,
     OptimSection,
     TrainConfig,
     _forward_backward,
@@ -187,6 +188,19 @@ def _short_config(store: LocalStore, tmp_path: Path, **run: object) -> TrainConf
                     "resume": "never"} | run,
         }
     )  # fmt: skip
+
+
+def test_a_checkpoint_from_before_a_field_existed_is_read_as_its_run_was(
+    store: LocalStore, tmp_path: Path
+) -> None:
+    config = _short_config(store, tmp_path)
+    stored = config.model_dump(mode="json")
+    for section, name in ADDED_LATER:
+        del stored[section][name]  # as v1-pretrain wrote it
+    with pytest.raises(ValueError, match="pieces_per_epoch"):
+        TrainConfig.model_validate(stored)
+    assert TrainConfig.from_checkpoint(stored) == config
+    assert TrainConfig.from_checkpoint(config.model_dump(mode="json")) == config
 
 
 def test_a_non_finite_step_is_not_applied_and_too_many_stop_the_run(

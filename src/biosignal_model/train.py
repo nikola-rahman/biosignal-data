@@ -147,12 +147,29 @@ class TrainConfig(_Section):
     def load(cls, path: Path) -> TrainConfig:
         return cls.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
 
+    @classmethod
+    def from_checkpoint(cls, config: dict[str, Any]) -> TrainConfig:
+        """The config stored in a checkpoint. One written before a field existed gets the
+        value that does what its run did (ADDED_LATER); a run's own config never does."""
+        config = {section: dict(values) for section, values in config.items()}
+        for (section, name), value in ADDED_LATER.items():
+            config[section].setdefault(name, value)
+        return cls.model_validate(config)
+
     def model_settings(self) -> ModelConfig:
         return ModelConfig(
             samples_per_token=self.tokens.samples_per_token,
             max_channels=self.tokens.max_channels,
             **self.model.model_dump(),
         )
+
+
+# Fields added after checkpoints were written, with the value that means "as before":
+# v1-pretrain (2026-10-27) read every block once per epoch with one set of workers.
+ADDED_LATER: dict[tuple[str, str], Any] = {
+    ("data", "mixture"): None,  # 44e5541
+    ("data", "pieces_per_epoch"): 1,  # 7bc3284
+}
 
 
 class BatchStream(IterableDataset[Batch]):

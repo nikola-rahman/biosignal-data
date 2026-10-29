@@ -308,7 +308,7 @@ def run(
     """All scores of one checkpoint, as a flat dict for logging."""
     from biosignal_model.train import TrainConfig  # noqa: PLC0415 - avoids a cycle
 
-    train_config = TrainConfig.model_validate(checkpoint["config"])
+    train_config = TrainConfig.from_checkpoint(checkpoint["config"])
     config = train_config.model_settings()
     max_tokens = train_config.tokens.max_tokens
     dataset = StandardDataset.open(store, DATASET, "latest")
