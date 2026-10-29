@@ -3,7 +3,8 @@
 The design of the v4 model (revision 2, 2026-10-29). Revision 1 was reviewed by 8 experts (ECG,
 EEG/EMG, information theory, LLM, vision, audio, foundation-model architect, code); this
 revision takes their consensus and the user's decisions. Each change names its reason.
-"Ladder" = the scaling ladder in section 9. The code is built in the order of section 11.
+"Ladder" = the scaling ladder in section 9. The code is built in the order of section 11; what
+is built is marked **(built)**.
 
 User decisions (2026-10-29):
 
@@ -20,10 +21,10 @@ User decisions (2026-10-29):
 - The unit is the **subject**, not the hour: i-care has ~607 patients and gives > half of all
   samples; hd-semg has 20 subjects.
   - Cap per subject per epoch: random windows (blocks), at most a set number of hours per
-    subject per epoch (start: 4 h).
+    subject per epoch (start: 4 h). **(built)**: `data.subject_hours_per_epoch`.
   - UniMax over (type x dataset), sized by subjects; at most 4 epochs of a dataset.
 - The loss, the mixture and the compute budget count the same unit: **global tokens** (section 4).
-  The v0-v3 loss is a mean over samples, so 2 kHz EMG weighs 8x EEG per second.
+  The v0-v3 loss is a mean over samples, so 2 kHz EMG weighs 8x EEG per second. **(built)**: the
   mixture counts global tokens (`data.mixture.unit: global_tokens`).
 - Quality masks (flat line, lead-off, clipping) from the quality layer: masked out of the loss.
 - Checks before use: hd-semg raw and preprocessed files must not both be in the index; benchmark
@@ -51,15 +52,40 @@ User decisions (2026-10-29):
   sleep-edfx "EMG" at 1 Hz is an envelope (own type).
 - Why: per-crop or per-recording scaling removes absolute amplitude (i-care prognosis, voltage
   criteria) and ratios between channels. The S4 winner (0.940) reads raw mV.
+- Not built yet: the v4 batch carries the loader's physical values; the transform is a later step.
 
-## 3. Local stage: every sample, channels mixed early
+## 3. Local stage: every sample, channels mixed early **(built)**
 
-- Per channel, at its own rate: a bidirectional diagonal complex SSM (S4D), discretized by **ZOH**
-  with dt = 1/fs in seconds (not bilinear: bilinear warps frequency 3-15 % between 100 and 500 Hz).
-  One kernel per distinct rate in the batch; kernel length capped near 5 x the longest mode time.
+- Per channel, at its own rate: a bidirectional diagonal complex SSM (S4D) defined in continuous
+  time (lambda = a / Delta, Delta in seconds), discretized with dt = 1/fs by **centred ZOH**
+  (decided 2026-10-29 from the measurement below): the poles of ZOH, exact at every rate, and the
+  kernel integrated over [(l - 1/2) dt, (l + 1/2) dt]. Plain ZOH delays by half a sample (5 ms at
+  100 Hz, 1 ms at 500 Hz), and that delay differs between channels of different rates that the
+  model mixes. One kernel per distinct rate in the batch; kernel length capped at 5 decay times of
+  the slowest unmasked mode.
 - Mode time scales initialized log-uniform between two set bounds (start: 1 ms to 10 s); a mode is
-  masked when |lambda| dt > pi (above Nyquist or decaying faster than one sample). Rates above any
-  seen in training: the same mask at test time.
+  masked when |lambda| dt > pi (above Nyquist or decaying faster than one sample), and a masked
+  mode gives its **static gain** -C/a at lag 0 (decided 2026-10-29): its response to in-band
+  input, and the ZOH limit of a mode that decays within one sample. Rates above any seen in
+  training: the same rule at test time.
+- Measured at random init (2026-10-29, `scripts/v4_local_checks.py`; width 128, 4 layers, 32
+  modes, 3 channels of sinusoids 0.1-10 Hz, 10 s; relative feature error against 500 Hz at the
+  common times, 1 s from each end):
+
+  | masked modes, discretization | 100 Hz | 128 Hz | 173 Hz | 250 Hz |
+  |---|---|---|---|---|
+  | dropped (first design), ZOH | 0.398 | 0.213 | 0.125 | 0.092 |
+  | static gain, ZOH | 0.0123 | 0.0086 | 0.0056 | 0.0033 |
+  | static gain, centred ZOH | **0.0038** | **0.0022** | **0.0014** | **0.0007** |
+  | static gain, bilinear | 0.0196 | 0.0136 | 0.0091 | 0.0049 |
+
+  Dropping masked modes fails: a fast mode's static gain does not depend on its time scale, so
+  a low rate loses a gain that a high rate keeps. Frequency response of one layer against the
+  continuous system (median over features, no mode masked): ZOH at 100 Hz has phase +18 deg at
+  10 Hz and +72 deg at 40 Hz (the half-sample delay), magnitude 1.30 at 40 Hz; centred ZOH has
+  phase 0 and a **known droop near Nyquist**: magnitude 0.98 at 10 Hz, 0.88 at 20 Hz, 0.44 at
+  40 Hz at 100 Hz (0.98 at 40 Hz at 500 Hz). Bilinear is like ZOH in the median (+17.5 deg at
+  10 Hz at 100 Hz).
 - **Early channel mixing** (the hybrid's lesson: attention across leads at every sample): in a set
   subset of the layers (start: 2 of 4), attention across co-located channels at each sample time,
   for channels of one example with a shared time base (ECG leads, EEG electrodes, PSG). For grids
@@ -73,9 +99,11 @@ User decisions (2026-10-29):
 ## 4. Length reduction: a global token duration, learned chunking as the end state
 
 - Now: **one global token duration in seconds** for every channel and rate (the same grid at every
-  rate), swept on the ladder.
+  rate), swept on the ladder. **(built)**: `tokens.token_s`. A channel's tokens are the cells of
+  the grid that hold at least one of its samples: a channel slower than one sample a cell has one
+  token a sample, not empty cells (to confirm).
 - End state: a **learned chunker** (H-Net type) that places the boundaries from the local features.
-- Interface
+- Interface **(built)**: encoder -> `boundaries(local features, visible only)` -> global model ->
   upsampling + residual. The fixed-duration chunker is the first implementation; an H-Net-type
   chunker plugs in at the same place. Before building one: measure its possible gain (peak vs
   mean local information rate) with no training.
@@ -101,7 +129,7 @@ an absent field adds nothing. No "unknown" special case is needed.
 - Field dropout 20-30 % per field in pretraining, so the model works with any subset.
 - Shortcut check: a dataset-identity probe on the descriptors alone (diagnostic, not a result).
 - Needs new index columns (standard name, electrode, reference, filters, site).
--
+- **(built)**: the channel table has the type and an empty placeholder for the optional fields.
 
 ## 6. Global model
 
@@ -123,7 +151,7 @@ MAE type, asymmetric: the global model sees only visible tokens; a narrow decode
 4 blocks) gets the mask tokens.
 
 - Masks, a set total ratio of the global tokens (start: 75 %), three kinds, their shares a setting
-  (start: 50 / 30 / 20 %)
+  (start: 50 / 30 / 20 %) **(built, on samples)**:
   - time spans hidden **over all channels together**;
   - channel groups: groups from a descriptor field when the channels have it, else random
     channel subsets, hidden over a time window;
@@ -186,6 +214,7 @@ band per type (spectral knee); share of values in the nonlinear part of asinh pe
    S4 and the hybrid stay as references. (done)
 3. Batch format: a flat sample buffer per channel, a channel table, a token table (replaces the
    [R, L, P] grid). Loader: two limits per span (local samples, global tokens), a span per group,
-   caps per subject, the mixture in global tokens.
-4. Local stage (section 3), reducer (section 4), descriptors (section 5, with the index
+   caps per subject, the mixture in global tokens. (built; the old [R, L, P] path stays for the
+   old configs)
+4. Local stage (section 3) (built), reducer (section 4), descriptors (section 5, with the index
    columns), global model (section 6), MAE (section 7), heads.

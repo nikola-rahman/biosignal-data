@@ -133,7 +133,7 @@ def frequency_response(device: torch.device) -> None:
         ssm.load_state_dict(base.state_dict())
         for rate in (100.0, 500.0):
             with torch.no_grad():
-                k = ssm.kernel(rate, ssm.kernel_length(rate, 10**9))[0].numpy()  # [H, K]
+                k = ssm.kernel(rate, ssm.length_at(rate, 10**9))[0].numpy()  # [H, K]
             lags = np.arange(k.shape[1]) / rate
             # the DTFT at the set frequencies, from the kernel itself
             response = k @ np.exp(-1j * omega[None, :] * lags[:, None])

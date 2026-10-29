@@ -34,14 +34,18 @@ The SSM is defined in continuous time, in seconds, so one set of weights reads e
   longest decay time 1 / |Re lambda| of the unmasked modes (and at most the longest channel),
   applied as an FFT convolution in float32 at a fast size (2, 3, 5, 7-smooth) of the length
   plus the kernel;
-- channels of one rate are put in buckets of one FFT size (length buckets), each a padded
-  [channels, width, size] tensor; padding is zero, so a channel's output does not depend on
-  the others.
+- channels of one rate and length are put together once a forward (length buckets: the stage
+  works in its own sample order, given back in the buffer's order at the end), so every layer
+  works on views, [channels, width, length] for the FFT; the FFT's zero padding is the only
+  padding, so a channel's output does not depend on the others; the kernel lengths of all
+  layers and rates come with one host sync a forward.
 
 Channel mixing: channels of one example with the same rate and first-sample time share a time
 base (ECG leads, EEG electrodes, the EMG grid); at each sample time, multi-head attention
 across them (pre-norm, residual), with no channel identity: the stage is equivariant to the
-order of the channels. Channels on another time base are mixed later, by the global model.
+order of the channels. The channels of such a group are adjacent in the stage's order, so the
+attention reads a view [groups, channels, length, width]; only a group whose channels differ
+in length (at a recording's end) is gathered, with a mask. Channels on another time base are mixed later, by the global model.
 For grids, a neighbour convolution needs the grid positions (descriptors): a later step.
 
 Activation checkpointing per layer (`checkpoint`), so the memory is one layer's activations
@@ -55,6 +59,7 @@ import math
 from dataclasses import dataclass
 from typing import Annotated, Literal
 
+import numpy as np
 import torch
 import torch.nn.functional as F  # noqa: N812 - the usual name
 from pydantic import BaseModel, ConfigDict, Field
@@ -139,73 +144,105 @@ def fast_size(n: int) -> int:
         m += 1
 
 
-@dataclass
-class _MixGroup:
-    """Co-located channel sets of one size m: at each of P sample times, m channels."""
+@dataclass(frozen=True)
+class _Bucket:
+    """Channels of one rate and length, contiguous in the stage's sample order: the rows
+    [start, start + channels x length) are a [channels, length, width] view. `runs`: blocks of
+    co-located groups of one size, as (first channel in the bucket, groups G, size m), each a
+    [G, m, length, width] view."""
 
-    index: torch.Tensor  # int64 [P, m]
-    valid: torch.Tensor  # bool [P, m]
+    rate: float
+    length: int
+    start: int
+    channels: int
+    runs: tuple[tuple[int, int, int], ...]
 
 
-@dataclass
+@dataclass(frozen=True)
+class _Gathered:
+    """Co-located channels of unequal lengths (at the end of a recording), m a time: index
+    [P, m] into the stage's sample order (0 where missing) and valid [P, m]."""
+
+    index: torch.Tensor
+    valid: torch.Tensor
+
+
+@dataclass(frozen=True)
 class _Plan:
-    # rate -> buckets of (longest length, index [B, L] into the flat buffer, valid [B, L])
-    buckets: dict[float, list[tuple[int, torch.Tensor, torch.Tensor]]]
-    mixing: list[_MixGroup]
+    order: torch.Tensor  # int64 [S]: the flat-buffer position of each sample in stage order
+    inverse: torch.Tensor  # int64 [S]: the stage-order position of each flat-buffer sample
+    buckets: tuple[_Bucket, ...]  # in stage order; together they hold every sample
+    gathered: tuple[_Gathered, ...]
+    rates: tuple[float, ...]
+    longest: dict[float, int]  # rate -> its longest channel
 
 
 def _plan(x: ChannelInputs) -> _Plan:
-    """The buckets of the SSM and the groups of channel mixing, from the channel table (on
-    the CPU: a small table)."""
+    """The stage's sample order, from the channel table (small: on the CPU, once a forward).
+    Channels of one rate and length are put together (a bucket); in a bucket, the channels of
+    one co-located group (one example, rate and first-sample time) are adjacent, the groups of
+    one size together, the largest first, single channels last. Every layer then works on
+    views: no gather, scatter or boolean mask per layer."""
     c = x.channels
     rates = c.rate_hz.tolist()
     lengths = c.length.tolist()
     offsets = c.offset.tolist()
-    device = x.values.device
-    by_rate: dict[float, list[int]] = {}
-    for k, r in enumerate(rates):
-        if lengths[k]:
-            by_rate.setdefault(r, []).append(k)
-    buckets: dict[float, list[tuple[int, torch.Tensor, torch.Tensor]]] = {}
-    for r, ks in by_rate.items():
-        # one bucket per FFT size of the longest kernel a channel can have (its length)
-        by_size: dict[int, list[int]] = {}
-        for k in ks:
-            by_size.setdefault(fast_size(2 * lengths[k] - 1), []).append(k)
-        buckets[r] = []
-        for group in by_size.values():
-            span = max(lengths[k] for k in group)
-            index, valid = _padded([offsets[k] for k in group], [lengths[k] for k in group],
-                                   device)  # fmt: skip
-            buckets[r].append((span, index, valid))
     groups: dict[tuple[int, int, float, float], list[int]] = {}
     for k, key in enumerate(zip(c.row.tolist(), c.document.tolist(), rates,
                                 c.start_s.tolist(), strict=True)):  # fmt: skip
         if lengths[k]:
             groups.setdefault(key, []).append(k)
-    sets: dict[int, tuple[list[torch.Tensor], list[torch.Tensor]]] = {}
+    # per bucket (rate, length): the groups of equal length (size >= 2), then the rest
+    viewed: dict[tuple[float, int], list[list[int]]] = {}
+    single: dict[tuple[float, int], list[int]] = {}
+    uneven: list[list[int]] = []
     for members in groups.values():
-        if len(members) < 2:
+        key = (rates[members[0]], lengths[members[0]])
+        if len(members) >= 2 and all(lengths[k] == key[1] for k in members):
+            viewed.setdefault(key, []).append(members)
             continue
-        span = max(lengths[k] for k in members)
-        steps = torch.arange(span)
-        index = torch.stack([offsets[k] + steps for k in members], dim=1)  # [P, m]
-        valid = torch.stack([steps < lengths[k] for k in members], dim=1)
-        found = sets.setdefault(len(members), ([], []))
-        found[0].append(torch.where(valid, index, 0))
-        found[1].append(valid)
-    mixing = [_MixGroup(torch.cat(i).to(device), torch.cat(v).to(device)) for i, v in sets.values()]
-    return _Plan(buckets, mixing)
-
-
-def _padded(
-    offsets: list[int], lengths: list[int], device: torch.device
-) -> tuple[torch.Tensor, torch.Tensor]:
-    span = max(lengths)
-    steps = torch.arange(span)
-    index = torch.tensor(offsets)[:, None] + steps
-    valid = steps[None, :] < torch.tensor(lengths)[:, None]
-    return torch.where(valid, index, 0).to(device), valid.to(device)
+        if len(members) >= 2:
+            uneven.append(members)
+        for k in members:
+            single.setdefault((rates[k], lengths[k]), []).append(k)
+    order, buckets, position, start = [], [], {}, 0
+    for key in sorted(set(viewed) | set(single)):
+        rate, length = key
+        sets = sorted(viewed.get(key, []), key=len, reverse=True)
+        channels = [k for g in sets for k in g] + single.get(key, [])
+        runs, at = [], 0
+        for size in sorted({len(g) for g in sets}, reverse=True):
+            count = sum(1 for g in sets if len(g) == size)
+            runs.append((at, count, size))
+            at += count * size
+        for n, k in enumerate(channels):
+            position[k] = start + n * length
+            order.append(np.arange(offsets[k], offsets[k] + length))
+        buckets.append(_Bucket(rate, length, start, len(channels), tuple(runs)))
+        start += len(channels) * length
+    device = x.values.device
+    flat = np.concatenate(order) if order else np.zeros(0, dtype=np.int64)
+    inverse = np.empty_like(flat)
+    inverse[flat] = np.arange(flat.size)
+    gathered = []
+    for size in sorted({len(g) for g in uneven}):
+        index, valid = [], []
+        for members in (g for g in uneven if len(g) == size):
+            span = max(lengths[k] for k in members)
+            steps = np.arange(span)
+            ok = np.stack([steps < lengths[k] for k in members], axis=1)
+            index.append(np.where(ok, np.stack([position[k] + steps for k in members], 1), 0))
+            valid.append(ok)
+        gathered.append(_Gathered(torch.from_numpy(np.concatenate(index)).to(device),
+                                  torch.from_numpy(np.concatenate(valid)).to(device)))  # fmt: skip
+    longest: dict[float, int] = {}
+    for b in buckets:
+        longest[b.rate] = max(longest.get(b.rate, 0), b.length)
+    return _Plan(
+        order=torch.from_numpy(flat).to(device), inverse=torch.from_numpy(inverse).to(device),
+        buckets=tuple(buckets), gathered=tuple(gathered), rates=tuple(sorted(longest)),
+        longest=longest,
+    )  # fmt: skip
 
 
 # Lags per kernel piece: the Vandermonde matrix [2, width, states, piece] of one piece at a
@@ -236,13 +273,25 @@ class S4D(nn.Module):
         z = a * step
         return z, z.abs() <= math.pi
 
-    def kernel_length(self, rate: float, longest: int) -> int:
-        """At most `kernel_time_constants` decay times of the slowest unmasked mode."""
+    def slowest(self, rates: tuple[float, ...]) -> torch.Tensor:
+        """[rates]: the longest decay time, in samples, of the unmasked modes at each rate
+        (0 if every mode is masked); no host sync."""
         with torch.no_grad():
-            z, kept = self.modes(rate)
-            decay = (-z.real).clamp(min=1e-12)  # per sample
-            slowest = float(torch.where(kept, 1.0 / decay, 0.0).max())
+            out = []
+            for rate in rates:
+                z, kept = self.modes(rate)
+                decay = (-z.real).clamp(min=1e-12)
+                out.append(torch.where(kept, 1.0 / decay, 0.0).max())
+            return torch.stack(out)
+
+    def kernel_length(self, slowest: float, longest: int) -> int:
+        """At most `kernel_time_constants` decay times of the slowest unmasked mode, and at
+        most the longest channel."""
         return max(1, min(longest, math.ceil(self.spec.kernel_time_constants * slowest)))
+
+    def length_at(self, rate: float, longest: int) -> int:
+        """`kernel_length` at one rate (a host sync; for tests and checks)."""
+        return self.kernel_length(float(self.slowest((rate,))[0]), longest)
 
     def kernel(self, rate: float, length: int) -> torch.Tensor:
         """[2, H, length]: the kernel of each direction at `rate` (float32 for float32
@@ -276,12 +325,11 @@ class S4D(nn.Module):
             k = torch.cat([k[..., :1] + static[..., None].to(k.dtype), k[..., 1:]], dim=-1)
         return k
 
-    def forward(
-        self, z: torch.Tensor, length: int, size: int, kernel: torch.Tensor
-    ) -> torch.Tensor:
-        """`z` [B, H, L] float32 -> [B, H, L]: both directions over the lags -(K-1)..K-1 as one
-        circular kernel of `size` >= L + K - 1, so nothing wraps onto a used output."""
-        k = kernel.shape[-1]
+    def forward(self, z: torch.Tensor, size: int, kernel: torch.Tensor) -> torch.Tensor:
+        """`z` [B, H, L] float32 (contiguous) -> [B, H, L]: both directions over the lags
+        -(K-1)..K-1 as one circular kernel of `size` >= L + K - 1, so nothing wraps onto a
+        used output."""
+        length, k = z.shape[-1], kernel.shape[-1]
         both = z.new_zeros(z.shape[1], size)
         both[:, :k] = kernel[0]
         if k > 1:
@@ -312,25 +360,31 @@ class _Layer(nn.Module):
         self.out = nn.Linear(h, 2 * h)
         self.mixing = ChannelMixing(h, spec.mixing_heads, spec.dropout) if mixing else None
 
-    def forward(self, h: torch.Tensor, plan: _Plan) -> torch.Tensor:
+    def forward(self, h: torch.Tensor, plan: _Plan, kernels: dict[float, int]) -> torch.Tensor:
+        """`h` [S, width] in the plan's sample order; `kernels`: the kernel length per rate."""
+        width = h.shape[-1]
         with torch.autocast(h.device.type, enabled=False):  # the SSM in float32
             u = self.norm(h.to(torch.promote_types(h.dtype, torch.float32)))
-            y = torch.zeros_like(u)
-            for rate, buckets in plan.buckets.items():
-                longest = max(length for length, _, _ in buckets)
-                k = self.ssm.kernel_length(rate, longest)
-                kernel = self.ssm.kernel(rate, k)
-                for length, index, valid in buckets:
-                    used = min(length, k)
-                    z = (u[index] * valid[..., None]).transpose(1, 2)  # [B, H, L], 0 padding
-                    out = self.ssm(z, length, fast_size(length + used - 1), kernel[..., :used])
-                    y[index[valid]] = out.transpose(1, 2)[valid]
-            y = F.gelu(y)
+            kernel = {r: self.ssm.kernel(r, n) for r, n in kernels.items()}
+            parts = []
+            for b in plan.buckets:
+                rows = u[b.start : b.start + b.channels * b.length]
+                z = rows.view(b.channels, b.length, width).transpose(1, 2).contiguous()
+                used = min(b.length, kernels[b.rate])
+                size = fast_size(b.length + used - 1)
+                y = F.gelu(self.ssm(z, size, kernel[b.rate][..., :used]))
+                parts.append(y.transpose(1, 2).reshape(-1, width))
+            y = torch.cat(parts) if len(parts) > 1 else parts[0]
         y = F.glu(self.out(y), dim=-1)
         h = h + F.dropout(y, self.dropout, self.training)
         if self.mixing is not None:
-            h = self.mixing(h, plan.mixing)
+            h = self.mixing(h, plan)
         return h
+
+
+# Sample times per attention call of the channel mixing (the batch of one call is this times
+# the heads): within the grid limits of the fused attention kernels.
+MIXING_CHUNK = 16384
 
 
 class ChannelMixing(nn.Module):
@@ -345,18 +399,42 @@ class ChannelMixing(nn.Module):
         self.qkv = nn.Linear(width, 3 * width, bias=False)
         self.out = nn.Linear(width, width, bias=False)
 
-    def forward(self, h: torch.Tensor, groups: list[_MixGroup]) -> torch.Tensor:
-        if not groups:
+    def attend(self, x: torch.Tensor, keep: torch.Tensor | None) -> torch.Tensor:
+        """`x` [P, m, width] (P sample times, m channels) -> [P, m, width]; `keep` [P, m]:
+        the channels that exist (None: all)."""
+        p, m, width = x.shape
+        q, k, v = self.qkv(self.norm(x)).view(p, m, 3, self.heads, -1).permute(2, 0, 3, 1, 4)
+        outs = []
+        for at in range(0, p, MIXING_CHUNK):
+            part = slice(at, at + MIXING_CHUNK)
+            mask = None if keep is None else keep[part, None, None, :]
+            outs.append(F.scaled_dot_product_attention(q[part], k[part], v[part], attn_mask=mask))
+        a = torch.cat(outs) if len(outs) > 1 else outs[0]
+        out: torch.Tensor = self.out(a.transpose(1, 2).reshape(p, m, width))
+        return out
+
+    def forward(self, h: torch.Tensor, plan: _Plan) -> torch.Tensor:
+        width = h.shape[-1]
+        parts, at = [], 0  # the update, in sample order: mixed runs and zeros between them
+        for b in plan.buckets:
+            for first, count, size in b.runs:
+                start = b.start + first * b.length
+                if start > at:
+                    parts.append(h.new_zeros(start - at, width))
+                block = h[start : start + count * size * b.length]
+                x = block.view(count, size, b.length, width).transpose(1, 2)  # [G, L, m, H]
+                a = self.attend(x.reshape(count * b.length, size, width), None)
+                a = a.view(count, b.length, size, width).transpose(1, 2).reshape(-1, width)
+                parts.append(a.to(h.dtype))
+                at = start + count * size * b.length
+        if not parts and not plan.gathered:
             return h
-        update = torch.zeros_like(h)
-        for g in groups:
-            p, m = g.index.shape
-            x = self.norm(h[g.index])  # [P, m, H]
-            q, k, v = self.qkv(x).view(p, m, 3, self.heads, -1).permute(2, 0, 3, 1, 4)
-            keep = g.valid[:, None, None, :]  # [P, 1, 1, m]: keys that exist
-            a = F.scaled_dot_product_attention(q, k, v, attn_mask=keep)
-            a = self.out(a.transpose(1, 2).reshape(p, m, -1))
-            update[g.index[g.valid]] = a[g.valid].to(update.dtype)
+        if at < h.shape[0]:
+            parts.append(h.new_zeros(h.shape[0] - at, width))
+        update = torch.cat(parts) if len(parts) > 1 else parts[0]
+        for g in plan.gathered:
+            a = self.attend(h[g.index], g.valid)
+            update = update.index_put((g.index[g.valid],), a[g.valid].to(h.dtype))
         return h + F.dropout(update, self.dropout, self.training)
 
 
@@ -375,13 +453,25 @@ class S4DLocalStage(LocalStage):
         )
         self.norm = nn.RMSNorm(spec.width)
 
+    def kernel_lengths(self, plan: _Plan) -> list[dict[float, int]]:
+        """Per layer, the kernel length per rate: one host sync a forward."""
+        if not plan.rates:
+            return [{} for _ in self.layers]
+        slowest = torch.stack([layer.ssm.slowest(plan.rates) for layer in self.layers]).tolist()
+        return [
+            {r: layer.ssm.kernel_length(s, plan.longest[r])
+             for r, s in zip(plan.rates, row, strict=True)}
+            for layer, row in zip(self.layers, slowest, strict=True)
+        ]  # fmt: skip
+
     def forward(self, x: ChannelInputs) -> torch.Tensor:
         plan = _plan(x)
-        h = self.embed(_inputs(x, self.embed.weight.dtype))
-        for layer in self.layers:
+        kernels = self.kernel_lengths(plan)
+        h = self.embed(_inputs(x, self.embed.weight.dtype)[plan.order])
+        for layer, lengths in zip(self.layers, kernels, strict=True):
             if self.spec.checkpoint and torch.is_grad_enabled():
-                h = checkpoint(layer, h, plan, use_reentrant=False)
+                h = checkpoint(layer, h, plan, lengths, use_reentrant=False)
             else:
-                h = layer(h, plan)
-        out: torch.Tensor = self.norm(h)
+                h = layer(h, plan, lengths)
+        out: torch.Tensor = self.norm(h)[plan.inverse]
         return out

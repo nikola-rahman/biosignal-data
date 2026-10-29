@@ -21,6 +21,7 @@ from biosignal_model.channel_batch import (  # noqa: E402
 )
 from biosignal_model.local_stage import (  # noqa: E402
     S4D,
+    _plan,
     IdentityLocalSpec,
     LocalStage,
     S4DLocalSpec,
@@ -37,17 +38,15 @@ MASK = MaskSpec(
 def _spec(**changes: object) -> S4DLocalSpec:
     base = S4DLocalSpec(
         kind="s4d", width=16, layers=3, states=8, min_time_s=0.001, max_time_s=10.0,
-        kernel_time_constants=5.0, discretization="zoh", masked_modes="drop",
-        mixing_layers=[0, 2], mixing_heads=4,
-        dropout=0.0, checkpoint=False,
+        kernel_time_constants=5.0, discretization="zoh_centred", masked_modes="static_gain",
+        mixing_layers=[0, 2], mixing_heads=4, dropout=0.0, checkpoint=False,
     )  # fmt: skip
     return base.model_copy(update=changes)
 
 
 STAGES: dict[str, S4DLocalSpec | IdentityLocalSpec] = {
-    "s4d-zoh": _spec(),
-    "s4d-zoh-centred": _spec(discretization="zoh_centred"),
-    "s4d-zoh-static-gain": _spec(masked_modes="static_gain"),
+    "s4d": _spec(),  # the design: centred ZOH, static gains of masked modes
+    "s4d-zoh-drop": _spec(discretization="zoh", masked_modes="drop"),
     "s4d-bilinear-checkpoint": _spec(discretization="bilinear", checkpoint=True),
     "identity": IdentityLocalSpec(kind="identity", width=16),
 }
@@ -179,8 +178,8 @@ def test_modes_above_nyquist_are_masked_and_the_kernel_is_capped() -> None:
         z, kept = ssm.modes(500.0)
     assert (z[kept].abs() <= math.pi).all() and (z[~kept].abs() > math.pi).all()
     slowest = float((1.0 / (-z.real)[kept]).max())  # decay time in samples
-    assert ssm.kernel_length(500.0, 10**9) == math.ceil(5.0 * slowest)
-    assert ssm.kernel_length(500.0, 300) == 300
+    assert ssm.length_at(500.0, 10**9) == math.ceil(5.0 * slowest)
+    assert ssm.length_at(500.0, 300) == 300
 
 
 def _response(spec: S4DLocalSpec, rate: float, frequencies: np.ndarray) -> np.ndarray:
@@ -189,7 +188,7 @@ def _response(spec: S4DLocalSpec, rate: float, frequencies: np.ndarray) -> np.nd
     torch.manual_seed(0)
     ssm = S4D(spec)
     with torch.no_grad():
-        k = ssm.kernel(rate, ssm.kernel_length(rate, 10**9))[0].double().numpy()
+        k = ssm.kernel(rate, ssm.length_at(rate, 10**9))[0].double().numpy()
     n = fast_size(max(k.shape[-1], int(rate * 200)))
     spectrum = np.fft.rfft(k, n)
     grid = np.fft.rfftfreq(n, 1 / rate)
@@ -229,10 +228,51 @@ def test_with_static_gains_every_rate_has_the_same_dc_gain(kind: str) -> None:
         out = []
         for rate in (100.0, 500.0):
             with torch.no_grad():
-                length = 6 * ssm.kernel_length(rate, 10**9)  # 30 decay times: e^-30
+                length = 6 * ssm.length_at(rate, 10**9)  # 30 decay times: e^-30
                 out.append(ssm.kernel(rate, length).double().sum(dim=(0, 2)))
         gains[masked] = out
     low, high = gains["static_gain"]
     torch.testing.assert_close(low, high, rtol=1e-4, atol=1e-5)
     low, high = gains["drop"]
     assert (low - high).abs().max() > 0.1 * high.abs().max()
+
+
+def _uneven(seed: int) -> Example:
+    """Three 100 Hz channels on one time base, one of them shorter (a recording's end), and a
+    500 Hz pair: the short group is gathered, the pair is a view."""
+    rng = np.random.default_rng(seed)
+    sizes = [(100.0, 200), (100.0, 150), (100.0, 200), (500.0, 1000), (500.0, 1000)]
+    signals = tuple(Signal(rng.normal(size=n).astype(np.float32), r, 0.0) for r, n in sizes)
+    channels = tuple(Channel("a", i, r, 1.0, 0.0, None, f"c{i}", "ecg", "mV")
+                     for i, (r, _) in enumerate(sizes))  # fmt: skip
+    return Example(signals, Origin("d/x", f"u{seed}", "s", 0.0, channels))
+
+
+def test_the_stage_order_is_a_permutation_and_uneven_groups_are_gathered() -> None:
+    batch, _ = _packer(None, rows=2).pack([_uneven(0), _example(RATES, 1.0, 1)])
+    plan = _plan(batch.inputs)
+    n = batch.inputs.values.numel()
+    assert torch.equal(torch.sort(plan.order).values, torch.arange(n))
+    assert torch.equal(plan.order[plan.inverse], torch.arange(n))
+    assert sum(b.channels * b.length for b in plan.buckets) == n
+    assert len(plan.gathered) == 1 and plan.gathered[0].index.shape == (200, 3)
+
+
+@pytest.mark.parametrize("name", ["s4d", "s4d-zoh-drop"])
+def test_uneven_groups_keep_packing_and_permutation_invariance(name: str) -> None:
+    stage = _stage(name)
+    example = _uneven(2)
+    single, _ = _packer(None, rows=1).pack([example])
+    together, where = _packer(None, rows=2).pack([_example(RATES, 1.5, 3), example])
+    a = _channel_outputs(stage, single, 0, 0)
+    b = _channel_outputs(stage, together, *where[1])
+    for p, q in zip(a, b, strict=True):
+        torch.testing.assert_close(q, p, atol=1e-9, rtol=1e-9)
+    order = [4, 2, 0, 3, 1]
+    o = example.origin
+    permuted = Example(tuple(example.signals[k] for k in order),
+                       Origin(o.dataset_id, o.recording_id, o.subject_id, o.start_s,
+                              tuple(o.channels[k] for k in order)))  # fmt: skip
+    c = _channel_outputs(stage, _packer(None, rows=1).pack([permuted])[0], 0, 0)
+    for position, k in enumerate(order):
+        torch.testing.assert_close(c[position], a[k], atol=1e-9, rtol=1e-9)

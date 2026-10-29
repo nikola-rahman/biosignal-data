@@ -73,7 +73,7 @@ def examples(case: Case, seed: int) -> list[Example]:
 def spec(width: int) -> S4DLocalSpec:
     return S4DLocalSpec(
         kind="s4d", width=width, layers=4, states=32, min_time_s=0.001, max_time_s=10.0,
-        kernel_time_constants=5.0, discretization="zoh", masked_modes="drop",
+        kernel_time_constants=5.0, discretization="zoh_centred", masked_modes="static_gain",
         mixing_layers=[1, 3], mixing_heads=4,
         dropout=0.0, checkpoint=True,
     )  # fmt: skip
