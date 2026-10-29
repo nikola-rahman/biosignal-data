@@ -36,7 +36,15 @@ from biosignal_data.index.build import ROOT as INDEX_ROOT
 from biosignal_data.storage.stores import Store, StoreFactory
 from biosignal_data.training import mixture
 from biosignal_data.training.loader import ExampleSource, Selection
-from biosignal_model.batch import SIGNAL_TYPES, Analysis, Batch, Inputs, Packer, concat
+from biosignal_model.batch import (
+    SIGNAL_TYPES,
+    Analysis,
+    Batch,
+    Inputs,
+    Packer,
+    Tokenizer,
+    concat,
+)
 from biosignal_model.model import Encoder, ModelConfig, masked_loss
 
 log = logging.getLogger(__name__)
@@ -94,6 +102,9 @@ class ModelSection(_Section):
     min_wavelength_s: float
     max_wavelength_s: float
     attention: Literal["flex", "dense"]
+    tokenizer: Tokenizer  # how channels become tokens (docs/v3-tokenizer.md)
+    dropout: float  # on the residual branches; 0: none
+    drop_path: float  # stochastic depth of the residual branches; 0: none
 
 
 class OptimSection(_Section):
@@ -160,7 +171,8 @@ class TrainConfig(_Section):
         return ModelConfig(
             samples_per_token=self.tokens.samples_per_token,
             max_channels=self.tokens.max_channels,
-            **self.model.model_dump(),
+            tokenizer=self.model.tokenizer,
+            **self.model.model_dump(exclude={"tokenizer"}),
         )
 
 
@@ -169,6 +181,9 @@ class TrainConfig(_Section):
 ADDED_LATER: dict[tuple[str, str], Any] = {
     ("data", "mixture"): None,  # 44e5541
     ("data", "pieces_per_epoch"): 1,  # 7bc3284
+    ("model", "tokenizer"): {"kind": "samples"},  # v3-tokenizer: v0-v2 cut 64-sample tokens
+    ("model", "dropout"): 0.0,  # v3 proxy bench: v0-v2 had no dropout
+    ("model", "drop_path"): 0.0,  # nor stochastic depth
 }
 
 
@@ -204,7 +219,7 @@ class BatchStream(IterableDataset[Batch]):
             samples_per_token=t.samples_per_token, max_channels=t.max_channels, rows=self.rows,
             mask_ratio=t.mask_ratio,
             seed=((self.config.run.seed * 1_000_003 + self.epoch) * 1_009 + part) * 101
-            + self.piece, slots=None,
+            + self.piece, slots=None, tokenizer=self.config.model.tokenizer,
         )  # fmt: skip
         yield from packer.batches(
             self.source.examples(self.epoch, part, parts, self.piece, self.pieces)

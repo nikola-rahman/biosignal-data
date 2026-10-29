@@ -51,6 +51,9 @@ settings:
   fine_tuning_grad_clip: null
   fine_tuning_head: linear
   from_scratch_samples_per_token: null
+  from_scratch_tokenizer: null
+  from_scratch_model: null           # the checkpoint's size, no dropout
+  fine_tuning_rungs: null
   seed: 0
 wandb_project: biosignal-fm
 wandb_entity: schnyox-s

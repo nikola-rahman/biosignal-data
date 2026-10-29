@@ -128,6 +128,7 @@ def _packer(model: ModelConfig, max_tokens: int, rows: int) -> Packer:
     return Packer(
         datasets=[DATASET], max_tokens=max_tokens, samples_per_token=model.samples_per_token,
         max_channels=model.max_channels, rows=rows, mask_ratio=0.0, seed=0, slots=None,
+        tokenizer=model.tokenizer,
     )  # fmt: skip
 
 
