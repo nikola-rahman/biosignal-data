@@ -77,6 +77,7 @@ def test_the_probe_chooses_on_fold_9_and_scores_fold_10() -> None:
         evaluation_stride_fraction=1.0, evaluation_aggregate="mean", fine_tuning_slot_group="lower",
         fine_tuning_betas=(0.9, 0.999), fine_tuning_warmup_epochs=0.0,
         fine_tuning_schedule="constant", fine_tuning_grad_clip=None, fine_tuning_head="linear",
+        from_scratch_samples_per_token=None,
         seed=0,
     )  # fmt: skip
     logged: list[dict[str, float]] = []
@@ -108,6 +109,7 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model(monkeypatch: pytest.Monkey
         evaluation_stride_fraction=1.0, evaluation_aggregate="mean", fine_tuning_slot_group="lower",
         fine_tuning_betas=(0.9, 0.999), fine_tuning_warmup_epochs=0.0,
         fine_tuning_schedule="constant", fine_tuning_grad_clip=None, fine_tuning_head="linear",
+        from_scratch_samples_per_token=None,
         seed=0,
     )  # fmt: skip
     device = torch.device("cpu")
@@ -199,7 +201,8 @@ def _settings_for_schedule(schedule: str) -> ptbxl.PtbxlSettings:
         fine_tuning_crop_s=2.5, evaluation_stride_fraction=0.5, evaluation_aggregate="max",
         fine_tuning_slot_group="head", fine_tuning_betas=(0.9, 0.95),
         fine_tuning_warmup_epochs=2.0, fine_tuning_schedule=schedule,  # type: ignore[arg-type]
-        fine_tuning_grad_clip=1.0, fine_tuning_head="reference", seed=0,
+        fine_tuning_grad_clip=1.0, fine_tuning_head="reference",
+        from_scratch_samples_per_token=None, seed=0,
     )  # fmt: skip
 
 

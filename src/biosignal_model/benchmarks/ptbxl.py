@@ -33,7 +33,7 @@ import math
 import random
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 import numpy as np
@@ -120,6 +120,10 @@ class PtbxlSettings(BaseModel):
     # tokens, BatchNorm, dropout 0.25, Linear(2 x width, 128), ReLU, BatchNorm, dropout 0.5,
     # Linear(128, classes).
     fine_tuning_head: Literal["linear", "reference"]
+    # The token size (samples per token) of from_scratch runs; None: the checkpoint's. Only for
+    # from_scratch, whose weights are new: a test of the token size without pretraining (at
+    # 100 Hz the checkpoint's 64 samples are 0.64 s, about a whole beat; user, 2026-10-29).
+    from_scratch_samples_per_token: int | None
     seed: int
 
 
@@ -617,6 +621,10 @@ def run(
     train_config = TrainConfig.from_checkpoint(checkpoint["config"])
     config = train_config.model_settings()
     max_tokens = train_config.tokens.max_tokens
+    if settings.from_scratch_samples_per_token is not None:
+        if settings.methods != ["from_scratch"] or settings.linear_probing:
+            raise ValueError("from_scratch_samples_per_token is only for from_scratch runs alone")
+        config = replace(config, samples_per_token=settings.from_scratch_samples_per_token)
     records, statements = load(store, settings, log)
     pretrained = Encoder(config).to(device)
     pretrained.load_state_dict(checkpoint["model"])
