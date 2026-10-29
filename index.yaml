@@ -711,3 +711,52 @@ datasets:
         notes: >-
           The anaesthesia machine's capnogram (CO2) and airway pressure (AWP) waveforms, the
           breathing of a ventilated patient. CardioQ/FLOW (aortic flow velocity) stays unknown.
+
+  # Downstream benchmarks (2026-10-29). Neither dataset is in index 2026-10-27b (v1, v2). An
+  # index that takes them must hold their evaluation subjects out, as below.
+  - id: isr-uc/isruc-sleep
+    subject:
+      rule: pattern
+      pattern: '^(\d+)/\d+$'  # cohort I: <n>/<n>, one night of subject n
+      certain: true
+      source: https://sleeptight.isr.uc.pt/index.html@p=48.html
+      evidence: >-
+        Polysomnography recordings of 100 Individual
+      notes: >-
+        Cohort I only (the 100 subjects of subgroup I); the 2022 page says "Data concerning
+        100 subjects, with one recording session per subject"
+        (https://web.archive.org/web/20220630040455/https://sleeptight.isr.uc.pt/?page_id=48).
+    held_out:
+      - pattern: '^(8[1-9]|9\d|100)/\d+$'
+        benchmark: >-
+          isruc sleep staging (src/biosignal_model/benchmarks/isruc.py): subjects 81-90
+          validation, 91-100 test, as CBraMod
+        source: https://github.com/wjq-learning/CBraMod/blob/main/datasets/isruc_dataset.py
+        evidence: >-
+          for i in range(100): if i < 80: train_pairs.extend(seqs_labels_path_pair[i]) elif
+          i < 90: val_pairs.extend(seqs_labels_path_pair[i]) else:
+          test_pairs.extend(seqs_labels_path_pair[i])
+        notes: >-
+          seqs_labels_path_pair[i] is subject i + 1 (load_path: range(1, 101)). The
+          validation subjects are held out too: they choose the scored epoch.
+
+  - id: uci/ppg-dalia
+    subject:
+      rule: pattern
+      pattern: '^PPG_FieldStudy/(S\d+)/S\d+$'
+      certain: true
+      source: https://archive.ics.uci.edu/dataset/495/ppg+dalia
+      evidence: >-
+        The dataset is organised so that each subject has a folder (SX, where X = subject
+        ID).
+      notes: Quoted from PPG_FieldStudy_readme.pdf of the UCI download.
+    held_out:
+      - pattern: '.'
+        benchmark: >-
+          dalia heart rate (src/biosignal_model/benchmarks/dalia.py): leave one subject out,
+          every subject is a test subject once
+        source: https://www.eti.uni-siegen.de/ubicomp/papers/ubi_sensors2019.pdf
+        evidence: >-
+          by evaluating methods on large datasets and performing leave-one-subject-out
+          cross-validation, we obtain a good understanding of the generalisation
+          capabilities of the different
