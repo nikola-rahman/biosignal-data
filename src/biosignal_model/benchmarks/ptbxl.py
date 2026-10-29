@@ -641,7 +641,7 @@ def end_to_end(
         if rungs is not None and epoch in rungs.epochs:
             # The branch: from the main run's state at this rung, kept and put back after it.
             last = epoch == rungs.epochs[-1]
-            kept = None if last else _Kept.of(model, head, optimizer, scheduler, rng, train)
+            kept = None if last else _Kept.of(model, head, optimizer, scheduler, rng, train, device)
             cooldown = cooldown_epochs(rungs, epoch)
             fork_lrs = [g["lr"] for g in optimizer.param_groups]
             branch_rng = random.Random()  # noqa: S311 - not secret
@@ -703,12 +703,13 @@ class _Kept:
     def of(
         model: torch.nn.Module, head: torch.nn.Module, optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler.LRScheduler, rng: random.Random, train: list[int],
+        device: torch.device,
     ) -> _Kept:  # fmt: skip
         return _Kept(
             copy.deepcopy(model.state_dict()), copy.deepcopy(head.state_dict()),
             copy.deepcopy(optimizer.state_dict()), copy.deepcopy(scheduler.state_dict()),
             torch.get_rng_state(),
-            torch.cuda.get_rng_state_all() if torch.cuda.is_initialized() else None,
+            torch.cuda.get_rng_state_all() if device.type == "cuda" else None,
             rng.getstate(), list(train),
         )  # fmt: skip
 
