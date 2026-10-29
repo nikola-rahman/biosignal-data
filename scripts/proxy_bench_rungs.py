@@ -171,9 +171,7 @@ while True:
         )
         kept = max(1, round(len(ranked) * keep))
         for r in ranked[kept:]:
-            r.stop(
-                f"stopped: cut at rung {epoch} (fold-9 {auc(r, epoch):.4f})"
-            )
+            r.stop(f"stopped: cut at rung {epoch} (fold-9 {auc(r, epoch):.4f})")
         note(
             f"cut at rung {epoch}: kept "
             + ", ".join(
