@@ -237,6 +237,11 @@ def test_a_read_that_times_out_or_is_cut_off_is_tried_again(
     calls = Flaky([missing])
     with pytest.raises(ClientError):  # a missing object is not tried again
         loader._read_with_retries(calls, "x")
+    assert calls.errors == []
+    refused = ClientError({"Error": {"Code": "InvalidAccessKeyId", "Message": "?"}}, "GetObject")
+    assert loader._read_with_retries(Flaky([refused]), "x") == b"block"
+    with pytest.raises(ClientError):
+        loader._read_with_retries(Flaky([refused] * loader.READ_ATTEMPTS), "x")
 
 
 def test_unimax_shares_the_budget_equally_with_a_cap_on_passes() -> None:
