@@ -1,0 +1,45 @@
+# PPG-DaLiA, heart rate of each 8 s window (2 s shift) (fine-tuning and linear probing of
+# v2-unimax step 330,000), from the wrist PPG (BVP, 64 Hz) and accelerometer (3 axes, 32 Hz), in
+# physical units at their native rates, unfiltered. Leave one subject out as Deep PPG (Reiss et
+# al. 2019): each subject the test subject once, the next two (cyclically) the validation subjects
+# that choose the epoch (the paper draws them at random), the rest for training; batch 128 and
+# about their 15,000 iterations (35 epochs of ~55,000 windows); the score is the mean of the 15
+# subjects' MAE (bpm). See src/biosignal_model/benchmarks/dalia.py.
+store: s3://biosignal-data
+checkpoint: models/v2-unimax/step-00330000.pt
+device: cuda
+settings:
+  inputs: ppg+acc
+  folds:
+    - {test: [S1], validation: [S2, S3]}
+    - {test: [S2], validation: [S3, S4]}
+    - {test: [S3], validation: [S4, S5]}
+    - {test: [S4], validation: [S5, S6]}
+    - {test: [S5], validation: [S6, S7]}
+    - {test: [S6], validation: [S7, S8]}
+    - {test: [S7], validation: [S8, S9]}
+    - {test: [S8], validation: [S9, S10]}
+    - {test: [S9], validation: [S10, S11]}
+    - {test: [S10], validation: [S11, S12]}
+    - {test: [S11], validation: [S12, S13]}
+    - {test: [S12], validation: [S13, S14]}
+    - {test: [S13], validation: [S14, S15]}
+    - {test: [S14], validation: [S15, S1]}
+    - {test: [S15], validation: [S1, S2]}
+  rows: 4
+  read_threads: 16
+  workers: 4
+  linear_probing: true
+  linear_probing_l2: [1.0e-3, 1.0e-2, 1.0e-1, 1.0, 1.0e1, 1.0e2, 1.0e3, 1.0e4]
+  methods: [fine_tuning]
+  fine_tuning_epochs: 35
+  fine_tuning_patience: null
+  fine_tuning_learning_rate: 1.0e-3
+  fine_tuning_weight_decay: 1.0e-3
+  fine_tuning_examples_per_step: 128
+  fine_tuning_discriminative_factor: 0.1
+  fine_tuning_lower_blocks_fraction: 0.25
+  seed: 0
+wandb_project: biosignal-fm
+wandb_entity: schnyox-s
+wandb_mode: online

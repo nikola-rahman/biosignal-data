@@ -1,0 +1,41 @@
+# ISRUC-Sleep cohort I, 5-class sleep staging (fine-tuning and linear probing of v2-unimax step
+# 330,000), on every channel of the recording (19 in subject 1: 8 EEG and EOG, X1-X8, DC3, DC8,
+# SaO2, at 200, 25 and 12.5 Hz), in physical units at their native rates, unfiltered. The protocol
+# and the training recipe of CBraMod (arXiv 2412.07236; github.com/wjq-learning/CBraMod:
+# finetune_main.py defaults, finetune_trainer.py, models/model_for_isruc.py): subjects 1-80 /
+# 81-90 / 91-100, 20-epoch sequences, AdamW, encoder 1e-4 and head 1e-3 * sqrt(64 / 256), weight
+# decay 5e-2, cosine decay per step to 1e-6 over 50 epochs, label smoothing 0.1, gradient clipping
+# 1, batch 64 sequences (the default of finetune_main.py; whether their ISRUC run used another
+# batch is not stated), the epoch chosen by the validation kappa. See
+# src/biosignal_model/benchmarks/isruc.py.
+store: s3://biosignal-data
+checkpoint: models/v2-unimax/step-00330000.pt
+device: cuda
+settings:
+  channels: all
+  sequence_epochs: 20
+  rows: 16                    # rows of 8192 tokens in one forward pass
+  read_threads: 16
+  workers: 6                  # data loader processes that cut and pack the sequences
+  linear_probing: true
+  linear_probing_l2: [1.0e-7, 1.0e-6, 1.0e-5, 1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]
+  linear_probing_steps: 100
+  methods: [fine_tuning]
+  fine_tuning_epochs: 50
+  fine_tuning_patience: null  # CBraMod runs all 50 epochs (the cosine decay spans them)
+  fine_tuning_encoder_learning_rate: 1.0e-4
+  fine_tuning_head_learning_rate: 5.0e-4
+  fine_tuning_min_learning_rate: 1.0e-6
+  fine_tuning_weight_decay: 5.0e-2
+  fine_tuning_sequences_per_step: 64
+  fine_tuning_label_smoothing: 0.1
+  fine_tuning_grad_clip: 1.0
+  head_width: 512
+  head_layers: 1
+  head_heads: 4
+  head_feed_forward: 2048
+  head_dropout: 0.1           # nn.TransformerEncoderLayer's default, which CBraMod keeps
+  seed: 0
+wandb_project: biosignal-fm
+wandb_entity: schnyox-s
+wandb_mode: online

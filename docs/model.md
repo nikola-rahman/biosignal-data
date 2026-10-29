@@ -67,3 +67,28 @@ validation (settings and the epoch are chosen here), 10 test; macro-AUC on fold 
 paper's main tables use 100 Hz (`rate: 100`); `rate: 500` is the original, a different
 input from the published one. No patient is in two folds, and folds 9 and 10 are held out
 of pretraining.
+
+**isruc**: ISRUC-Sleep cohort I (100 subjects, one night each), 5 sleep stages (W, N1, N2,
+N3, REM) of the first expert, by subject: 1-80 train, 81-90 validation, 91-100 test (CBraMod,
+arXiv 2412.07236, appendix E.1: "we set subject 1 to 80 as training set, subject 81 to 90 as
+validation set" and "subject 91 to 100 as test set"; its code checked on 2026-10-29). Each
+night in sequences of 20 epochs of 30 s, the rest of a night unused; each epoch through the
+encoder, a Transformer layer over the 20 epoch features; the epoch of training chosen by the
+validation kappa. Balanced accuracy, Cohen's kappa and weighted F1 over the test epochs.
+`channels: eeg6` takes CBraMod's 6 EEG channels (F3-A2, C3-A2, O1-A2, F4-A1, C4-A1, O2-A1),
+`channels: all` every channel of the recording; both unfiltered, in physical units at their
+native rates (CBraMod filters 0.3-35 Hz and notches 50 Hz). Published on this split (CBraMod,
+Table 7; mean ± std): CBraMod 0.7865 ± 0.0110 / 0.7442 ± 0.0152 / 0.8011 ± 0.0099, LaBraM-Base
+0.7633 / 0.7231 / 0.7810, USleep 0.7586 / 0.7209 / 0.7805 (balanced accuracy / kappa /
+weighted F1). Subjects 81-100 are held out of pretraining (index.yaml).
+
+**dalia**: PPG-DaLiA (15 subjects, about 2.5 h each), the heart rate of each 8 s window
+(shift 2 s; the ECG-based label of the dataset) from the wrist PPG (`inputs: ppg`) or the PPG
+and the wrist accelerometer (`inputs: ppg+acc`). Leave one subject out (Reiss et al. 2019,
+"Deep PPG", Sensors 19:3079): each subject the test subject once; two other subjects choose
+the epoch (the run's `folds`). The score is the mean of the 15 subjects' mean absolute errors
+in bpm (their "All"). Published on this protocol (their Table 10): CNN ensemble 7.65 ± 4.2
+(PPG and accelerometer, time-frequency spectra), single CNN 8.82 ± 3.8, SpaMaPlus 11.06 ± 4.8.
+Later supervised results on a 4-fold split of subjects (PULSE 4.03, KID-PPG 3.79, EnhancePPG
+3.54; arXiv 2412.17860) and the PPG foundation models' linear probes (PaPaGei, MOMENT) use
+other splits. Every subject is held out of pretraining (index.yaml).
