@@ -296,8 +296,11 @@ def embed(
 
 
 def _fit(x: torch.Tensor, y: torch.Tensor, l2: float, steps: int) -> torch.Tensor:
-    """Weights [d + 1, classes] of one logistic regression per label (bias not penalized)."""
-    w = torch.zeros(x.shape[1] + 1, y.shape[1], dtype=torch.float64, requires_grad=True)
+    """Weights [d + 1, classes] of one logistic regression per label (bias not penalized), on
+    the device of `x`."""
+    w = torch.zeros(
+        x.shape[1] + 1, y.shape[1], dtype=torch.float64, device=x.device, requires_grad=True
+    )
     optimizer = torch.optim.LBFGS([w], max_iter=steps, line_search_fn="strong_wolfe")
 
     def closure() -> torch.Tensor:
@@ -313,23 +316,24 @@ def _fit(x: torch.Tensor, y: torch.Tensor, l2: float, steps: int) -> torch.Tenso
 
 def linear_probing(
     features: np.ndarray, y: np.ndarray, folds: np.ndarray, s: PtbxlSettings, log: Log,
-    prefix: str,
+    prefix: str, device: torch.device,
 ) -> dict[str, float]:  # fmt: skip
     """L2 chosen on fold 9 by macro-AUC, then one fit on folds 1-8, scored on fold 10. Each
     L2 tried is logged with its fold-9 macro-AUC, under `prefix`."""
     train, val, test = (np.isin(folds, f) for f in (TRAIN, VALIDATION, TEST))
     mean, std = features[train].mean(0), features[train].std(0) + 1e-8
-    x = torch.from_numpy((features - mean) / std).double()
-    yt = torch.from_numpy(y).double()
+    # On the GPU: on a busy CPU one fit of the 71 "all" labels took 15-20 minutes (2026-10-29).
+    x = torch.from_numpy((features - mean) / std).double().to(device)
+    yt = torch.from_numpy(y).double().to(device)
     best, best_auc = s.linear_probing_l2[0], -1.0
     for l2 in s.linear_probing_l2:
         w = _fit(x[train], yt[train], l2, s.linear_probing_steps)
-        auc, _ = macro_auc(y[val], (x[val] @ w[:-1] + w[-1]).numpy())
+        auc, _ = macro_auc(y[val], (x[val] @ w[:-1] + w[-1]).cpu().numpy())
         log({f"{prefix}/l2": l2, f"{prefix}/validation_macro_auc": auc})
         if auc > best_auc:
             best, best_auc = l2, auc
     w = _fit(x[train], yt[train], best, s.linear_probing_steps)
-    auc, n = macro_auc(y[test], (x[test] @ w[:-1] + w[-1]).numpy())
+    auc, n = macro_auc(y[test], (x[test] @ w[:-1] + w[-1]).cpu().numpy())
     return {"macro_auc": auc, "labels": float(n), "l2": best, "validation_macro_auc": best_auc}
 
 
@@ -538,7 +542,7 @@ def run(
         results[f"{task}/records"] = float(keep.sum())
         for name, f in features.items():
             scores = linear_probing(
-                f[keep], y[keep], records.folds[keep], settings, log, f"{task}/{name}"
+                f[keep], y[keep], records.folds[keep], settings, log, f"{task}/{name}", device
             )
             results |= {f"{task}/{name}/{k}": v for k, v in scores.items()}
             log({f"{task}/{name}/macro_auc": scores["macro_auc"]})

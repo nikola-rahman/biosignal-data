@@ -75,7 +75,9 @@ def test_the_probe_chooses_on_fold_9_and_scores_fold_10() -> None:
         fine_tuning_lower_blocks_fraction=0.25, fine_tuning_crop_s=None, seed=0,
     )  # fmt: skip
     logged: list[dict[str, float]] = []
-    scores = ptbxl.linear_probing(features, y, folds, settings, logged.append, "p")
+    scores = ptbxl.linear_probing(
+        features, y, folds, settings, logged.append, "p", torch.device("cpu")
+    )
     assert scores["macro_auc"] > 0.95 and scores["labels"] == 2 and scores["l2"] in (1e-3, 1.0)
     assert [r["p/l2"] for r in logged] == [1e-3, 1.0]  # every L2 tried, with its fold-9 AUC
     assert max(r["p/validation_macro_auc"] for r in logged) == scores["validation_macro_auc"]
