@@ -22,8 +22,11 @@ data:
   workers: 11                 # of each of the 2 GPU processes (24 cores)
   pieces_per_epoch: 1
   mixture: null               # every block once per epoch (the mix follows the data)
+  spans: shared               # v0-v3: the groups of a step share the shortest span
+  subject_hours_per_epoch: null  # v0-v3: no cap per subject
 
 tokens:
+  format: tokens              # the v0-v3 [rows, tokens, samples] batch
   max_tokens: 8192
   samples_per_token: 64
   max_channels: 32

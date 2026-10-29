@@ -14,7 +14,15 @@ import pytest
 from biosignal_data.index.build import CHANNELS, RECORDINGS
 from biosignal_data.standard.blocks import store_arrays
 from biosignal_data.storage.stores import LocalStore
-from biosignal_data.training import Example, ExampleSource, ReadError, Selection
+from biosignal_data.training import (
+    Example,
+    ExampleSource,
+    ReadError,
+    SampleAndTokenLimit,
+    SampleTokenLimit,
+    Selection,
+)
+from biosignal_data.training.loader import Block
 
 INVALID = -32768
 # (array, rate, channels as (name, type, scale)); scale None: no calibration
@@ -75,9 +83,10 @@ def _index(store: LocalStore, seconds: dict[str, float]) -> dict[tuple[str, str]
 
 def _source(store: LocalStore, tmp_path: Path, selection: Selection, **kw: object) -> ExampleSource:
     fields: dict[str, object] = {
-        "cache_directory": tmp_path / "cache", "cache_bytes": 10**9, "max_tokens": 40,
-        "samples_per_token": 16, "max_channels": 4, "block_s": 10.0, "shuffle_buffer": 8,
-        "reads_in_flight": 3, "seed": 7, "passes": None,
+        "cache_directory": tmp_path / "cache", "cache_bytes": 10**9,
+        "limit": SampleTokenLimit(max_tokens=40, samples_per_token=16), "spans": "shared",
+        "subject_hours_per_epoch": None, "max_channels": 4, "block_s": 10.0,
+        "shuffle_buffer": 8, "reads_in_flight": 3, "seed": 7, "passes": None,
     }  # fmt: skip
     return ExampleSource(selection, lambda: store, **(fields | kw))  # type: ignore[arg-type]
 
@@ -176,7 +185,7 @@ def test_settings_that_cannot_work_are_refused(store: LocalStore, tmp_path: Path
     _index(store, {"r1": 5.0})
     selection = Selection.load(store, "i1", split="train", signal_types=None)
     with pytest.raises(ValueError, match="twice max_channels"):
-        _source(store, tmp_path, selection, max_tokens=8)
+        _source(store, tmp_path, selection, limit=SampleTokenLimit(8, 16))
 
 
 def test_a_broken_calibration_gives_nan_never_inf() -> None:
@@ -282,3 +291,94 @@ def test_the_pieces_of_an_epoch_read_every_example_once(store: LocalStore, tmp_p
     whole = sorted(key(e) for e in source.examples(0, 0, 1))
     pieces = sorted(key(e) for k in range(3) for e in source.examples(0, 0, 1, k, 3))
     assert whole == pieces and len(whole) > 3
+
+
+def _global_tokens(e: Example, token_s: float) -> int:
+    """Grid cells of `token_s` from the example's start that hold a sample, over its channels
+    (biosignal_model.channel_batch.token_cells)."""
+    total = 0
+    for s in e.signals:
+        times = s.start_s + np.arange(s.values.size) / s.sampling_rate
+        total += np.unique(np.floor(np.round(times / token_s, 9))).size
+    return total
+
+
+def test_per_group_spans_keep_both_limits_and_every_sample_once(
+    store: LocalStore, tmp_path: Path
+) -> None:
+    expected = _index(store, {"r1": 47.3, "r2": 3.0})
+    selection = Selection.load(store, "i1", split="train", signal_types=None)
+    limit = SampleAndTokenLimit(max_samples=600, max_tokens=60, token_s=0.05)
+    source = _source(store, tmp_path, selection, limit=limit, spans="per_group")
+    examples = list(source.examples(epoch=0, part=0, parts=1))
+    for e in examples:
+        assert sum(s.values.size for s in e.signals) <= 600
+        assert _global_tokens(e, 0.05) <= 60
+        assert all(0 <= s.start_s < 1 / s.sampling_rate for s in e.signals)
+    placed = _place(examples)
+    assert set(placed) == set(expected)
+    for key, values in expected.items():
+        samples = placed[key]
+        assert sorted(samples) == list(range(values.size)), key
+        np.testing.assert_array_equal(np.array([samples[i] for i in range(values.size)]), values)
+
+    # A group of 10 Hz channels gets its own, longer span: (60 - 1) / 10 tokens a second
+    # = 5.9 s for one channel, where any group with a 100 Hz channel has at most
+    # (60 - 1) / 20 = 2.95 s; with shared spans every step has a 100 Hz group.
+    def seconds(e: Example) -> float:  # to the last sample (< the span)
+        return max(s.start_s + (s.values.size - 1) / s.sampling_rate for s in e.signals)
+
+    slow = [seconds(e) for e in examples if {s.sampling_rate for s in e.signals} == {10.0}]
+    fast = [seconds(e) for e in examples if 100.0 in {s.sampling_rate for s in e.signals}]
+    assert max(fast) <= 2.95 + 1e-9 < max(slow)
+    shared = _source(store, tmp_path, selection, limit=limit, spans="shared")
+    assert max(seconds(e) for e in shared.examples(0, 0, 1)) <= 2.95 + 1e-9
+
+
+def test_a_subject_gives_at_most_its_cap_of_hours_to_one_pass(
+    store: LocalStore, tmp_path: Path
+) -> None:
+    _index(store, {f"r{i}": 45.0 for i in range(4)})  # 5 blocks of 10 s (the last 5 s) each
+    selection = Selection.load(store, "i1", split="train", signal_types=None)
+    cap_h = 25.0 / 3600  # 25 s: two whole blocks, or two and the 5 s one
+    source = _source(store, tmp_path, selection, subject_hours_per_epoch=cap_h)
+
+    def per_subject(blocks: list[Block]) -> dict[str, list[tuple[int, int]]]:
+        out: dict[str, list[tuple[int, int]]] = {}
+        for b in blocks:
+            out.setdefault(b.recording.subject_id, []).append((b.index, b.copy))
+        return out
+
+    def seconds(index: int) -> float:
+        return min(10.0, 45.0 - 10.0 * index)
+
+    first, second = (per_subject(source.blocks_of(epoch, 0, 1)) for epoch in (0, 1))
+    assert len(first) == 4
+    for chosen in first.values():
+        assert 20.0 <= sum(seconds(i) for i, _ in chosen) <= 25.0
+    assert first != second  # other random blocks in another epoch
+    for e in source.examples(0, 0, 1):  # examples come from the chosen blocks only
+        assert (int(e.origin.start_s // 10.0), 0) in first[e.origin.subject_id]
+    repeated = _source(store, tmp_path, selection, subject_hours_per_epoch=cap_h,
+                       passes={"d/x": 2.0})  # fmt: skip
+    for chosen in per_subject(repeated.blocks_of(0, 0, 1)).values():
+        for copy in (0, 1):  # the cap holds in each pass
+            assert sum(seconds(i) for i, c in chosen if c == copy) <= 25.0
+    with pytest.raises(ValueError, match="at least one block"):
+        _source(store, tmp_path, selection, subject_hours_per_epoch=5.0 / 3600)
+
+
+def test_the_mixture_counts_global_tokens_after_the_subject_cap(store: LocalStore) -> None:
+    from biosignal_data.training.mixture import dataset_tokens  # noqa: PLC0415
+
+    _index(store, {"r1": 100.0, "r2": 20.0})  # subjects s0 (100 s) and s1 (20 s)
+    selection = Selection.load(store, "i1", split="train", signal_types=None)
+    # 3 channels at 100 Hz and 2 at 10 Hz; cells of 0.05 s: 20 a second at 100 Hz, and one a
+    # sample (10 a second) at 10 Hz
+    v4 = SampleAndTokenLimit(max_samples=10**6, max_tokens=10**6, token_s=0.05)
+    per_second = 3 * 20 + 2 * 10
+    assert dataset_tokens(selection, v4, None) == {"d/x": pytest.approx(per_second * 120.0)}
+    capped = dataset_tokens(selection, v4, 50.0 / 3600)  # s0 gives 50 s, s1 its 20 s
+    assert capped == {"d/x": pytest.approx(per_second * 70.0)}
+    old = dataset_tokens(selection, SampleTokenLimit(max_tokens=10, samples_per_token=16), None)
+    assert old == {"d/x": pytest.approx((3 * 100 + 2 * 10) * 120.0 / 16)}

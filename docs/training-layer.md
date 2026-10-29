@@ -60,8 +60,11 @@ data and to analyse results; they never go into a batch.
 
     selection = Selection.load(store, "2026-10-20", split="train", signal_types=None)
     source = ExampleSource(selection, store_factory, cache_directory=..., cache_bytes=...,
-                           max_tokens=8192, samples_per_token=64, max_channels=32,
-                           shuffle_buffer=4096, reads_in_flight=8, seed=0)
+                           limit=SampleAndTokenLimit(max_samples=400_000, max_tokens=8192,
+                                                     token_s=0.04),
+                           spans="per_group", subject_hours_per_epoch=4.0, max_channels=32,
+                           block_s=1800.0, shuffle_buffer=4096, reads_in_flight=8, seed=0,
+                           passes=None)
     for example in source.examples(epoch, part, parts):
         example.signals  # the model input
         example.origin   # for analysis only
@@ -79,15 +82,28 @@ The signals are in random order, so the order of channels in a file (a montage
 convention) means nothing. Nothing is resampled, filtered, re-referenced or normalized.
 
 **How a recording becomes examples.** A time cursor moves through the recording. At each
-step the selected channels are put in random order and cut into groups of random size;
-each group is one example over the same time span. The span is the longest in which every
-group fits the token budget (`max_tokens` tokens of `samples_per_token` samples), so a
-group with many fast channels covers a short time, and one slow channel a long time. The
-first span of a recording is a random part of a full one, so the cuts differ from epoch to
-epoch. Every sample of every selected channel is in exactly one example per epoch.
+step the selected channels are put in random order and cut into groups of random size. The
+longest span of a group comes from `limit`:
 
-The token budget and the token size are settings of the model, given to the sampler; the
-tokenizer itself is part of the model.
+- `SampleTokenLimit` (v0-v3): `max_tokens` tokens of `samples_per_token` samples;
+- `SampleAndTokenLimit` (v4, [architecture](architecture.md)): at most `max_samples` samples
+  (what the local stage reads) and at most `max_tokens` global tokens (cells of `token_s`
+  seconds that hold a sample).
+
+With `spans: shared` (v0-v3) every group is one example over the same span, the shortest of
+the groups' spans; with `per_group` each group cuts spans as long as its own limit allows, so
+a group with many fast channels covers a short time and one slow channel a long time, also in
+the same step. The first step of a block is a random part of a full one, so the cuts differ
+from epoch to epoch. Every sample of every selected channel of a block read is in exactly one
+example per reading.
+
+`subject_hours_per_epoch` caps what one subject gives to one pass over its dataset: random
+blocks, drawn anew in each epoch and pass, up to that many hours (none: no cap). The mixture
+(`training.mixture`) counts each dataset in the unit of the limit (sample tokens or global
+tokens) after this cap.
+
+The limits and the token size are settings of the model, given to the sampler; the tokenizer
+itself is part of the model.
 
 **How it reads.** The block index of each standard version (`blocks.parquet`) is loaded
 once. A span is one ranged read per block it touches (8 MiB at most before compression),
