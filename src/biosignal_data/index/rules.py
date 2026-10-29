@@ -88,6 +88,7 @@ class ChannelRule(_Model):
     recording: str | None = None
     source: HttpUrl | None = None
     evidence: str | None = None  # an exact quote from the source
+    checked: str | None = None  # how the samples were looked at, for a claim about them
     notes: str | None = None
 
     @model_validator(mode="after")

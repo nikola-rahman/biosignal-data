@@ -421,6 +421,19 @@ datasets:
       evidence: >-
         the binary signal file 0284_001_004_EEG.mat contains the first segment ... for
         patient 0284 of the I-CARE patient cohort.
+    channels:
+      - name: '^SpO2$'
+        type: other
+        source: https://physionet.org/content/i-care/2.1/
+        evidence: Even when a channel has been provided, it may be disconnected or noisy.
+        checked: >-
+          2026-10-29: 200 recordings (40 at each of 200, 256, 500, 512 and 1024 Hz), 120 s
+          in the middle of each: every one holds one stored value, 0 (at 500 Hz: 1, times a
+          gain of 17.2 "nu"). An SpO2 of 0 is not a measurement; the analysis of the same day
+          found the sampled i-care SpO2 channels constant in 180 s windows too.
+        notes: >-
+          A placeholder, not a signal: typed other, so a run that selects spo2 leaves it out.
+          The other channels of the OTHER group keep their types.
 
   - id: physionet/incartdb
     subject:
@@ -593,10 +606,13 @@ datasets:
         evidence: >-
           the list of the channels from which the EEG and EKG signals are extracted [...]
           (all other channels in the edf files must be ignored)
+        checked: >-
+          2026-10-29: SPO2 in 40 of the 41 recordings, HR, MK and PLET in 2, 120 s in the
+          middle of each: SPO2, HR and PLET hold the stored value 0 (SpO2 0 %, 0 bpm), MK
+          holds 8.
         notes: >-
-          The Seizures-list-PNxx.txt files list EEG and EKG channels only. SPO2 and HR (at
-          512 Hz) were constant in every sampled recording (analysis of 2026-10-29); MK is a
-          marker channel; 1, 2, 3, 23, 31, 33, 61-64 and A-D are not described.
+          The Seizures-list-PNxx.txt files list EEG and EKG channels only; 1, 2, 3, 23, 31,
+          33, 61-64 and A-D are not described.
 
   - id: physionet/sleep-edfx
     subject:

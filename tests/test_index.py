@@ -73,6 +73,9 @@ def test_index_yaml_types_sleep_edfx_markers_and_envelopes() -> None:
     st = channel_overrides(rules, "sleep-telemetry/ST7011J0-PSG")
     assert signal_type("EMG submental", st)[0] is SignalType.EMG
     assert signal_type("Marker", st)[0] is SignalType.OTHER
+    icare = channel_overrides(IndexRules.load().get("physionet/i-care"), "training/0284/x")
+    assert signal_type("SpO2", icare)[0] is SignalType.OTHER  # a placeholder of 0
+    assert signal_type("ECG", icare)[0] is SignalType.ECG
 
 
 def _rule(**fields: object) -> SubjectRule:
