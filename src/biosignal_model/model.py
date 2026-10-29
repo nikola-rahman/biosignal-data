@@ -25,7 +25,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import torch
 import torch.nn.functional as F  # noqa: N812 - the usual name
@@ -38,6 +38,9 @@ from biosignal_model.batch import (
     SamplesTokenizer,
     frame_shape,
 )
+
+if TYPE_CHECKING:
+    from torch.nn.attention.flex_attention import BlockMask
 
 
 @dataclass(frozen=True)
@@ -406,16 +409,9 @@ def _attention(
             return F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
 
         return dense
-    from torch.nn.attention.flex_attention import (  # noqa: PLC0415 - GPU only
-        create_block_mask,
-        flex_attention,
-    )
+    from torch.nn.attention.flex_attention import flex_attention  # noqa: PLC0415 - GPU only
 
-    def same(b: torch.Tensor, h: torch.Tensor, q: torch.Tensor, kv: torch.Tensor) -> torch.Tensor:
-        return document[b, q] == document[b, kv]
-
-    r, length = document.shape
-    block = create_block_mask(same, r, None, length, length, device=document.device)
+    block = _block_mask(document)
     kernel = _compiled_flex(flex_attention)
 
     def flex(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
@@ -423,6 +419,37 @@ def _attention(
         return out
 
     return flex
+
+
+def _block_mask(document: torch.Tensor) -> BlockMask:
+    """The flex block mask of "same document" for `document` [R, L], made one row at a time
+    (create_block_mask of all rows at once holds a dense [R, L, L] mask as int64: gigabytes at
+    L = 8192) and joined: the same block mask."""
+    from torch.nn.attention.flex_attention import (  # noqa: PLC0415 - GPU only
+        BlockMask,
+        create_block_mask,
+    )
+
+    def same(b: torch.Tensor, h: torch.Tensor, q: torch.Tensor, kv: torch.Tensor) -> torch.Tensor:
+        return document[b, q] == document[b, kv]
+
+    length = document.shape[1]
+    parts = []
+    for row in document:
+
+        def same_in_row(
+            b: torch.Tensor, h: torch.Tensor, q: torch.Tensor, kv: torch.Tensor,
+            row: torch.Tensor = row,
+        ) -> torch.Tensor:  # fmt: skip
+            return row[q] == row[kv]
+
+        parts.append(create_block_mask(same_in_row, 1, None, length, length, row.device))
+    return BlockMask.from_kv_blocks(
+        torch.cat([p.kv_num_blocks for p in parts]), torch.cat([p.kv_indices for p in parts]),
+        torch.cat([p.full_kv_num_blocks for p in parts]),
+        torch.cat([p.full_kv_indices for p in parts]),
+        BLOCK_SIZE=parts[0].BLOCK_SIZE, mask_mod=same, seq_lengths=(length, length),
+    )
 
 
 _FLEX: dict[str, Callable[..., torch.Tensor]] = {}

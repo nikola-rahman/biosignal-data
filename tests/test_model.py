@@ -148,6 +148,27 @@ def test_an_example_never_sees_the_other_examples_of_its_row() -> None:
     assert loss.item() > 0 and per_token.shape == (1, 64, 2)
 
 
+def test_the_block_mask_made_row_by_row_is_the_mask_of_all_rows() -> None:
+    from torch.nn.attention.flex_attention import create_block_mask  # noqa: PLC0415
+
+    from biosignal_model.model import _block_mask  # noqa: PLC0415
+
+    document = torch.full((3, 384), -1)
+    document[0, :200], document[0, 200:330] = 0, 1
+    document[1, :384] = 0
+    document[2, :50], document[2, 50:300], document[2, 300:301] = 0, 1, 2
+
+    def same(b: torch.Tensor, h: torch.Tensor, q: torch.Tensor, kv: torch.Tensor) -> torch.Tensor:
+        return document[b, q] == document[b, kv]
+
+    joined, whole = _block_mask(document), create_block_mask(same, 3, None, 384, 384, "cpu")
+    for name in ("kv_num_blocks", "kv_indices", "full_kv_num_blocks", "full_kv_indices",
+                 "q_num_blocks", "q_indices", "full_q_num_blocks", "full_q_indices"):  # fmt: skip
+        assert torch.equal(getattr(joined, name), getattr(whole, name)), name
+    assert joined.BLOCK_SIZE == whole.BLOCK_SIZE and joined.seq_lengths == whole.seq_lengths
+    assert torch.equal(joined.to_dense(), whole.to_dense())
+
+
 def test_a_short_run_learns_and_logs_without_artifacts(store: LocalStore, tmp_path: Path) -> None:
     _index(store, {f"r{i}": 40.0 for i in range(6)} | {"held-out": 40.0})
     store.put_bytes("index/i1/_manifest.json", b'{"version": "i1"}')

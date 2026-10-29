@@ -195,3 +195,20 @@ depends on how many beats it holds. This is a known weak point, not changed in t
 **Lead identity** (territory): fixed slots per lead name in every proxy; the slot embedding is
 added to every global token. D2's local stage is shared by all leads and does not see the
 lead: morphology is read lead-agnostically, and territory is decided by the global model.
+
+### Speed of the proxies (L40S, one GPU alone, 64 crops per step)
+
+The first profile of the 4 M proxies ran on a GPU that another job used at the same time, so
+those numbers were wrong (they showed the 4 M proxy barely faster than the 27 M model). On an
+idle GPU, a training step on a cached batch (examples/s): samples64 3,140, samples8 1,495,
+d1 936, d2 839, d1fine 483, d2prime 422, d2second 377. One whole training epoch with the
+loader: samples8 889 examples/s (data wait 16 %: the loader workers start again each epoch),
+d2second 312.
+
+The D2 local stage is bound by elementwise memory traffic (multiplications and copies take
+~47 % of the GPU time, matrix products ~6 %). The S4D block now applies both directions as one
+kernel over the lags -(T-1)..T-1 with one FFT pair, instead of two convolutions and two flips:
+the same convolution (tested against the direct sums). d2second: 224 -> 312 examples/s per
+training epoch, 250 -> 377 on a cached batch, prediction 148 -> 211 records/s, memory
+9.9 -> 7.7 GiB. torch.compile of the local blocks gave no further gain; compiling the whole
+encoder fails in inductor with the dynamic shapes of the packed batches.
