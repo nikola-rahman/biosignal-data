@@ -6,6 +6,7 @@ from biosignal_data.training.cache import BlockCache
 from biosignal_data.training.loader import (
     Example,
     ExampleSource,
+    FlatRuns,
     Origin,
     ReadError,
     Selection,
@@ -13,5 +14,6 @@ from biosignal_data.training.loader import (
 )
 
 __all__ = [
-    "BlockCache", "Example", "ExampleSource", "Origin", "ReadError", "Selection", "Signal",
+    "BlockCache", "Example", "ExampleSource", "FlatRuns", "Origin", "ReadError", "Selection",
+    "Signal",
 ]  # fmt: skip

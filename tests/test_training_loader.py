@@ -14,11 +14,11 @@ import pytest
 from biosignal_data.index.build import CHANNELS, RECORDINGS
 from biosignal_data.standard.blocks import store_arrays
 from biosignal_data.storage.stores import LocalStore
-from biosignal_data.training import Example, ExampleSource, ReadError, Selection
+from biosignal_data.training import Example, ExampleSource, FlatRuns, ReadError, Selection
 
 INVALID = -32768
 # (array, rate, channels as (name, type, scale)); scale None: no calibration
-ARRAYS = [
+ARRAYS: list[tuple[str, float, list[tuple[str, str, float | None]]]] = [
     ("100Hz", 100.0, [("C3", "eeg", 0.5), ("C4", "eeg", 0.5), ("ECG", "ecg", 0.002)]),
     ("10Hz", 10.0, [("RESP", "resp", 1.0), ("POS", "position", None)]),
 ]
@@ -33,16 +33,27 @@ def _parquet(rows: list[dict[str, object]], schema: pa.Schema) -> bytes:
 FOLDER = "standard-blocks/d/x/1.0"
 
 
-def _index(store: LocalStore, seconds: dict[str, float]) -> dict[tuple[str, str], np.ndarray]:
+def _index(
+    store: LocalStore,
+    seconds: dict[str, float],
+    held: dict[tuple[str, str], list[tuple[int, int]]] | None = None,
+) -> dict[tuple[str, str], np.ndarray]:
     """Recordings with two arrays (100 Hz and 10 Hz), in blocks of 10 s. Returns the
-    expected values of each (recording, channel name)."""
+    expected values of each (recording, channel name). `held`: (recording, channel) ->
+    sample ranges that hold one stored value (5)."""
     rng = np.random.default_rng(1)
-    expected, recordings, channels, arrays = {}, [], [], {}
+    expected: dict[tuple[str, str], np.ndarray] = {}
+    recordings: list[dict[str, object]] = []
+    channels: list[dict[str, object]] = []
+    arrays: dict[tuple[str, str], np.ndarray] = {}
     for i, (recording, length_s) in enumerate(seconds.items()):
         for array_name, rate, chans in ARRAYS:
             n = round(length_s * rate)
             stored = rng.integers(-1000, 1000, (len(chans), n)).astype(np.int16)
             stored[:, 3] = INVALID
+            for index, (name, _, _) in enumerate(chans):
+                for a, b in (held or {}).get((recording, name), []):
+                    stored[index, a:b] = 5
             arrays[recording, array_name] = stored
             for index, (name, kind, scale) in enumerate(chans):
                 values = stored[index].astype(np.float32)
@@ -77,7 +88,7 @@ def _source(store: LocalStore, tmp_path: Path, selection: Selection, **kw: objec
     fields: dict[str, object] = {
         "cache_directory": tmp_path / "cache", "cache_bytes": 10**9, "max_tokens": 40,
         "samples_per_token": 16, "max_channels": 4, "block_s": 10.0, "shuffle_buffer": 8,
-        "reads_in_flight": 3, "seed": 7, "passes": None,
+        "reads_in_flight": 3, "seed": 7, "passes": None, "flat_runs": None,
     }  # fmt: skip
     return ExampleSource(selection, lambda: store, **(fields | kw))  # type: ignore[arg-type]
 
@@ -177,6 +188,41 @@ def test_settings_that_cannot_work_are_refused(store: LocalStore, tmp_path: Path
     selection = Selection.load(store, "i1", split="train", signal_types=None)
     with pytest.raises(ValueError, match="twice max_channels"):
         _source(store, tmp_path, selection, max_tokens=8)
+
+
+def test_long_runs_of_one_value_are_not_observed_short_ones_and_constant_channels_are() -> None:
+    rule = FlatRuns(factor=20.0, minimum_s=1.0, margin_s=4.0)
+    noise = np.random.default_rng(0).integers(-1000, 1000, 2000).astype(np.int16)
+    held = noise.copy()
+    held[500:800] = 7  # 3 s at 100 Hz: > 20 x the median run (1 sample) and > 1 s
+    held[1200:1250] = 7  # 0.5 s: shorter than minimum_s
+    flat = rule.mask(held, 100.0)
+    assert flat[500:800].all() and flat.sum() == 300
+    assert not rule.mask(noise, 100.0).any()
+    assert not rule.mask(np.full(2000, 98, dtype=np.int16), 100.0).any()  # a held level
+    # SpO2 in whole percent at 1 Hz: values held for seconds are its usual runs
+    spo2 = np.repeat(np.array([97, 98] * 30, dtype=np.int16), 4)  # runs of 4 s
+    assert not rule.mask(spo2, 1.0).any()
+    with pytest.raises(ValueError, match="factor >= 1"):
+        FlatRuns(factor=0.5, minimum_s=1.0, margin_s=1.0)
+
+
+def test_flat_runs_across_example_edges_are_judged_on_the_whole_run(
+    store: LocalStore, tmp_path: Path
+) -> None:
+    """Examples here are shorter than 1 s, the runs 3 s and 0.5 s long: the margin of 4 s
+    gives each example the whole run, so the result is the same as on the recording."""
+    expected = _index(store, {"r1": 30.0}, held={("r1", "C3"): [(1000, 1300), (2000, 2050)]})
+    selection = Selection.load(store, "i1", split="train", signal_types=None)
+    source = _source(store, tmp_path, selection,
+                     flat_runs=FlatRuns(factor=20.0, minimum_s=1.0, margin_s=4.0))  # fmt: skip
+    placed = _place(list(source.examples(epoch=0, part=0, parts=1)))
+    for key, values in expected.items():
+        got = np.array([placed[key][i] for i in range(values.size)])
+        want = values.copy()
+        if key == ("r1", "C3"):
+            want[1000:1300] = np.nan  # the long run only
+        np.testing.assert_array_equal(got, want, err_msg=str(key))
 
 
 def test_a_broken_calibration_gives_nan_never_inf() -> None:
