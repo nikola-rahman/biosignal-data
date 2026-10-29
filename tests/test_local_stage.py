@@ -276,3 +276,16 @@ def test_uneven_groups_keep_packing_and_permutation_invariance(name: str) -> Non
     c = _channel_outputs(stage, _packer(None, rows=1).pack([permuted])[0], 0, 0)
     for position, k in enumerate(order):
         torch.testing.assert_close(c[position], a[k], atol=1e-9, rtol=1e-9)
+
+
+@pytest.mark.parametrize("kind", ["zoh", "zoh_centred", "bilinear"])
+@pytest.mark.parametrize("masked", ["drop", "static_gain"])
+def test_slow_channels_give_finite_outputs_and_gradients(kind: str, masked: str) -> None:
+    """At 1 Hz nearly every mode of a 1 ms-10 s init is masked, some with |z| ~ 1e5."""
+    torch.manual_seed(0)
+    stage = local_stage(_spec(discretization=kind, masked_modes=masked)).train()
+    batch, _ = _packer(None, rows=1).pack([_example([1.0, 1.0, 32.0, 256.0], 30.0, 6)])
+    out = stage(batch.inputs)
+    (out * torch.randn_like(out)).sum().backward()
+    assert torch.isfinite(out).all()
+    assert all(torch.isfinite(p.grad).all() for p in stage.parameters() if p.grad is not None)

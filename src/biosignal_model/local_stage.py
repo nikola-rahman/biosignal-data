@@ -299,6 +299,9 @@ class S4D(nn.Module):
         """[2, H, length]: the kernel of each direction at `rate` (float32 for float32
         weights)."""
         z, kept = self.modes(rate)
+        # a masked mode adds nothing below: its z set to 0 keeps exp(-z / 2) finite (at 1 Hz a
+        # 1 ms mode has Re z = -500, exp(250) is inf in float32, and inf x 0 is NaN)
+        z = torch.where(kept, z, torch.zeros_like(z))
         a = torch.complex(-self.log_neg_real.exp(), self.imag)
         c = torch.view_as_complex(self.c) * kept
         kind = self.spec.discretization
