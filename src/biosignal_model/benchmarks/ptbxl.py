@@ -458,7 +458,7 @@ def linear_probing(
 def end_to_end(
     config: ModelConfig, records: Records, y: np.ndarray, max_tokens: int, s: PtbxlSettings,
     device: torch.device, start: dict[str, torch.Tensor] | None, log: Log, prefix: str,
-    groups: dict[str, np.ndarray] | None = None,
+    scored_groups: dict[str, np.ndarray] | None = None,
 ) -> dict[str, float]:  # fmt: skip
     """The encoder and a linear head on its mean feature, every weight trained on folds 1-8
     (layer-dependent learning rates and crops: see PtbxlSettings); the epoch with the best
@@ -466,9 +466,9 @@ def end_to_end(
     run). `start`: pretrained weights, or None.
     Logged under `prefix`: the training loss every LOG_EVERY_STEPS steps, and per epoch its
     mean training loss, fold-9 macro-AUC, time and speed; fold 10 only for a chosen epoch.
-    `groups`: columns of label groups (label_groups), also scored on their own (macro-AUC over
-    the group's labels), on fold 9 each epoch and on fold 10 for a chosen epoch; fold 9 alone
-    (all labels) still chooses the epoch."""
+    `scored_groups`: columns of label groups (label_groups), also scored on their own
+    (macro-AUC over the group's labels), on fold 9 each epoch and on fold 10 for a chosen
+    epoch; fold 9 alone (all labels) still chooses the epoch."""
     torch.manual_seed(s.seed)
     model = Encoder(config).to(device)
     if start is not None:
@@ -546,7 +546,7 @@ def end_to_end(
             f"{prefix}/epoch_seconds": seconds,
             f"{prefix}/examples_per_s": len(train) / seconds,
         }
-        for name, columns in (groups or {}).items():
+        for name, columns in (scored_groups or {}).items():
             record[f"{prefix}/epoch_validation_macro_auc/{name}"] = macro_auc(
                 y[val][:, columns], p_val[:, columns]
             )[0]
@@ -558,7 +558,7 @@ def end_to_end(
             record[f"{prefix}/chosen_test_macro_auc"] = best_test
             best_groups = {
                 name: macro_auc(y[test][:, columns], p_test[:, columns])[0]
-                for name, columns in (groups or {}).items()
+                for name, columns in (scored_groups or {}).items()
             }
             for name, value in best_groups.items():
                 record[f"{prefix}/chosen_test_macro_auc/{name}"] = value
@@ -729,7 +729,7 @@ def run(
                 scores = end_to_end(
                     config, kept, y[keep], max_tokens, settings, device, starts[name], log,
                     f"{task}/{name}",
-                    groups=label_groups(classes, statements) if task == "all" else None,
+                    scored_groups=label_groups(classes, statements) if task == "all" else None,
                 )
             results |= {f"{task}/{name}/{k}": v for k, v in scores.items()}
             log({f"{task}/{name}/macro_auc": scores["macro_auc"]})

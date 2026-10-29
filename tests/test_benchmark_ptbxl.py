@@ -350,7 +350,7 @@ def test_label_groups_are_scored_on_their_own_and_fold_9_still_chooses() -> None
     logged: list[dict[str, float]] = []
     scores = ptbxl.end_to_end(
         config, records, y, 256, settings, torch.device("cpu"), None, logged.append, "f",
-        groups=groups,
+        scored_groups=groups,
     )
     epochs = [r for r in logged if "f/epoch" in r]
     for g in groups:
