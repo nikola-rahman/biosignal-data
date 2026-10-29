@@ -5,7 +5,8 @@ layer. While it runs it prints, every second, the rate of the last second; then 
 line per case (median rate over the timed seconds, peak memory).
 
 Usage (on the pod, GPU 1 only):
-    CUDA_VISIBLE_DEVICES=1 python scripts/bench_local_stage.py --seconds 20
+    CUDA_VISIBLE_DEVICES=1 python scripts/bench_local_stage.py --seconds 20 --widths 128 256 \
+        --batch-scale 1.0
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from __future__ import annotations
 import argparse
 import statistics
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import torch
@@ -132,12 +133,16 @@ def run(case: Case, width: int, seconds: float, device: torch.device) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seconds", type=float, required=True)
-    seconds = parser.parse_args().seconds
+    parser.add_argument("--widths", type=int, nargs="+", required=True)
+    parser.add_argument("--batch-scale", type=float, required=True)  # examples a batch x this
+    args = parser.parse_args()
+    seconds = args.seconds
     device = torch.device("cuda")
     print(f"GPU: {torch.cuda.get_device_name(device)}", flush=True)
     summary = []
-    for width in (128, 256):
-        for case in CASES:
+    for width in args.widths:
+        for full in CASES:
+            case = replace(full, examples=max(1, round(full.examples * args.batch_scale)))
             try:
                 summary.append(run(case, width, seconds, device))
             except torch.OutOfMemoryError:

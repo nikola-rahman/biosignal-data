@@ -95,6 +95,23 @@ User decisions (2026-10-29):
   so masking after it would leak (3 reviewers).
 - Interface: `LocalStage` (samples -> one feature vector per sample); a continuous-kernel
   convolution or the identity can replace the S4D stage.
+- Throughput and memory measured 2026-10-29 (`scripts/bench_local_stage.py`, one L40S, a
+  training step with bf16 autocast, checkpointing, 4 layers, 32 modes, mixing in 2 layers;
+  median of the per-second rates; width 256 at half the batch, width 128 runs out of memory
+  there at ~2 M samples):
+
+  | case | width 128: M samples/s, peak GiB (samples) | width 256 |
+  |---|---|---|
+  | ECG 12 x 500 Hz x 10 s | 1.14, 19.0 (1.92 M) | 0.58, 18.9 (0.96 M) |
+  | EEG 19 x 256 Hz x 30 s | 1.11, 24.1 (2.33 M) | 0.54, 24.1 (1.17 M) |
+  | EEG 64 x 256 Hz x 30 s | 1.18, 20.3 (1.97 M) | 0.55, 20.3 (0.98 M) |
+  | HD-EMG 64 x 2048 Hz x 2 s | 1.43, 20.7 (2.10 M) | 0.69, 20.1 (1.05 M) |
+  | PSG 30 s, 15 channels at 1-512 Hz | 1.37, 14.7 (1.52 M) | 0.76, 14.7 (0.76 M) |
+
+  The stage is bound by memory traffic, not FLOPs: the rate halves and the memory doubles per
+  sample from width 128 to 256 (~10-11 KB a sample at width 128). One ECG step: 2.40 s with a
+  gather per layer, 1.65 s with the contiguous bucket layout and the memory-efficient attention
+  kernel.
 
 ## 4. Length reduction: a global token duration, learned chunking as the end state
 
