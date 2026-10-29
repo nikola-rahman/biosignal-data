@@ -174,11 +174,18 @@ def _small() -> ModelConfig:
     )  # fmt: skip
 
 
+def test_fixed_slots_give_each_lead_name_one_slot() -> None:
+    examples = _records([["NORM"]] * 3, [1] * 3).examples
+    names = sorted({c.name for e in examples for c in e.origin.channels})
+    assert ptbxl.lead_slots(examples, fixed=False) is None
+    assert ptbxl.lead_slots(examples, fixed=True) == {n: k for k, n in enumerate(names)}
+
+
 def test_a_trimmed_batch_gives_each_example_the_same_features() -> None:
     config = _small()
     model = Encoder(config).eval()
     examples = _records([["NORM"]] * 5, [1] * 5).examples
-    packer = ptbxl._packer(config, 512, 4)  # 40 tokens per example
+    packer = ptbxl._packer(config, 512, 4, None)  # 40 tokens per example
     device = torch.device("cpu")
     packer.reseed(1)
     full, where_full = packer.pack(examples, trim=False)
@@ -208,7 +215,7 @@ def test_batches_made_in_workers_are_the_same_as_in_the_main_process() -> None:
 
     made = {}
     for workers in (0, 2):
-        packer = ptbxl._packer(config, 256, 2)
+        packer = ptbxl._packer(config, 256, 2, None)
         made[workers] = list(ptbxl._packed(examples, groups, crop, packer, "s/1", workers))
     assert len(made[0]) == len(made[2]) == 3
     for (a, wa), (b, wb) in zip(made[0], made[2], strict=True):
