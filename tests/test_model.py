@@ -313,7 +313,7 @@ def _two_row_batch() -> Batch:
 
 
 def _rows(x: Inputs, rows: slice) -> Inputs:
-    return Inputs(**{k: v[rows] for k, v in vars(x).items()})
+    return Inputs(**{k: None if v is None else v[rows] for k, v in vars(x).items()})
 
 
 _NO_CLIP = OptimSection(
@@ -385,7 +385,8 @@ def test_single_rows_joined_are_the_rows_packed_together() -> None:
     singles = list(_packer(rows=1).batches(examples))[:2]
     joined = concat(singles)
     for k, v in vars(together.inputs).items():
-        assert torch.equal(v, vars(joined.inputs)[k]), k
+        other = vars(joined.inputs)[k]
+        assert (v is None and other is None) or torch.equal(v, other), k
     for k, v in vars(together.analysis).items():
         assert torch.equal(v, vars(joined.analysis)[k]), k
     assert (joined.examples, joined.samples) == (together.examples, together.samples)
