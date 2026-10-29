@@ -23,13 +23,14 @@ Open: anonymous download. Anyone can download the data. You do not need an accou
 ## Links
 
 - Homepage: <https://archive.ics.uci.edu/dataset/495/ppg+dalia>
-- Download page: _unknown (to be filled)_
+- Download page: <https://archive.ics.uci.edu/static/public/495/ppg+dalia.zip>
 - References:
   - <https://doi.org/10.3390/s19143079>
 
 ## Before downloading
 
-1. Download all files into one folder, keeping the provider's folder structure.
+1. Download https://archive.ics.uci.edu/static/public/495/ppg+dalia.zip (2.7 GB; it holds data.zip and readme.pdf).
+2. Unpack data.zip into one folder; import that folder (it holds PPG_FieldStudy/).
 
 ## Credentials
 
@@ -49,4 +50,5 @@ None.
 
 ## Notes
 
-None.
+- Raw version 2026-10-29: ppg+dalia.zip of that day, SHA-256 5772387956e34e2e2dc4c2ddbeb98cb70569d5112fa4c13ee98a17680b84a1f3; data.zip unpacked (92 entries, 24.1 GB). License CC BY 4.0.
+- Benchmark dalia (heart rate, leave one subject out): every subject is held out of pretraining (index.yaml).

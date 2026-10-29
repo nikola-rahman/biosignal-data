@@ -21,8 +21,14 @@
 
 **Before downloading**
 
-1. Download all files into one folder, keeping the provider's folder structure.
+1. Cohort I: download the MEGA folder that the "Download Dataset" page links (https://mega.nz/folder/QJgDQDDZ#ZMDj3w82msavACurqP48IA, 14.12 GB), e.g. with `megatools dl <link>` (MEGA limits the volume per IP and pauses for hours).
+2. Import the folder that holds 1/ ... 100/ (each <n>.rec, <n>_1.txt, <n>_2.txt, xlsx).
 
 ```bash
 biosignal-data import isr-uc/isruc-sleep <folder you downloaded into> --version <label> --dest s3://<bucket>
 ```
+
+Notes:
+
+- Raw version 2026-10-29 holds cohort I (subgroup I, 100 subjects) only, as published in the MEGA folder.
+- Benchmark isruc (sleep staging, CBraMod split): subjects 81-100 are held out of pretraining (index.yaml).
