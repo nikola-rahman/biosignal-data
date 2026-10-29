@@ -65,6 +65,7 @@ import torch
 import torch.nn.functional as F  # noqa: N812 - the usual name
 from pydantic import BaseModel, ConfigDict, Field
 from torch import nn
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.utils.checkpoint import checkpoint
 
 from biosignal_model.channel_batch import ChannelInputs
@@ -386,6 +387,11 @@ class _Layer(nn.Module):
 # Sample times per attention call of the channel mixing (the batch of one call is this times
 # the heads): within the grid limits of the fused attention kernels.
 MIXING_CHUNK = 16384
+# The attention kernels of the channel mixing: the memory-efficient (cutlass) kernel on the GPU,
+# measured 2026-10-29 on an L40S, forward + backward, bf16, 4 heads of 32: 134 ms at 160 k
+# sample times x 12 channels (flash 213, math 192, a batched matmul 129), 61 ms at 32 k x 64
+# (flash 79, math 168, matmul 126); the math kernel elsewhere (CPU, float64).
+MIXING_KERNELS = [SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]
 
 
 class ChannelMixing(nn.Module):
@@ -409,7 +415,10 @@ class ChannelMixing(nn.Module):
         for at in range(0, p, MIXING_CHUNK):
             part = slice(at, at + MIXING_CHUNK)
             mask = None if keep is None else keep[part, None, None, :]
-            outs.append(F.scaled_dot_product_attention(q[part], k[part], v[part], attn_mask=mask))
+            with sdpa_kernel(MIXING_KERNELS):
+                outs.append(
+                    F.scaled_dot_product_attention(q[part], k[part], v[part], attn_mask=mask)
+                )
         a = torch.cat(outs) if len(outs) > 1 else outs[0]
         out: torch.Tensor = self.out(a.transpose(1, 2).reshape(p, m, width))
         return out
