@@ -137,3 +137,57 @@ D1 has the same number of tokens at every rate; its attention costs about 3.9× 
 tokens at 100 Hz and 0.16× at 500 Hz (L²).
 D2's global sequence is about a third of 8-sample tokens at 100 Hz and a fourteenth at 500 Hz; its
 local stage costs grow linearly with frames (FFT convolutions over each channel).
+
+## Proxy bench (2026-10-29)
+
+Small proxy models (user: "small proxy models, successive halving"): every candidate gets a
+global transformer of width 256, 4 layers, 4 heads (`from_scratch_model`), its feed-forward
+size set so that every proxy has 4.2-4.3 M parameters (without the pretraining heads); recipe
+lr 1e-4, betas (0.9, 0.95), warmup 1.5 epochs, cosine over 25 epochs, clip 1.0, weight decay
+1e-3, fixed slots, 2.5 s crops, no dropout (`dropout`, `drop_path` 0; 0.1 is the second
+level). Task "all" is also scored per statement group (diagnostic, form, rhythm; fold 9 alone
+chooses the epoch). First the proxies must rank as the full-size models did.
+
+| proxy (config `bench-ptbxl-proxy-*-100hz`) | global tokens per 2.5 s, 12 leads, 100 Hz | params (global ff) |
+|---|---|---|
+| `samples64`: 64 samples | 48 | 4.24 M (1024) |
+| `samples8`: 8 samples | 384 | 4.21 M (1024) |
+| `d1`: D1, 80 ms tokens every 40 ms | 756 | 4.28 M (1024) |
+| `d1fine`: D1, 40 ms tokens every 20 ms | 1,500 | 4.28 M (1024) |
+| `d2`: D2 as in the first bench (local 128 × 4, 0.24 s tokens, mean residual) | 132 (+1,500 local frames) | 4.20 M (896) |
+| `d2prime`: D2' (local 256 × 6, 0.12 s tokens, attention residual) | 252 (+1,500) | 4.32 M (512) |
+| `d2second`: D2'' (D2' local stage, 0.08 s tokens, attention residual) | 384 (+1,500) | 4.32 M (512) |
+
+### What each candidate can resolve, checked against the ECG scales
+
+The scales a 12-lead diagnosis needs (computational cardiology): QRS 80-120 ms (> 120 ms is
+abnormal), delta waves and notching 20-40 ms, PR 120-200 ms, QT 350-450 ms with timing to
+about ±10 ms, ST level and T shape relative to the baseline (amplitude), rhythm over seconds,
+territory from lead identity. At 100 Hz one sample is 10 ms, so the data itself limits timing
+to about ±5-10 ms and 20 ms features are 2 samples.
+
+| candidate | resolution of the global model (token / hop) | the token's own features | local stage capacity | QRS 80-120 ms | notching 20-40 ms | intervals ±10 ms |
+|---|---|---|---|---|---|---|
+| samples 64 | 640 ms / 640 ms | one linear map of 64 samples | none | inside one token: only a linear code | linear code only | global positions every 640 ms: no |
+| samples 8 | 80 ms / 80 ms | one linear map of 8 samples | none | 1-2 tokens | inside a token, linear code | 80 ms grid, finer only linearly |
+| D1 80/40 | 80 ms / 40 ms | nonlinear stem: 4 Hann sub-windows of 20 ms, 64 channels | stem only (~0.07 M) | 2-3 tokens | in the 20 ms sub-windows, nonlinear | 40 ms grid; sub-token timing through the stem |
+| D1 40/20 | 40 ms / 20 ms | stem: 2 sub-windows of 20 ms | stem only | 4-6 tokens | at the token scale | 20 ms grid with overlap: about the data limit |
+| D2 (first bench) | 240 ms / 240 ms | attention pool of 12 local frames | 4 × S4D, width 128 (~0.3 M), each lead's whole crop | the local stage only | local frames (20 ms hop) | local only; the global grid is 240 ms |
+| D2' | 120 ms / 120 ms | attention pool of 6 frames | 6 × S4D, width 256 (~1.2 M + pools ~0.4 M) | 1 token + local stage | local frames | local 20 ms, global 120 ms |
+| D2'' | 80 ms / 80 ms | attention pool of 4 frames | as D2' | 1-2 tokens + local stage | local frames | local 20 ms, global 80 ms |
+
+The S4D stage of D2 runs over each lead's whole 2.5 s crop in both directions, so its
+receptive field covers every interval above. Rhythm (seconds) is in the global model's
+context for all candidates (the whole 2.5 s crop; the record is scored over its crops).
+
+**Amplitude** (the same for all candidates; ST level and T shape need it): each lead in each
+crop is scaled as asinh((x - mean) / std), so the shape relative to the lead's mean stays in
+the waveform; the lead's level and size reach the model only as (asinh(mean), log std), one
+additive input per token (`context`). Ratios between leads (axis, voltage criteria) and the
+absolute baseline therefore come only through that scalar path; the std of a 2.5 s crop also
+depends on how many beats it holds. This is a known weak point, not changed in this bench
+(one factor at a time).
+
+**Lead identity** (territory): fixed slots per lead name in every proxy; the slot embedding is
+added to every global token. D2's local stage is shared by all leads and does not see the
+lead: morphology is read lead-agnostically, and territory is decided by the global model.
