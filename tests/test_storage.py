@@ -132,6 +132,54 @@ def test_s3_settings_are_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def test_a_request_refused_for_a_short_time_is_sent_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hippius refused working keys with InvalidAccessKeyId for some minutes (2026-10-29)."""
+    import threading  # noqa: PLC0415
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer  # noqa: PLC0415
+
+    from botocore.exceptions import ClientError  # noqa: PLC0415
+
+    from biosignal_data.storage import stores  # noqa: PLC0415
+
+    monkeypatch.setattr(stores, "REFUSED_WAIT_S", 0.0)
+    refusals = [2]
+    requests = [0]
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - the http.server name
+            requests[0] += 1
+            if refusals[0] > 0:
+                refusals[0] -= 1
+                body = (b"<?xml version='1.0'?><Error><Code>InvalidAccessKeyId</Code>"
+                        b"<Message>no such key</Message></Error>")
+                self.send_response(403)
+            else:
+                body = b"block"
+                self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        settings = stores.S3Settings(
+            f"http://127.0.0.1:{server.server_address[1]}", "decentralized", "path", "k", "s"
+        )
+        store = stores.S3Store("bucket", settings=settings)
+        assert store.get_bytes("a/b.bin") == b"block"
+        assert requests[0] == 3
+        refusals[0] = stores.REFUSED_ATTEMPTS  # a key that is really wrong still fails
+        with pytest.raises(ClientError, match="InvalidAccessKeyId"):
+            store.get_bytes("a/b.bin")
+        assert requests[0] == 3 + stores.REFUSED_ATTEMPTS
+    finally:
+        server.shutdown()
+
+
 def test_unfinished_uploads_are_found_and_discarded(tmp_path: Path) -> None:
     store = LocalStore(tmp_path)
     (tmp_path / "raw" / "a").mkdir(parents=True)

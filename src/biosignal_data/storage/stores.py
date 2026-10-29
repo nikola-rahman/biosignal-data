@@ -46,6 +46,15 @@ DELETE_REQUESTS = 8  # delete requests of 1,000 keys sent at the same time
 # botocore tries again (adaptive retries) on a timeout, a connection error or a throttle.
 S3_CONNECT_TIMEOUT_S = 10
 S3_READ_TIMEOUT_S = 60
+# Answers that the storage gives for a short time and botocore does not try again: Hippius
+# refused requests with InvalidAccessKeyId for a key that worked before and after (2026-10-29,
+# up to half of all requests for some minutes; v2-unimax stopped at step ~320,000, and twice
+# more at its start). Every request with such an answer is sent again, up to REFUSED_ATTEMPTS
+# times with waits of 1, 2, 4, ... s (about 2 minutes in total); a key that is really wrong
+# still fails, after these tries.
+REFUSED_CODES = frozenset({"InvalidAccessKeyId"})
+REFUSED_ATTEMPTS = 8
+REFUSED_WAIT_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -109,7 +118,7 @@ class S3Settings:
         """`connections`: the most requests this client runs at the same time."""
         # An explicit endpoint, region and keys: nothing is read from AWS config files or
         # AWS_* environment variables.
-        return boto3.session.Session().client(
+        client = boto3.session.Session().client(
             "s3",
             endpoint_url=self.endpoint,
             region_name=self.region,
@@ -124,6 +133,18 @@ class S3Settings:
                 max_pool_connections=connections,
             ),
         )
+        # After botocore's own retry handler: it answers None (no retry) for these codes.
+        client.meta.events.register("needs-retry.s3", _retry_refused)
+        return client
+
+
+def _retry_refused(response: Any = None, attempts: int = 1, **_: Any) -> float | None:
+    """A botocore needs-retry handler: the wait before the next try of a request that got a
+    REFUSED_CODES answer, or None (no retry from this handler). `attempts`: tries so far."""
+    if response is None or attempts >= REFUSED_ATTEMPTS:
+        return None
+    code = response[1].get("Error", {}).get("Code")
+    return REFUSED_WAIT_S * 2 ** (attempts - 1) if code in REFUSED_CODES else None
 
 
 class S3Store:

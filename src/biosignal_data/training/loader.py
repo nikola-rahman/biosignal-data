@@ -64,7 +64,7 @@ from typing import Any
 
 import numpy as np
 import pyarrow.parquet as pq
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import BotoCoreError
 
 from biosignal_data.index.build import ROOT as INDEX_ROOT
 from biosignal_data.standard import blocks
@@ -480,28 +480,16 @@ RETRY_WAIT_S = 1.0  # then 2, 4, 8 s
 # (NoSuchKey, a ClientError) is not tried again.
 TRANSIENT = (TimeoutError, OSError, BotoCoreError, HTTPException)
 
-# Storage answers that are wrong for a short time, tried again: Hippius refused one read with
-# InvalidAccessKeyId while the same key read the same object before and after (v2-unimax
-# stopped at step ~320,000, 2026-10-29). A key that is really wrong still fails, after
-# READ_ATTEMPTS tries.
-TRANSIENT_CODES = frozenset({"InvalidAccessKeyId"})
-
-
-def _transient(exc: Exception) -> bool:
-    if isinstance(exc, ClientError):
-        return exc.response.get("Error", {}).get("Code") in TRANSIENT_CODES
-    return isinstance(exc, TRANSIENT)
-
 
 def _read_with_retries(read: Callable[[], bytes], what: str) -> bytes:
-    """One ranged read; one that times out, fails in transport or gets a TRANSIENT_CODES
-    answer is tried again, up to READ_ATTEMPTS times, with growing waits (botocore also
-    retries each request; see storage.stores)."""
+    """One ranged read; one that times out or fails in transport is tried again, up to
+    READ_ATTEMPTS times, with growing waits (botocore also retries each request; see
+    storage.stores)."""
     for attempt in range(1, READ_ATTEMPTS + 1):
         try:
             return read()
-        except Exception as exc:
-            if not _transient(exc) or attempt == READ_ATTEMPTS:
+        except TRANSIENT as exc:
+            if attempt == READ_ATTEMPTS:
                 raise
             log.warning("read of %s failed (%s); trying again", what, exc)
             time.sleep(RETRY_WAIT_S * 2 ** (attempt - 1))
