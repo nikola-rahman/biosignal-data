@@ -213,7 +213,26 @@ training epoch, 250 -> 377 on a cached batch, prediction 148 -> 211 records/s, m
 9.9 -> 7.7 GiB. torch.compile of the local blocks gave no further gain; compiling the whole
 encoder fails in inductor with the dynamic shapes of the packed batches.
 
-### Halving bench with WSD cooldown rungs (built, not started)
+### Result of the proxy check (2026-10-29)
+
+PTB-XL "all", 100 Hz, from scratch, fold-10 macro-AUC of the epoch that fold 9 chooses. The
+4 M proxies ran 25 epochs with a cosine schedule; the full-size values are from the first bench.
+
+| design | 4 M proxy (fold 9 / fold 10) | full size (fold 10) |
+|---|---|---|
+| samples64 | 0.866 / 0.855 | 0.895 |
+| samples8 | 0.898 / 0.891 | 0.917 |
+| d1 (80 ms / 40 ms) | 0.903 / 0.889 | 0.914 |
+| d2 (as built) | 0.910 / 0.895 | 0.897 |
+
+Rank at full size: samples8 > d1 > d2 ≈ samples64. Rank of the proxies: d2 > samples8 ≈ d1
+>> samples64. The proxy put D2 first, and D2 is third at full size. The model size changes
+the ranking: the designs differ in how much they overfit, and a 4 M model overfits less.
+Thus a proxy ranking misleads for these designs. The coordinator stopped the other proxies
+(d1fine after epoch 5, d2prime after epoch 15, d2second after epoch 20). The halving bench
+was not started; the bench must use the full size.
+
+### Halving bench with WSD cooldown rungs (built, not started; not for 4 M proxies, see above)
 
 At full size D2 led D1 on fold 9 from epoch 2 to 9 and they tied at epoch 10; D1 won only
 after epoch 13. A cut on a mid-schedule snapshot therefore keeps fast learners that overfit.
