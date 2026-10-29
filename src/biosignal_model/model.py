@@ -444,10 +444,11 @@ def _block_mask(document: torch.Tensor) -> BlockMask:
             return row[q] == row[kv]
 
         parts.append(create_block_mask(same_in_row, 1, None, length, length, row.device))
+    full = [(p.full_kv_num_blocks, p.full_kv_indices) for p in parts]  # separate full blocks
     return BlockMask.from_kv_blocks(
         torch.cat([p.kv_num_blocks for p in parts]), torch.cat([p.kv_indices for p in parts]),
-        torch.cat([p.full_kv_num_blocks for p in parts]),
-        torch.cat([p.full_kv_indices for p in parts]),
+        torch.cat([n for n, _ in full if n is not None]),
+        torch.cat([i for _, i in full if i is not None]),
         BLOCK_SIZE=parts[0].BLOCK_SIZE, mask_mod=same, seq_lengths=(length, length),
     )
 
