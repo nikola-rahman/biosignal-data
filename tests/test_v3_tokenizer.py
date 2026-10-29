@@ -223,7 +223,7 @@ def test_ptbxl_fine_tuning_runs_with_the_new_tokenizers(
     settings = ptbxl.PtbxlSettings(
         rate=100, tasks=["diagnostic"], rows=4, read_threads=1, workers=0,
         linear_probing=False, fixed_slots=True, methods=["from_scratch"], reference=None,
-        reference_s4=None, reference_s4_channels=None,
+        reference_s4=None, reference_s4_channels=None, reference_s4_incontext=None,
         linear_probing_l2=[1.0], linear_probing_steps=1,
         fine_tuning_epochs=2, fine_tuning_patience=None, fine_tuning_learning_rate=1e-3,
         fine_tuning_weight_decay=0.0, fine_tuning_examples_per_step=4,

@@ -47,6 +47,7 @@ settings:
     distillation: null
     save_chosen_to: /workspace/sota-weights/cosine.pt  # a teacher for distillation
   reference_s4_channels: null   # the channel-set S4; not run
+  reference_s4_incontext: null  # the in-context S4; not run
   linear_probing: false
   fixed_slots: false           # a random channel slot per record, as in pretraining
   linear_probing_l2: [1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]
