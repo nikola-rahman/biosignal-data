@@ -40,6 +40,7 @@ settings:
     kernel_max_hz: 240.0, local_width: 128, local_layers: 4, local_states: 64, pool_heads: 4,
     residual_pool: mean}
   from_scratch_model: null           # the checkpoint's size, no dropout
+  fine_tuning_rungs: null
   seed: 0
 wandb_project: biosignal-fm
 wandb_entity: schnyox-s

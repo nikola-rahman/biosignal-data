@@ -40,6 +40,7 @@ settings:
   from_scratch_tokenizer: {kind: duration, token_s: 0.04, hop_s: 0.02, stem_windows: 2, stem_channels: 64,
     kernel_frequencies: 24, kernel_min_hz: 1.0, kernel_max_hz: 240.0}
   from_scratch_model: {width: 256, layers: 4, heads: 4, feed_forward: 1024, dropout: 0.0, drop_path: 0.0}
+  fine_tuning_rungs: null
   seed: 0
 wandb_project: biosignal-fm
 wandb_entity: schnyox-s

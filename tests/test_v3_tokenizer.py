@@ -231,7 +231,8 @@ def test_ptbxl_fine_tuning_runs_with_the_new_tokenizers(
         fine_tuning_slot_group="lower", fine_tuning_betas=(0.9, 0.95),
         fine_tuning_warmup_epochs=0.5, fine_tuning_schedule="cosine", fine_tuning_grad_clip=1.0,
         fine_tuning_head="linear", from_scratch_samples_per_token=None,
-        from_scratch_tokenizer=tokenizer, from_scratch_model=None, seed=0,
+        from_scratch_tokenizer=tokenizer, from_scratch_model=None, fine_tuning_rungs=None,
+        seed=0,
     )  # fmt: skip
     logged: list[dict[str, float]] = []
     scores, _ = ptbxl.end_to_end(

@@ -35,6 +35,7 @@ settings:
   from_scratch_samples_per_token: 8
   from_scratch_tokenizer: null
   from_scratch_model: null           # the checkpoint's size, no dropout
+  fine_tuning_rungs: null
   seed: 0
 wandb_project: biosignal-fm
 wandb_entity: schnyox-s
