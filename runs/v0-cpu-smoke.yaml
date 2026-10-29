@@ -33,6 +33,8 @@ model:
   max_wavelength_s: 10000.0
   attention: dense
   tokenizer: {kind: samples}  # 64-sample tokens, as v0-v2
+  dropout: 0.0  # as v0-v2
+  drop_path: 0.0
 
 optim:
   learning_rate: 1.0e-3

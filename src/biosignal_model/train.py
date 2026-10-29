@@ -103,6 +103,8 @@ class ModelSection(_Section):
     max_wavelength_s: float
     attention: Literal["flex", "dense"]
     tokenizer: Tokenizer  # how channels become tokens (docs/v3-tokenizer.md)
+    dropout: float  # on the residual branches; 0: none
+    drop_path: float  # stochastic depth of the residual branches; 0: none
 
 
 class OptimSection(_Section):
@@ -180,6 +182,8 @@ ADDED_LATER: dict[tuple[str, str], Any] = {
     ("data", "mixture"): None,  # 44e5541
     ("data", "pieces_per_epoch"): 1,  # 7bc3284
     ("model", "tokenizer"): {"kind": "samples"},  # v3-tokenizer: v0-v2 cut 64-sample tokens
+    ("model", "dropout"): 0.0,  # v3 proxy bench: v0-v2 had no dropout
+    ("model", "drop_path"): 0.0,  # nor stochastic depth
 }
 
 

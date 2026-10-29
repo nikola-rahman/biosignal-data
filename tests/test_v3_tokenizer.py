@@ -27,14 +27,17 @@ D1 = DurationTokenizer(
 D2 = HierarchicalTokenizer(
     kind="hierarchical", frame_s=0.04, frame_hop_s=0.02, frames_per_token=12, stem_windows=2,
     stem_channels=8, kernel_frequencies=6, kernel_min_hz=1.0, kernel_max_hz=200.0,
-    local_width=16, local_layers=2, local_states=8, pool_heads=4,
+    local_width=16, local_layers=2, local_states=8, pool_heads=4, residual_pool="mean",
 )  # fmt: skip
+# D2': the token's frames reach the output residual by attention pooling, not their mean
+D2_ATTENTION = D2.model_copy(update={"residual_pool": "attention"})
 
 
 def _config(tokenizer: DurationTokenizer | HierarchicalTokenizer | SamplesTokenizer) -> ModelConfig:
     return ModelConfig(
         samples_per_token=8, max_channels=4, width=32, layers=1, heads=4, feed_forward=64,
         min_wavelength_s=0.01, max_wavelength_s=1000.0, attention="dense", tokenizer=tokenizer,
+        dropout=0.0, drop_path=0.0,
     )  # fmt: skip
 
 
@@ -88,7 +91,9 @@ def test_the_stem_leaves_out_frequencies_above_nyquist() -> None:
     assert (stem.basis(torch.linspace(-0.04, 0.04, 40), 500.0)[:, 1:] != 0).any(0).all()
 
 
-@pytest.mark.parametrize("tokenizer", [D1, D2], ids=["duration", "hierarchical"])
+@pytest.mark.parametrize(
+    "tokenizer", [D1, D2, D2_ATTENTION], ids=["duration", "hierarchical", "hierarchical-attention"]
+)
 def test_one_weight_set_reads_100_and_500_hz(
     tokenizer: DurationTokenizer | HierarchicalTokenizer,
 ) -> None:
@@ -109,7 +114,9 @@ def test_one_weight_set_reads_100_and_500_hz(
     assert error < 0.1, float(error)
 
 
-@pytest.mark.parametrize("tokenizer", [D1, D2], ids=["duration", "hierarchical"])
+@pytest.mark.parametrize(
+    "tokenizer", [D1, D2, D2_ATTENTION], ids=["duration", "hierarchical", "hierarchical-attention"]
+)
 def test_padding_and_other_examples_never_reach_an_example(
     tokenizer: DurationTokenizer | HierarchicalTokenizer,
 ) -> None:
@@ -185,7 +192,9 @@ STATEMENTS = [
 ]  # fmt: skip
 
 
-@pytest.mark.parametrize("tokenizer", [D1, D2], ids=["duration", "hierarchical"])
+@pytest.mark.parametrize(
+    "tokenizer", [D1, D2, D2_ATTENTION], ids=["duration", "hierarchical", "hierarchical-attention"]
+)
 @pytest.mark.parametrize("rate", [100.0, 500.0])
 def test_ptbxl_fine_tuning_runs_with_the_new_tokenizers(
     tokenizer: DurationTokenizer | HierarchicalTokenizer, rate: float
@@ -203,7 +212,7 @@ def test_ptbxl_fine_tuning_runs_with_the_new_tokenizers(
         fine_tuning_slot_group="lower", fine_tuning_betas=(0.9, 0.95),
         fine_tuning_warmup_epochs=0.5, fine_tuning_schedule="cosine", fine_tuning_grad_clip=1.0,
         fine_tuning_head="linear", from_scratch_samples_per_token=None,
-        from_scratch_tokenizer=tokenizer, seed=0,
+        from_scratch_tokenizer=tokenizer, from_scratch_model=None, seed=0,
     )  # fmt: skip
     logged: list[dict[str, float]] = []
     scores = ptbxl.end_to_end(

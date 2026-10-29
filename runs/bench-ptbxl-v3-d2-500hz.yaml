@@ -37,7 +37,9 @@ settings:
   from_scratch_samples_per_token: null
   from_scratch_tokenizer: {kind: hierarchical, frame_s: 0.04, frame_hop_s: 0.02, frames_per_token: 12,
     stem_windows: 2, stem_channels: 64, kernel_frequencies: 24, kernel_min_hz: 1.0,
-    kernel_max_hz: 240.0, local_width: 128, local_layers: 4, local_states: 64, pool_heads: 4}
+    kernel_max_hz: 240.0, local_width: 128, local_layers: 4, local_states: 64, pool_heads: 4,
+    residual_pool: mean}
+  from_scratch_model: null           # the checkpoint's size, no dropout
   seed: 0
 wandb_project: biosignal-fm
 wandb_entity: schnyox-s

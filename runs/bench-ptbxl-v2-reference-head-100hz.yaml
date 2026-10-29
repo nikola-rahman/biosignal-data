@@ -34,6 +34,7 @@ settings:
   fine_tuning_head: reference
   from_scratch_samples_per_token: null
   from_scratch_tokenizer: null
+  from_scratch_model: null           # the checkpoint's size, no dropout
   seed: 0
 wandb_project: biosignal-fm
 wandb_entity: schnyox-s

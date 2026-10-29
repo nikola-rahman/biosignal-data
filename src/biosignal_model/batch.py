@@ -98,7 +98,8 @@ class DurationTokenizer(_StemSpec):
 class HierarchicalTokenizer(_StemSpec):
     """D2: frames of `frame_s` every `frame_hop_s` seconds through the stem, `local_layers`
     bidirectional S4D blocks (`local_width`, `local_states`) over each channel's frames,
-    attention pooling (`pool_heads`) of `frames_per_token` frames into one token."""
+    attention pooling (`pool_heads`) of `frames_per_token` frames into one token, and the
+    token's frames pooled again (`residual_pool`) for the output residual."""
 
     kind: Literal["hierarchical"]
     frame_s: float
@@ -108,6 +109,9 @@ class HierarchicalTokenizer(_StemSpec):
     local_layers: int
     local_states: int
     pool_heads: int
+    # How the token's local frame features reach the output residual: their mean (the first
+    # bench) or attention pooling (D2', 2026-10-29: the mean loses where in the token a feature is)
+    residual_pool: Literal["mean", "attention"]
 
 
 Tokenizer = Annotated[

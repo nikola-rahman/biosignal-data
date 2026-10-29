@@ -52,6 +52,12 @@ class ModelConfig:
     max_wavelength_s: float
     attention: Literal["flex", "dense"]  # flex: block-sparse kernel (GPU); dense: a full mask
     tokenizer: SamplesTokenizer | DurationTokenizer | HierarchicalTokenizer
+    # Regularization of the residual branches (global blocks and D2's local blocks): dropout
+    # on each branch's output, and stochastic depth (drop path: a whole branch dropped for a
+    # row of the batch, or a channel's sequence in the local stage, with this probability).
+    # 0 and 0: none (v0-v2).
+    dropout: float
+    drop_path: float
 
 
 class Encoder(nn.Module):
@@ -72,9 +78,12 @@ class Encoder(nn.Module):
             self.stem = Stem(t, t.local_width)
             self.hidden_local = nn.Parameter(torch.zeros(t.local_width))
             self.local = nn.ModuleList(
-                S4DBlock(t.local_width, t.local_states) for _ in range(t.local_layers)
+                S4DBlock(t.local_width, t.local_states, config.dropout, config.drop_path)
+                for _ in range(t.local_layers)
             )
             self.pool = AttentionPool(t.local_width, t.pool_heads, d)
+            if t.residual_pool == "attention":
+                self.residual_pool = AttentionPool(t.local_width, t.pool_heads, t.local_width)
             self.residual = nn.Linear(t.local_width, d)
         self.context = nn.Linear(3, d)
         self.slot = nn.Embedding(config.max_channels, d)
@@ -98,7 +107,10 @@ class Encoder(nn.Module):
             return [self.samples]
         if isinstance(self.config.tokenizer, DurationTokenizer):
             return [self.stem]
-        return [self.stem, self.local, self.pool]
+        parts: list[nn.Module] = [self.stem, self.local, self.pool]
+        if self.config.tokenizer.residual_pool == "attention":
+            parts.append(self.residual_pool)
+        return parts
 
     def input_parameters(self) -> list[nn.Parameter]:
         """The learned vectors of hidden tokens / frames: with the input modules."""
@@ -162,9 +174,11 @@ class Encoder(nn.Module):
     def _hierarchical(
         self, x: Inputs, t: HierarchicalTokenizer
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """D2's local stage: (pooled token vectors [R, L, width], mean local frame features
-        [R, L, local_width]). Each channel's frames in time order go through the S4D blocks;
-        frames that are not observed, padding and other channels never enter a sequence."""
+        """D2's local stage: (pooled token vectors [R, L, width], the token's local frame
+        features pooled for the output residual [R, L, local_width]: their mean, or attention
+        pooling, `t.residual_pool`). Each channel's frames in time order go through the S4D
+        blocks; frames that are not observed, padding and other channels never enter a
+        sequence."""
         assert x.channel_index is not None and x.position is not None  # noqa: S101
         frames = self.stem(x)  # [R, L, F, C]
         r, length, f, c = frames.shape
@@ -190,6 +204,8 @@ class Encoder(nn.Module):
             seq = block(seq, mask)
         out = frames.new_zeros(r, length, f, c)
         out[real] = seq.view(channels, longest, f, c)[g, pos].to(out.dtype)
+        if t.residual_pool == "attention":
+            return self.pool(out, ok), self.residual_pool(out, ok)
         weight = ok.to(out.dtype)
         mean = (out * weight[..., None]).sum(2) / weight.sum(2, keepdim=True).clamp(min=1)
         return self.pool(out, ok), mean
@@ -260,9 +276,10 @@ class S4DBlock(nn.Module):
     per direction), GELU, a linear layer with GLU, and the residual. `mask`: [B, T] frames that
     exist; the others are zero before and after."""
 
-    def __init__(self, width: int, states: int) -> None:
+    def __init__(self, width: int, states: int, dropout: float, drop_path: float) -> None:
         super().__init__()
         half = states // 2
+        self.dropout, self.drop_path = dropout, drop_path
         self.norm = nn.RMSNorm(width)
         dt_min, dt_max = 0.001, 0.1  # the S4D defaults
         log_dt = torch.rand(2, width) * (math.log(dt_max) - math.log(dt_min)) + math.log(dt_min)
@@ -296,6 +313,7 @@ class S4DBlock(nn.Module):
         )[..., :length].flip(-1)
         y = (forward + back + z * self.d[:, None]).transpose(1, 2).to(u.dtype)
         y = F.glu(self.out(F.gelu(y)), dim=-1)
+        y = _drop_path(F.dropout(y, self.dropout, self.training), self.drop_path, self.training)
         return (u + y) * keep
 
 
@@ -330,6 +348,7 @@ class Block(nn.Module):
         super().__init__()
         d = config.width
         self.heads = config.heads
+        self.dropout, self.drop_path = config.dropout, config.drop_path
         self.norm1 = nn.RMSNorm(d)
         self.qkv = nn.Linear(d, 3 * d, bias=False)
         self.out = nn.Linear(d, d, bias=False)
@@ -350,10 +369,22 @@ class Block(nn.Module):
         )  # fmt: skip
         q, k = _rotate(q, rotary), _rotate(k, rotary)
         a = attend(q, k, v).transpose(1, 2).reshape(r, length, d)
-        h = h + self.out(a)
+        h = h + self._branch(self.out(a))
         gate, value = self.up(self.norm2(h)).chunk(2, dim=-1)
-        result: torch.Tensor = h + self.down(F.silu(gate) * value)
+        result: torch.Tensor = h + self._branch(self.down(F.silu(gate) * value))
         return result
+
+    def _branch(self, y: torch.Tensor) -> torch.Tensor:
+        return _drop_path(F.dropout(y, self.dropout, self.training), self.drop_path, self.training)
+
+
+def _drop_path(y: torch.Tensor, p: float, training: bool) -> torch.Tensor:
+    """Stochastic depth: the branch `y` [B, ...] set to 0 for each first-axis item with
+    probability `p` (in training), the kept ones scaled by 1 / (1 - p)."""
+    if not training or p == 0.0:
+        return y
+    keep = torch.rand(y.shape[0], *([1] * (y.dim() - 1)), device=y.device) >= p
+    return y * keep.to(y.dtype) / (1.0 - p)
 
 
 def _rotate(x: torch.Tensor, rotary: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:

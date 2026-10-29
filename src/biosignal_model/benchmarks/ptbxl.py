@@ -55,6 +55,20 @@ TASKS = ("all", "diagnostic", "subdiagnostic", "superdiagnostic", "form", "rhyth
 TRAIN, VALIDATION, TEST = (1, 2, 3, 4, 5, 6, 7, 8), (9,), (10,)
 
 
+class FromScratchModel(BaseModel):
+    """The size and regularization of a from_scratch model (the global transformer; the
+    tokenizer's own sizes are in its settings): for small proxy models of the v3 bench."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    width: int
+    layers: int
+    heads: int
+    feed_forward: int
+    dropout: float
+    drop_path: float
+
+
 class PtbxlSettings(BaseModel):
     """Every setting of the benchmark; none has a default."""
 
@@ -127,6 +141,9 @@ class PtbxlSettings(BaseModel):
     # The tokenizer of from_scratch runs (docs/v3-tokenizer.md); None: the checkpoint's. Only for
     # from_scratch runs alone, like from_scratch_samples_per_token (the v3 tokenizer bench).
     from_scratch_tokenizer: Tokenizer | None
+    # The size and regularization of from_scratch models; None: the checkpoint's (proxy models
+    # of the v3 bench, user 2026-10-29: "small proxy models ... successive halving").
+    from_scratch_model: FromScratchModel | None
     seed: int
 
 
@@ -168,6 +185,16 @@ def labels(
     keep = np.array([bool(f) for f in per_record])
     y = np.array([[c in f for c in classes] for f in per_record], dtype=np.float32)
     return y, classes, keep
+
+
+def label_groups(classes: list[str], statements: list[dict[str, str]]) -> dict[str, np.ndarray]:
+    """The columns of each statement group among `classes` (task "all"): diagnostic, form and
+    rhythm, by the flags of scp_statements.csv (a statement can be in more than one)."""
+    by_code = {s[""]: s for s in statements}
+    return {
+        group: np.array([by_code.get(c, {}).get(group) in ("1", "1.0") for c in classes])
+        for group in ("diagnostic", "form", "rhythm")
+    }
 
 
 def macro_auc(y: np.ndarray, p: np.ndarray) -> tuple[float, int]:
@@ -431,13 +458,17 @@ def linear_probing(
 def end_to_end(
     config: ModelConfig, records: Records, y: np.ndarray, max_tokens: int, s: PtbxlSettings,
     device: torch.device, start: dict[str, torch.Tensor] | None, log: Log, prefix: str,
+    groups: dict[str, np.ndarray] | None = None,
 ) -> dict[str, float]:  # fmt: skip
     """The encoder and a linear head on its mean feature, every weight trained on folds 1-8
     (layer-dependent learning rates and crops: see PtbxlSettings); the epoch with the best
     macro-AUC on fold 9 is scored on fold 10 (at most `fine_tuning_patience` epochs after it are
     run). `start`: pretrained weights, or None.
     Logged under `prefix`: the training loss every LOG_EVERY_STEPS steps, and per epoch its
-    mean training loss, fold-9 macro-AUC, time and speed; fold 10 only for a chosen epoch."""
+    mean training loss, fold-9 macro-AUC, time and speed; fold 10 only for a chosen epoch.
+    `groups`: columns of label groups (label_groups), also scored on their own (macro-AUC over
+    the group's labels), on fold 9 each epoch and on fold 10 for a chosen epoch; fold 9 alone
+    (all labels) still chooses the epoch."""
     torch.manual_seed(s.seed)
     model = Encoder(config).to(device)
     if start is not None:
@@ -477,6 +508,7 @@ def end_to_end(
     rng_eval = random.Random(s.seed)  # noqa: S311 - not secret
     train_eval = sorted(rng_eval.sample(train, min(len(train), len(val))))
     best_val, best_test, best_epoch, labels_n = -1.0, 0.0, 0, 0
+    best_groups: dict[str, float] = {}
     step = 0
     for epoch in range(1, s.fine_tuning_epochs + 1):
         model.train()
@@ -514,16 +546,29 @@ def end_to_end(
             f"{prefix}/epoch_seconds": seconds,
             f"{prefix}/examples_per_s": len(train) / seconds,
         }
+        for name, columns in (groups or {}).items():
+            record[f"{prefix}/epoch_validation_macro_auc/{name}"] = macro_auc(
+                y[val][:, columns], p_val[:, columns]
+            )[0]
         if auc_val > best_val:  # fold 10 is scored for the epoch fold 9 chooses
             best_val, best_epoch = auc_val, epoch
-            best_test, labels_n = macro_auc(y[test], predict(test))
+            p_test = predict(test)
+            best_test, labels_n = macro_auc(y[test], p_test)
             record[f"{prefix}/chosen_epoch"] = float(epoch)
             record[f"{prefix}/chosen_test_macro_auc"] = best_test
+            best_groups = {
+                name: macro_auc(y[test][:, columns], p_test[:, columns])[0]
+                for name, columns in (groups or {}).items()
+            }
+            for name, value in best_groups.items():
+                record[f"{prefix}/chosen_test_macro_auc/{name}"] = value
         log(record)
         if s.fine_tuning_patience is not None and epoch - best_epoch >= s.fine_tuning_patience:
             break
     return {"macro_auc": best_test, "labels": float(labels_n), "epoch": float(best_epoch),
-            "validation_macro_auc": best_val, "epochs_run": float(epoch)}  # fmt: skip
+            "validation_macro_auc": best_val, "epochs_run": float(epoch)} | {
+        f"macro_auc_{name}": value for name, value in best_groups.items()
+    }  # fmt: skip
 
 
 @torch.no_grad()
@@ -636,6 +681,10 @@ def run(
         if settings.methods != ["from_scratch"] or settings.linear_probing:
             raise ValueError("from_scratch_tokenizer is only for from_scratch runs alone")
         config = replace(config, tokenizer=settings.from_scratch_tokenizer)
+    if settings.from_scratch_model is not None:
+        if settings.methods != ["from_scratch"] or settings.linear_probing:
+            raise ValueError("from_scratch_model is only for from_scratch runs alone")
+        config = replace(config, **settings.from_scratch_model.model_dump())
     records, statements = load(store, settings, log)
     features = {}
     if settings.linear_probing:
@@ -680,6 +729,7 @@ def run(
                 scores = end_to_end(
                     config, kept, y[keep], max_tokens, settings, device, starts[name], log,
                     f"{task}/{name}",
+                    groups=label_groups(classes, statements) if task == "all" else None,
                 )
             results |= {f"{task}/{name}/{k}": v for k, v in scores.items()}
             log({f"{task}/{name}/macro_auc": scores["macro_auc"]})

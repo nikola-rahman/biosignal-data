@@ -78,7 +78,7 @@ def test_the_probe_chooses_on_fold_9_and_scores_fold_10() -> None:
         evaluation_stride_fraction=1.0, evaluation_aggregate="mean", fine_tuning_slot_group="lower",
         fine_tuning_betas=(0.9, 0.999), fine_tuning_warmup_epochs=0.0,
         fine_tuning_schedule="constant", fine_tuning_grad_clip=None, fine_tuning_head="linear",
-        from_scratch_samples_per_token=None, from_scratch_tokenizer=None,
+        from_scratch_samples_per_token=None, from_scratch_tokenizer=None, from_scratch_model=None,
         seed=0,
     )  # fmt: skip
     logged: list[dict[str, float]] = []
@@ -94,7 +94,7 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model(monkeypatch: pytest.Monkey
     config = ModelConfig(
         samples_per_token=50, max_channels=4, width=32, layers=1, heads=4, feed_forward=64,
         min_wavelength_s=0.01, max_wavelength_s=1000.0, attention="dense",
-        tokenizer=SamplesTokenizer(kind="samples"),
+        tokenizer=SamplesTokenizer(kind="samples"), dropout=0.0, drop_path=0.0,
     )  # fmt: skip
     codes = [["NORM"], ["IMI"]] * 12
     records = _records(codes, [1] * 16 + [9] * 4 + [10] * 4)
@@ -111,7 +111,7 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model(monkeypatch: pytest.Monkey
         evaluation_stride_fraction=1.0, evaluation_aggregate="mean", fine_tuning_slot_group="lower",
         fine_tuning_betas=(0.9, 0.999), fine_tuning_warmup_epochs=0.0,
         fine_tuning_schedule="constant", fine_tuning_grad_clip=None, fine_tuning_head="linear",
-        from_scratch_samples_per_token=None, from_scratch_tokenizer=None,
+        from_scratch_samples_per_token=None, from_scratch_tokenizer=None, from_scratch_model=None,
         seed=0,
     )  # fmt: skip
     device = torch.device("cpu")
@@ -159,7 +159,7 @@ def test_layer_dependent_learning_rates_cover_every_weight_a_task_uses() -> None
     config = ModelConfig(
         samples_per_token=50, max_channels=4, width=32, layers=8, heads=4, feed_forward=64,
         min_wavelength_s=0.01, max_wavelength_s=1000.0, attention="dense",
-        tokenizer=SamplesTokenizer(kind="samples"),
+        tokenizer=SamplesTokenizer(kind="samples"), dropout=0.0, drop_path=0.0,
     )  # fmt: skip
     model, head = Encoder(config), torch.nn.Linear(32, 3)
     groups = ptbxl.parameter_groups(model, head, 1e-3, 0.1, 0.25, "lower")
@@ -205,7 +205,8 @@ def _settings_for_schedule(schedule: str) -> ptbxl.PtbxlSettings:
         fine_tuning_slot_group="head", fine_tuning_betas=(0.9, 0.95),
         fine_tuning_warmup_epochs=2.0, fine_tuning_schedule=schedule,  # type: ignore[arg-type]
         fine_tuning_grad_clip=1.0, fine_tuning_head="reference",
-        from_scratch_samples_per_token=None, from_scratch_tokenizer=None, seed=0,
+        from_scratch_samples_per_token=None, from_scratch_tokenizer=None, from_scratch_model=None,
+        seed=0,
     )  # fmt: skip
 
 
@@ -231,7 +232,7 @@ def _small() -> ModelConfig:
     return ModelConfig(
         samples_per_token=50, max_channels=4, width=32, layers=2, heads=4, feed_forward=64,
         min_wavelength_s=0.01, max_wavelength_s=1000.0, attention="dense",
-        tokenizer=SamplesTokenizer(kind="samples"),
+        tokenizer=SamplesTokenizer(kind="samples"), dropout=0.0, drop_path=0.0,
     )  # fmt: skip
 
 
@@ -317,3 +318,57 @@ def test_the_reference_xresnet1d101_has_the_papers_shape_schedule_and_crops() ->
     )
     assert 0.0 <= scores["macro_auc"] <= 1.0 and scores["epoch"] == 1.0
     assert [r["r/epoch"] for r in logged] == [1.0]
+
+
+def test_label_groups_are_scored_on_their_own_and_fold_9_still_chooses() -> None:
+    config = ModelConfig(
+        samples_per_token=50, max_channels=4, width=32, layers=1, heads=4, feed_forward=64,
+        min_wavelength_s=0.01, max_wavelength_s=1000.0, attention="dense",
+        tokenizer=SamplesTokenizer(kind="samples"), dropout=0.1, drop_path=0.1,
+    )  # fmt: skip
+    codes = [["NORM", "SR"], ["IMI", "LVOLT"], ["NORM", "LVOLT"], ["IMI", "SR"]] * 6
+    records = _records(codes, [1] * 16 + [9] * 4 + [10] * 4)
+    y, classes, _ = ptbxl.labels(records, STATEMENTS, "all")
+    groups = ptbxl.label_groups(classes, STATEMENTS)
+    assert {g: [c for c, k in zip(classes, m, strict=True) if k] for g, m in groups.items()} == {
+        "diagnostic": ["IMI", "NORM"], "form": ["LVOLT"], "rhythm": ["SR"]
+    }
+    settings = ptbxl.PtbxlSettings(
+        rate=100, tasks=["all"], rows=2, read_threads=1, workers=0,
+        linear_probing=False, fixed_slots=False, methods=["from_scratch"], reference=None,
+        linear_probing_l2=[1.0], linear_probing_steps=10,
+        fine_tuning_epochs=2, fine_tuning_patience=None, fine_tuning_learning_rate=1e-3,
+        fine_tuning_weight_decay=0.0, fine_tuning_examples_per_step=4,
+        fine_tuning_discriminative_factor=0.1, fine_tuning_lower_blocks_fraction=0.25,
+        fine_tuning_crop_s=2.5, evaluation_stride_fraction=1.0, evaluation_aggregate="mean",
+        fine_tuning_slot_group="lower", fine_tuning_betas=(0.9, 0.999),
+        fine_tuning_warmup_epochs=0.0, fine_tuning_schedule="constant",
+        fine_tuning_grad_clip=None, fine_tuning_head="linear",
+        from_scratch_samples_per_token=None, from_scratch_tokenizer=None, from_scratch_model=None,
+        seed=0,
+    )  # fmt: skip
+    logged: list[dict[str, float]] = []
+    scores = ptbxl.end_to_end(
+        config, records, y, 256, settings, torch.device("cpu"), None, logged.append, "f",
+        groups=groups,
+    )
+    epochs = [r for r in logged if "f/epoch" in r]
+    for g in groups:
+        assert all(0.0 <= r[f"f/epoch_validation_macro_auc/{g}"] <= 1.0 for r in epochs)
+        chosen = [r for r in epochs if f"f/chosen_test_macro_auc/{g}" in r]
+        assert chosen[-1][f"f/chosen_test_macro_auc/{g}"] == scores[f"macro_auc_{g}"]
+    best = max(epochs, key=lambda r: r["f/epoch_validation_macro_auc"])
+    assert scores["epoch"] == best["f/epoch"]  # all labels on fold 9 choose the epoch
+
+
+def test_drop_path_drops_whole_items_in_training_only() -> None:
+    from biosignal_model.model import _drop_path  # noqa: PLC0415
+
+    torch.manual_seed(0)
+    y = torch.ones(2000, 3, 5)
+    out = _drop_path(y, 0.25, training=True)
+    per_item = out.flatten(1)
+    assert set(per_item.unique().tolist()) <= {0.0, 1 / 0.75}
+    assert torch.equal(per_item.min(1).values, per_item.max(1).values)  # whole items
+    assert 0.2 < (per_item[:, 0] == 0).float().mean().item() < 0.3
+    assert torch.equal(_drop_path(y, 0.25, training=False), y)
