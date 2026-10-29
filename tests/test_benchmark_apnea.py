@@ -11,9 +11,10 @@ from biosignal_model.benchmarks import apnea  # noqa: E402
 from biosignal_model.model import Encoder, ModelConfig  # noqa: E402
 
 SETTINGS = apnea.ApneaSettings(
-    context_s=30.0, rows=4, probe_l2=[1e-3, 1e-1], probe_folds=2, probe_steps=50,
-    supervised_epochs=2, supervised_learning_rate=1e-3, supervised_weight_decay=0.0,
-    supervised_examples_per_step=4, seed=0,
+    context_s=30.0, rows=4,
+    linear_probing_l2=[1e-3, 1e-1], linear_probing_folds=2, linear_probing_steps=50,
+    fine_tuning_epochs=2, fine_tuning_learning_rate=1e-3, fine_tuning_weight_decay=0.0,
+    fine_tuning_examples_per_step=4, seed=0,
 )  # fmt: skip
 
 
@@ -62,10 +63,12 @@ def test_the_probe_finds_a_separable_feature() -> None:
     x[:, 3] += 4 * y  # one feature tells the classes apart
     groups = np.arange(400) // 50
     logged: list[dict[str, float]] = []
-    s = apnea.probe(x[:300], y[:300], groups[:300], x[300:], y[300:], SETTINGS, logged.append, "p")
-    assert [r["p/l2"] for r in logged] == SETTINGS.probe_l2  # every L2 tried is logged
+    s = apnea.linear_probing(
+        x[:300], y[:300], groups[:300], x[300:], y[300:], SETTINGS, logged.append, "p"
+    )
+    assert [r["p/l2"] for r in logged] == SETTINGS.linear_probing_l2  # every L2 tried is logged
     best = ((x[300:, 3] > 2) == (y[300:] == 1)).mean()  # the Bayes rule on these minutes
-    assert s["accuracy"] >= best - 0.03 and s["l2"] in SETTINGS.probe_l2
+    assert s["accuracy"] >= best - 0.03 and s["l2"] in SETTINGS.linear_probing_l2
 
 
 def test_the_benchmark_runs_end_to_end_on_a_small_model() -> None:
@@ -81,12 +84,12 @@ def test_the_benchmark_runs_end_to_end_on_a_small_model() -> None:
     features = apnea.embed(Encoder(config), learn, 512, SETTINGS.rows, device, logged.append, "e")
     assert features.shape == (8, 32) and np.isfinite(features).all()
     assert logged[-1]["embed/e/batches"] == logged[-1]["embed/e/of"]  # the last batch is logged
-    for start in (None, Encoder(config).state_dict()):  # supervised, and fine-tuning
+    for start in (None, Encoder(config).state_dict()):  # from scratch, and fine-tuning
         logged.clear()
         scores = apnea.end_to_end(
             config, learn, test, 512, SETTINGS, device, start, logged.append, "f"
         )
         assert set(scores) == {"accuracy", "sensitivity", "specificity", "auc"}
         epochs = [r for r in logged if "f/epoch" in r]
-        assert [r["f/epoch"] for r in epochs] == list(range(1, SETTINGS.supervised_epochs + 1))
+        assert [r["f/epoch"] for r in epochs] == list(range(1, SETTINGS.fine_tuning_epochs + 1))
         assert all(np.isfinite(r["f/epoch_train_loss"]) for r in epochs)

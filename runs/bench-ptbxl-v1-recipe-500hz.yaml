@@ -1,6 +1,6 @@
 # PTB-XL task "all" for the last checkpoint (step 330,000) of v1-pretrain, with the same
 # settings as for v0-rtx6000-c2 (bench-ptbxl-c2-recipe*.yaml), fine-tuning only (the
-# supervised baseline does not depend on the checkpoint). The fine-tuning recipe
+# from-scratch baseline does not depend on the checkpoint). The fine-tuning recipe
 # of the ECG foundation model benchmark (arXiv 2509.25095, section 3.3, and its code
 # github.com/AI4HealthUOL/ecg-fm-benchmarking: run.sh, main_lite.py, fm_ecg.py):
 # - AdamW, head learning rate 1e-3, weight decay 1e-3, constant schedule, 100 epochs,
@@ -19,18 +19,18 @@ settings:
   rows: 8
   read_threads: 32
   workers: 6                  # data loader processes that crop and pack batches
-  methods: [finetune]
-  probes: false
-  probe_l2: [1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]
-  probe_steps: 100
-  finetune_epochs: 100
-  finetune_patience: null
-  finetune_learning_rate: 1.0e-3
-  finetune_weight_decay: 1.0e-3
-  finetune_examples_per_step: 64
-  finetune_discriminative_factor: 0.1
-  finetune_lower_blocks_fraction: 0.25
-  finetune_crop_s: 2.5
+  methods: [fine_tuning]
+  linear_probing: false
+  linear_probing_l2: [1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]
+  linear_probing_steps: 100
+  fine_tuning_epochs: 100
+  fine_tuning_patience: null
+  fine_tuning_learning_rate: 1.0e-3
+  fine_tuning_weight_decay: 1.0e-3
+  fine_tuning_examples_per_step: 64
+  fine_tuning_discriminative_factor: 0.1
+  fine_tuning_lower_blocks_fraction: 0.25
+  fine_tuning_crop_s: 2.5
   seed: 0
 wandb_project: biosignal-fm
 wandb_entity: schnyox-s

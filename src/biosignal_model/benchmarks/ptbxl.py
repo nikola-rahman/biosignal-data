@@ -15,12 +15,13 @@ two folds): 1-8 train, 9 validation, 10 test. Metric: macro-AUC on fold 10, over
 with both classes there. The paper's main tables use the 100 Hz records (`rate: 100`);
 `rate: 500` uses the original 500 Hz records, a different input from the published one.
 
-For one checkpoint and each task: `finetune` (the pretrained encoder and a linear head,
+For one checkpoint and each task: `fine_tuning` (the pretrained encoder and a linear head,
 every weight trained on folds 1-8 with layer-dependent learning rates, the epoch chosen on
-fold 9; the recipe of arXiv 2509.25095 when its settings are used), `supervised` (the same
-from random weights, one learning rate), and `probe` / `random` (a logistic regression per
-label on the frozen encoder's mean feature, its L2 chosen on fold 9). Folds 9 and 10 are held out of
-pretraining (index.yaml).
+fold 9; the recipe of arXiv 2509.25095 when its settings are used), `from_scratch` (the same
+from random weights, one learning rate), and `linear_probing` / `linear_probing_random` (a
+logistic regression per label on the mean feature of the frozen encoder, pretrained or from
+random weights, its L2 chosen on fold 9). Folds 9 and 10 are held out of pretraining
+(index.yaml).
 """
 
 from __future__ import annotations
@@ -62,31 +63,31 @@ class PtbxlSettings(BaseModel):
     rows: int  # rows of the model's max_tokens in one batch, at most
     read_threads: int  # requests to the store at the same time
     workers: int  # data loader processes that crop and pack batches; 0: the main process
-    probes: bool  # also the linear probes on the frozen encoder (pretrained and random)
-    # finetune: the pretrained encoder and a head; supervised: the same from random weights
-    methods: list[Literal["finetune", "supervised"]]
-    probe_l2: list[float]
-    probe_steps: int
-    finetune_epochs: int  # the best epoch on fold 9 is the one scored
+    linear_probing: bool  # also linear probing of the frozen encoder (pretrained and random)
+    # fine_tuning: the pretrained encoder and a head; from_scratch: the same from random weights
+    methods: list[Literal["fine_tuning", "from_scratch"]]
+    linear_probing_l2: list[float]
+    linear_probing_steps: int
+    fine_tuning_epochs: int  # the best epoch on fold 9 is the one scored
     # Stop after this many epochs without a better fold-9 macro-AUC (None: all epochs). The
     # epochs after a stop cannot be chosen; on "all" the chosen epoch was 15-19 of 100 and
     # the AUC fell after it (v1 and v2, 2026-10-28/29; 25 asked for by the user).
-    finetune_patience: int | None
-    finetune_learning_rate: float  # of the head; the encoder's parts get lower ones
-    finetune_weight_decay: float
-    finetune_examples_per_step: int
+    fine_tuning_patience: int | None
+    fine_tuning_learning_rate: float  # of the head; the encoder's parts get lower ones
+    fine_tuning_weight_decay: float
+    fine_tuning_examples_per_step: int
     # Layer-dependent learning rates, as the ECG foundation model benchmark (arXiv 2509.25095,
     # section 3.3; github.com/AI4HealthUOL/ecg-fm-benchmarking, fm_ecg.py get_params): the
     # encoder's upper part trains at the head's rate x factor, its lower part (the input
     # embedding and the first blocks) at x factor^2.
     # Training from random weights uses one rate for all (their template_model.py).
-    finetune_discriminative_factor: float
-    finetune_lower_blocks_fraction: float  # of the blocks in the lower part (ECG-JEPA: 3/12)
+    fine_tuning_discriminative_factor: float
+    fine_tuning_lower_blocks_fraction: float  # of the blocks in the lower part (ECG-JEPA: 3/12)
     # Each training example is a random crop of this length, drawn again every epoch; a
     # validation or test record is scored as the mean probability of its non-overlapping
     # crops (their main_lite.py: input-size, stride-fraction-valtest 1, aggregate by mean).
     # None: the whole record.
-    finetune_crop_s: float | None
+    fine_tuning_crop_s: float | None
     seed: int
 
 
@@ -310,7 +311,7 @@ def _fit(x: torch.Tensor, y: torch.Tensor, l2: float, steps: int) -> torch.Tenso
     return w.detach()
 
 
-def probe(
+def linear_probing(
     features: np.ndarray, y: np.ndarray, folds: np.ndarray, s: PtbxlSettings, log: Log,
     prefix: str,
 ) -> dict[str, float]:  # fmt: skip
@@ -320,14 +321,14 @@ def probe(
     mean, std = features[train].mean(0), features[train].std(0) + 1e-8
     x = torch.from_numpy((features - mean) / std).double()
     yt = torch.from_numpy(y).double()
-    best, best_auc = s.probe_l2[0], -1.0
-    for l2 in s.probe_l2:
-        w = _fit(x[train], yt[train], l2, s.probe_steps)
+    best, best_auc = s.linear_probing_l2[0], -1.0
+    for l2 in s.linear_probing_l2:
+        w = _fit(x[train], yt[train], l2, s.linear_probing_steps)
         auc, _ = macro_auc(y[val], (x[val] @ w[:-1] + w[-1]).numpy())
         log({f"{prefix}/l2": l2, f"{prefix}/validation_macro_auc": auc})
         if auc > best_auc:
             best, best_auc = l2, auc
-    w = _fit(x[train], yt[train], best, s.probe_steps)
+    w = _fit(x[train], yt[train], best, s.linear_probing_steps)
     auc, n = macro_auc(y[test], (x[test] @ w[:-1] + w[-1]).numpy())
     return {"macro_auc": auc, "labels": float(n), "l2": best, "validation_macro_auc": best_auc}
 
@@ -338,7 +339,7 @@ def end_to_end(
 ) -> dict[str, float]:  # fmt: skip
     """The encoder and a linear head on its mean feature, every weight trained on folds 1-8
     (layer-dependent learning rates and crops: see PtbxlSettings); the epoch with the best
-    macro-AUC on fold 9 is scored on fold 10 (at most `finetune_patience` epochs after it are
+    macro-AUC on fold 9 is scored on fold 10 (at most `fine_tuning_patience` epochs after it are
     run). `start`: pretrained weights, or None.
     Logged under `prefix`: the training loss every LOG_EVERY_STEPS steps, and per epoch its
     mean training loss, fold-9 macro-AUC, time and speed; fold 10 only for a chosen epoch."""
@@ -347,21 +348,21 @@ def end_to_end(
     if start is not None:
         model.load_state_dict(start)
     head = torch.nn.Linear(config.width, y.shape[1]).to(device)
-    factor = s.finetune_discriminative_factor if start is not None else 1.0
-    groups = parameter_groups(model, head, s.finetune_learning_rate, factor,
-                              s.finetune_lower_blocks_fraction)  # fmt: skip
-    optimizer = torch.optim.AdamW(groups, weight_decay=s.finetune_weight_decay)
+    factor = s.fine_tuning_discriminative_factor if start is not None else 1.0
+    groups = parameter_groups(model, head, s.fine_tuning_learning_rate, factor,
+                              s.fine_tuning_lower_blocks_fraction)  # fmt: skip
+    optimizer = torch.optim.AdamW(groups, weight_decay=s.fine_tuning_weight_decay)
     packer = _packer(config, max_tokens, s.rows)
     train = [i for i in range(len(records.ids)) if records.folds[i] in TRAIN]
     rng = random.Random(s.seed)  # noqa: S311 - not secret
 
     def predict(indices: list[int]) -> np.ndarray:
         examples = [records.examples[i] for i in indices]
-        return _predict(model, head, examples, s.finetune_crop_s, packer, s.rows, device,
+        return _predict(model, head, examples, s.fine_tuning_crop_s, packer, s.rows, device,
                         s.workers, f"{s.seed}/predict")  # fmt: skip
 
     def crop(example: Example, rng: random.Random) -> Example:
-        return _random_crop(example, s.finetune_crop_s, rng)
+        return _random_crop(example, s.fine_tuning_crop_s, rng)
 
     val = [i for i in range(len(records.ids)) if records.folds[i] in VALIDATION]
     test = [i for i in range(len(records.ids)) if records.folds[i] in TEST]
@@ -371,11 +372,11 @@ def end_to_end(
     train_eval = sorted(rng_eval.sample(train, min(len(train), len(val))))
     best_val, best_test, best_epoch, labels_n = -1.0, 0.0, 0, 0
     step = 0
-    for epoch in range(1, s.finetune_epochs + 1):
+    for epoch in range(1, s.fine_tuning_epochs + 1):
         model.train()
         rng.shuffle(train)
         started, losses, window = time.monotonic(), [], []
-        n = s.finetune_examples_per_step
+        n = s.fine_tuning_examples_per_step
         steps = [train[k : k + n] for k in range(0, len(train), n)]
         batches = _packed(records.examples, steps, crop, packer, f"{s.seed}/{epoch}", s.workers)
         for ids, (batch, where) in zip(steps, batches, strict=True):
@@ -410,7 +411,7 @@ def end_to_end(
             record[f"{prefix}/chosen_epoch"] = float(epoch)
             record[f"{prefix}/chosen_test_macro_auc"] = best_test
         log(record)
-        if s.finetune_patience is not None and epoch - best_epoch >= s.finetune_patience:
+        if s.fine_tuning_patience is not None and epoch - best_epoch >= s.fine_tuning_patience:
             break
     return {"macro_auc": best_test, "labels": float(labels_n), "epoch": float(best_epoch),
             "validation_macro_auc": best_val, "epochs_run": float(epoch)}  # fmt: skip
@@ -511,13 +512,15 @@ def run(
     torch.manual_seed(settings.seed)
     untrained = Encoder(config).to(device)
     features = {}
-    if settings.probes:
+    if settings.linear_probing:
         features = {
-            "probe": embed(
-                pretrained, records.examples, max_tokens, settings.rows, device, log, "probe"
+            "linear_probing": embed(
+                pretrained, records.examples, max_tokens, settings.rows, device, log,
+                "linear_probing",
             ),
-            "random": embed(
-                untrained, records.examples, max_tokens, settings.rows, device, log, "random"
+            "linear_probing_random": embed(
+                untrained, records.examples, max_tokens, settings.rows, device, log,
+                "linear_probing_random",
             ),
         }
     results: dict[str, float] = {
@@ -534,10 +537,12 @@ def run(
         results[f"{task}/classes"] = float(len(classes))
         results[f"{task}/records"] = float(keep.sum())
         for name, f in features.items():
-            scores = probe(f[keep], y[keep], records.folds[keep], settings, log, f"{task}/{name}")
+            scores = linear_probing(
+                f[keep], y[keep], records.folds[keep], settings, log, f"{task}/{name}"
+            )
             results |= {f"{task}/{name}/{k}": v for k, v in scores.items()}
             log({f"{task}/{name}/macro_auc": scores["macro_auc"]})
-        starts = {"finetune": checkpoint["model"], "supervised": None}
+        starts = {"fine_tuning": checkpoint["model"], "from_scratch": None}
         for name in settings.methods:
             start = starts[name]
             scores = end_to_end(

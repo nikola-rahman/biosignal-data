@@ -66,16 +66,16 @@ def test_the_probe_chooses_on_fold_9_and_scores_fold_10() -> None:
     features[:, 0] += 3 * y[:, 0]
     features[:, 1] += 3 * y[:, 1]
     settings = ptbxl.PtbxlSettings(
-        rate=100, tasks=["all"], rows=2, read_threads=1, workers=0, probes=True,
-        methods=["finetune", "supervised"],
-        probe_l2=[1e-3, 1.0], probe_steps=50,
-        finetune_epochs=1, finetune_patience=None, finetune_learning_rate=1e-3,
-        finetune_weight_decay=0.0,
-        finetune_examples_per_step=8, finetune_discriminative_factor=0.1,
-        finetune_lower_blocks_fraction=0.25, finetune_crop_s=None, seed=0,
+        rate=100, tasks=["all"], rows=2, read_threads=1, workers=0, linear_probing=True,
+        methods=["fine_tuning", "from_scratch"],
+        linear_probing_l2=[1e-3, 1.0], linear_probing_steps=50,
+        fine_tuning_epochs=1, fine_tuning_patience=None, fine_tuning_learning_rate=1e-3,
+        fine_tuning_weight_decay=0.0,
+        fine_tuning_examples_per_step=8, fine_tuning_discriminative_factor=0.1,
+        fine_tuning_lower_blocks_fraction=0.25, fine_tuning_crop_s=None, seed=0,
     )  # fmt: skip
     logged: list[dict[str, float]] = []
-    scores = ptbxl.probe(features, y, folds, settings, logged.append, "p")
+    scores = ptbxl.linear_probing(features, y, folds, settings, logged.append, "p")
     assert scores["macro_auc"] > 0.95 and scores["labels"] == 2 and scores["l2"] in (1e-3, 1.0)
     assert [r["p/l2"] for r in logged] == [1e-3, 1.0]  # every L2 tried, with its fold-9 AUC
     assert max(r["p/validation_macro_auc"] for r in logged) == scores["validation_macro_auc"]
@@ -90,13 +90,13 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model(monkeypatch: pytest.Monkey
     records = _records(codes, [1] * 16 + [9] * 4 + [10] * 4)
     y, _, _ = ptbxl.labels(records, STATEMENTS, "diagnostic")
     settings = ptbxl.PtbxlSettings(
-        rate=100, tasks=["diagnostic"], rows=2, read_threads=1, workers=0, probes=True,
-        methods=["finetune", "supervised"],
-        probe_l2=[1.0], probe_steps=10,
-        finetune_epochs=2, finetune_patience=None, finetune_learning_rate=1e-3,
-        finetune_weight_decay=0.0,
-        finetune_examples_per_step=4, finetune_discriminative_factor=0.1,
-        finetune_lower_blocks_fraction=0.25, finetune_crop_s=2.5, seed=0,
+        rate=100, tasks=["diagnostic"], rows=2, read_threads=1, workers=0, linear_probing=True,
+        methods=["fine_tuning", "from_scratch"],
+        linear_probing_l2=[1.0], linear_probing_steps=10,
+        fine_tuning_epochs=2, fine_tuning_patience=None, fine_tuning_learning_rate=1e-3,
+        fine_tuning_weight_decay=0.0,
+        fine_tuning_examples_per_step=4, fine_tuning_discriminative_factor=0.1,
+        fine_tuning_lower_blocks_fraction=0.25, fine_tuning_crop_s=2.5, seed=0,
     )  # fmt: skip
     device = torch.device("cpu")
     logged: list[dict[str, float]] = []
@@ -114,7 +114,7 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model(monkeypatch: pytest.Monkey
     # With patience 2, the run stops 2 epochs after its best fold-9 epoch (epoch 1 here).
     aucs = [0.6, 0.5, 0.5, 0.5]  # fold 9 of epoch 1, fold 10 of epoch 1, fold 9 of 2 and 3
     monkeypatch.setattr(ptbxl, "macro_auc", lambda y, p: (aucs.pop(0), 1))
-    patient = settings.model_copy(update={"finetune_epochs": 6, "finetune_patience": 2})
+    patient = settings.model_copy(update={"fine_tuning_epochs": 6, "fine_tuning_patience": 2})
     logged.clear()
     scores = ptbxl.end_to_end(config, records, y, 256, patient, device, None, logged.append, "f")
     assert scores["epochs_run"] == 3.0 and scores["epoch"] == 1.0 and scores["macro_auc"] == 0.5

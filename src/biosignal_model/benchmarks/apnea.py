@@ -6,12 +6,13 @@ c01-c10, the test set x01-x35. The test records are held out of pretraining (ind
 
 What is measured, for one checkpoint:
 
-- `finetune`, the main result, the one to compare with published results: the pretrained
+- `fine_tuning`, the main result, the one to compare with published results: the pretrained
   encoder and a linear head, every weight trained end to end on the learning set with the
   labels (binary cross-entropy), scored once on the test set. The published methods are
   trained on the labels too.
-- `supervised`: the same, from random weights: what pretraining adds to the same model.
-- `probe` and `random`, a diagnostic: the encoder frozen (pretrained, or random weights).
+- `from_scratch`: the same, from random weights: what pretraining adds to the same model.
+- `linear_probing` and `linear_probing_random`, a diagnostic: the encoder frozen (pretrained,
+  or random weights).
   Each labelled minute, with `context_s` of ECG before and after it (less at the ends of
   a record), goes through the same token encoding as in pretraining, nothing hidden; its
   embedding is the mean of the encoder's features over the tokens of the minute itself. A
@@ -62,14 +63,14 @@ class ApneaSettings(BaseModel):
 
     context_s: float  # ECG before and after the labelled minute
     rows: int  # rows of the model's max_tokens in one batch
-    probe_l2: list[float]  # the L2 strengths the cross-validation chooses from
-    probe_folds: int
-    probe_steps: int  # LBFGS steps of one logistic regression
-    # Fine-tuning and supervised from zero use the same training settings.
-    supervised_epochs: int
-    supervised_learning_rate: float
-    supervised_weight_decay: float
-    supervised_examples_per_step: int
+    linear_probing_l2: list[float]  # the L2 strengths the cross-validation chooses from
+    linear_probing_folds: int
+    linear_probing_steps: int  # LBFGS steps of one logistic regression
+    # Fine-tuning and from scratch use the same training settings.
+    fine_tuning_epochs: int
+    fine_tuning_learning_rate: float
+    fine_tuning_weight_decay: float
+    fine_tuning_examples_per_step: int
     seed: int
 
 
@@ -213,7 +214,7 @@ def _scores(labels: np.ndarray, p: np.ndarray) -> dict[str, float]:
     }
 
 
-def probe(
+def linear_probing(
     learn: np.ndarray, learn_labels: np.ndarray, groups: np.ndarray,
     test: np.ndarray, test_labels: np.ndarray, s: ApneaSettings, log: Log, prefix: str,
 ) -> dict[str, float]:  # fmt: skip
@@ -226,19 +227,19 @@ def probe(
     yl = torch.from_numpy(learn_labels).double()
     records = [int(r) for r in np.unique(groups)]
     random.Random(s.seed).shuffle(records)  # noqa: S311 - not secret
-    folds = [set(records[k :: s.probe_folds]) for k in range(s.probe_folds)]
-    best, best_accuracy = s.probe_l2[0], -1.0
-    for l2 in s.probe_l2:
+    folds = [set(records[k :: s.linear_probing_folds]) for k in range(s.linear_probing_folds)]
+    best, best_accuracy = s.linear_probing_l2[0], -1.0
+    for l2 in s.linear_probing_l2:
         correct = 0
         for fold in folds:
             held = np.isin(groups, list(fold))
-            w = _fit_logistic(xl[~held], yl[~held], l2, s.probe_steps)
+            w = _fit_logistic(xl[~held], yl[~held], l2, s.linear_probing_steps)
             p = torch.sigmoid(xl[held] @ w[:-1] + w[-1]).numpy()
             correct += int(((p >= 0.5) == (learn_labels[held] == 1)).sum())
         log({f"{prefix}/l2": l2, f"{prefix}/cv_accuracy": correct / len(learn_labels)})
         if correct / len(learn_labels) > best_accuracy:
             best, best_accuracy = l2, correct / len(learn_labels)
-    w = _fit_logistic(xl, yl, best, s.probe_steps)
+    w = _fit_logistic(xl, yl, best, s.linear_probing_steps)
     p = torch.sigmoid(xt @ w[:-1] + w[-1]).numpy()
     return _scores(test_labels, p) | {"l2": best, "cv_accuracy": best_accuracy}
 
@@ -250,7 +251,7 @@ def end_to_end(
 ) -> dict[str, float]:  # fmt: skip
     """The encoder and a linear head, every weight trained on the learning set with the
     labels, scored once on the test set. `start`: the pretrained weights (fine-tuning),
-    or None for random weights (supervised from zero); the rest is the same. Logged under
+    or None for random weights (from scratch); the rest is the same. Logged under
     `prefix`: the training loss every LOG_EVERY_STEPS steps, and per epoch its mean, time
     and speed (the protocol has no validation set)."""
     torch.manual_seed(s.seed)
@@ -260,18 +261,18 @@ def end_to_end(
     head = torch.nn.Linear(config.width, 1).to(device)
     parameters = [*model.parameters(), *head.parameters()]
     optimizer = torch.optim.AdamW(
-        parameters, lr=s.supervised_learning_rate, weight_decay=s.supervised_weight_decay
+        parameters, lr=s.fine_tuning_learning_rate, weight_decay=s.fine_tuning_weight_decay
     )
     packer = _packer(config, max_tokens, s.rows)
     order = list(range(len(learn.examples)))
     rng = random.Random(s.seed)  # noqa: S311 - not secret
     step = 0
-    for epoch in range(1, s.supervised_epochs + 1):
+    for epoch in range(1, s.fine_tuning_epochs + 1):
         model.train()
         rng.shuffle(order)
         started, losses, window = time.monotonic(), [], []
-        for k in range(0, len(order), s.supervised_examples_per_step):
-            ids = order[k : k + s.supervised_examples_per_step]
+        for k in range(0, len(order), s.fine_tuning_examples_per_step):
+            ids = order[k : k + s.fine_tuning_examples_per_step]
             pooled = _pooled(model, learn, ids, packer, device)
             logits = head(pooled).squeeze(-1)
             y = torch.from_numpy(learn.labels[ids]).float().to(device)
@@ -323,8 +324,8 @@ def run(
     pretrained.load_state_dict(checkpoint["model"])
     torch.manual_seed(settings.seed)
     untrained = Encoder(config).to(device)
-    for name, model in (("probe", pretrained), ("random", untrained)):
-        scores = probe(
+    for name, model in (("linear_probing", pretrained), ("linear_probing_random", untrained)):
+        scores = linear_probing(
             embed(model, learn, max_tokens, settings.rows, device, log, f"{name}/learning"),
             learn.labels, learn.record_of,
             embed(model, test, max_tokens, settings.rows, device, log, f"{name}/test"),
@@ -332,7 +333,7 @@ def run(
         )  # fmt: skip
         results |= {f"{name}/{k}": v for k, v in scores.items()}
         log({f"{name}/auc": scores["auc"]})
-    for name, start in (("finetune", checkpoint["model"]), ("supervised", None)):
+    for name, start in (("fine_tuning", checkpoint["model"]), ("from_scratch", None)):
         scores = end_to_end(config, learn, test, max_tokens, settings, device, start, log, name)
         results |= {f"{name}/{k}": v for k, v in scores.items()}
         log({f"{name}/auc": scores["auc"]})

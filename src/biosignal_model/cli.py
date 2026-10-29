@@ -62,7 +62,7 @@ def benchmark(
         Path | None, typer.Option(help="biosignal-data.yaml, for the S3 settings.")
     ] = None,
 ) -> None:
-    """Score a checkpoint: a linear probe on the frozen encoder, the same with random
+    """Score a checkpoint: linear probing of the frozen encoder, the same with random
     weights, and the same architecture trained from zero. Results go to Weights & Biases
     (no artifacts) and to the store, next to the checkpoint."""
     import io  # noqa: PLC0415

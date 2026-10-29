@@ -52,9 +52,9 @@ For one checkpoint it reports:
 
 | Name | What | What it answers |
 |---|---|---|
-| `finetune` | the pretrained encoder and a head, every weight trained on the labels | the comparison with published results, which also train every weight |
-| `supervised` | the same, from random weights | what pretraining adds to the same model |
-| `probe`, `random` | a linear probe on the frozen encoder, pretrained or random | a diagnostic: did pretraining learn anything a task can use |
+| `fine_tuning` | the pretrained encoder and a head, every weight trained on the labels | the comparison with published results, which also train every weight |
+| `from_scratch` | the same, from random weights | what pretraining adds to the same model |
+| `linear_probing`, `linear_probing_random` | a linear probe on the frozen encoder, pretrained or random | a diagnostic: did pretraining learn anything a task can use |
 
 **apnea**: PhysioNet apnea-ecg, a label (apnea or not) for each minute of one ECG lead at
 100 Hz; learning set a01-a20, b01-b05, c01-c10, test set x01-x35 (PhysioNet/CinC
