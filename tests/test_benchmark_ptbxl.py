@@ -73,7 +73,11 @@ def test_the_probe_chooses_on_fold_9_and_scores_fold_10() -> None:
         fine_tuning_epochs=1, fine_tuning_patience=None, fine_tuning_learning_rate=1e-3,
         fine_tuning_weight_decay=0.0,
         fine_tuning_examples_per_step=8, fine_tuning_discriminative_factor=0.1,
-        fine_tuning_lower_blocks_fraction=0.25, fine_tuning_crop_s=None, seed=0,
+        fine_tuning_lower_blocks_fraction=0.25, fine_tuning_crop_s=None,
+        evaluation_stride_fraction=1.0, evaluation_aggregate="mean", fine_tuning_slot_group="lower",
+        fine_tuning_betas=(0.9, 0.999), fine_tuning_warmup_epochs=0.0,
+        fine_tuning_schedule="constant", fine_tuning_grad_clip=None, fine_tuning_head="linear",
+        seed=0,
     )  # fmt: skip
     logged: list[dict[str, float]] = []
     scores = ptbxl.linear_probing(
@@ -100,7 +104,11 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model(monkeypatch: pytest.Monkey
         fine_tuning_epochs=2, fine_tuning_patience=None, fine_tuning_learning_rate=1e-3,
         fine_tuning_weight_decay=0.0,
         fine_tuning_examples_per_step=4, fine_tuning_discriminative_factor=0.1,
-        fine_tuning_lower_blocks_fraction=0.25, fine_tuning_crop_s=2.5, seed=0,
+        fine_tuning_lower_blocks_fraction=0.25, fine_tuning_crop_s=2.5,
+        evaluation_stride_fraction=1.0, evaluation_aggregate="mean", fine_tuning_slot_group="lower",
+        fine_tuning_betas=(0.9, 0.999), fine_tuning_warmup_epochs=0.0,
+        fine_tuning_schedule="constant", fine_tuning_grad_clip=None, fine_tuning_head="linear",
+        seed=0,
     )  # fmt: skip
     device = torch.device("cpu")
     logged: list[dict[str, float]] = []
@@ -124,6 +132,17 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model(monkeypatch: pytest.Monkey
     assert scores["epochs_run"] == 3.0 and scores["epoch"] == 1.0 and scores["macro_auc"] == 0.5
     assert [r["f/epoch"] for r in logged if "f/epoch" in r] == [1.0, 2.0, 3.0] and aucs == []
     monkeypatch.undo()
+    # Every option of the 2026-10-29 tests together: they run and give finite scores.
+    options = settings.model_copy(update={
+        "fixed_slots": True, "fine_tuning_slot_group": "head", "evaluation_stride_fraction": 0.5,
+        "evaluation_aggregate": "max", "fine_tuning_betas": (0.9, 0.95),
+        "fine_tuning_warmup_epochs": 0.5, "fine_tuning_schedule": "cosine",
+        "fine_tuning_grad_clip": 1.0, "fine_tuning_head": "reference",
+    })  # fmt: skip
+    logged.clear()
+    scores = ptbxl.end_to_end(config, records, y, 256, options, device, None, logged.append, "o")
+    assert 0.0 <= scores["macro_auc"] <= 1.0 and scores["epochs_run"] == 2.0
+    assert all(np.isfinite(r["o/epoch_train_loss"]) for r in logged if "o/epoch" in r)
     logged.clear()
     features = ptbxl.embed(
         Encoder(config), records.examples, 256, 2, device, logged.append, "e", None
@@ -138,7 +157,7 @@ def test_layer_dependent_learning_rates_cover_every_weight_a_task_uses() -> None
         min_wavelength_s=0.01, max_wavelength_s=1000.0, attention="dense",
     )  # fmt: skip
     model, head = Encoder(config), torch.nn.Linear(32, 3)
-    groups = ptbxl.parameter_groups(model, head, 1e-3, 0.1, 0.25)
+    groups = ptbxl.parameter_groups(model, head, 1e-3, 0.1, 0.25, "lower")
     assert [g["lr"] for g in groups] == pytest.approx([1e-3, 1e-4, 1e-5])
     ids = [{id(p) for p in g["params"]} for g in groups]
     used = {id(p) for p in head.parameters()} | {
@@ -147,11 +166,46 @@ def test_layer_dependent_learning_rates_cover_every_weight_a_task_uses() -> None
     assert set.union(*ids) == used and sum(map(len, ids)) == len(used)  # each once
     lower = {id(p) for b in model.blocks[:2] for p in b.parameters()} | {id(model.hidden)}
     assert lower <= ids[2] and not lower & ids[1]  # 2 of 8 blocks, with the embedding
+    assert {id(p) for p in model.slot.parameters()} <= ids[2]
+    moved = ptbxl.parameter_groups(model, head, 1e-3, 0.1, 0.25, "head")
+    slot = {id(p) for p in model.slot.parameters()}
+    assert slot <= {id(p) for p in moved[0]["params"]}
+    assert not slot & {id(p) for p in moved[2]["params"]}
+
+
+def test_half_overlapping_crops_as_strodthoff() -> None:
+    example = _records([["NORM"]], [1]).examples[0]  # 10 s at 100 Hz
+    crops = ptbxl._crops(example, 2.5, 0.5)  # stride_length_valid = input_size // 2
+    assert len(crops) == 7 and all(len(s.values) == 250 for c in crops for s in c.signals)
+    np.testing.assert_array_equal(crops[1].signals[0].values, example.signals[0].values[125:375])
+
+
+def test_the_schedule_warms_up_then_decays_to_zero() -> None:
+    s = _settings_for_schedule("cosine")
+    f = ptbxl._schedule(s, steps_per_epoch=10)  # 2 warmup epochs, 10 epochs
+    assert f(0) == pytest.approx(0.05) and f(19) == pytest.approx(1.0)
+    assert f(20) == pytest.approx(1.0) and f(99) < 0.01 and f(60) == pytest.approx(0.5)
+    assert ptbxl._schedule(_settings_for_schedule("constant"), 10)(99) == 1.0
+
+
+def _settings_for_schedule(schedule: str) -> ptbxl.PtbxlSettings:
+    return ptbxl.PtbxlSettings(
+        rate=100, tasks=["all"], rows=2, read_threads=1, workers=0, linear_probing=False,
+        fixed_slots=False, methods=["fine_tuning"], reference=None,
+        linear_probing_l2=[1.0], linear_probing_steps=1,
+        fine_tuning_epochs=10, fine_tuning_patience=None, fine_tuning_learning_rate=1e-3,
+        fine_tuning_weight_decay=0.0, fine_tuning_examples_per_step=4,
+        fine_tuning_discriminative_factor=0.1, fine_tuning_lower_blocks_fraction=0.25,
+        fine_tuning_crop_s=2.5, evaluation_stride_fraction=0.5, evaluation_aggregate="max",
+        fine_tuning_slot_group="head", fine_tuning_betas=(0.9, 0.95),
+        fine_tuning_warmup_epochs=2.0, fine_tuning_schedule=schedule,  # type: ignore[arg-type]
+        fine_tuning_grad_clip=1.0, fine_tuning_head="reference", seed=0,
+    )  # fmt: skip
 
 
 def test_crops_cover_a_record_without_overlap() -> None:
     example = _records([["NORM"]], [1]).examples[0]  # 10 s at 100 Hz
-    crops = ptbxl._crops(example, 2.5)
+    crops = ptbxl._crops(example, 2.5, 1.0)
     assert len(crops) == 4 and all(len(s.values) == 250 for c in crops for s in c.signals)
     np.testing.assert_array_equal(
         np.concatenate([c.signals[0].values for c in crops]), example.signals[0].values

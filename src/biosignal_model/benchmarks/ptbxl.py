@@ -29,6 +29,7 @@ from __future__ import annotations
 import ast
 import csv
 import io
+import math
 import random
 import time
 from collections.abc import Callable, Iterable
@@ -96,6 +97,29 @@ class PtbxlSettings(BaseModel):
     # crops (their main_lite.py: input-size, stride-fraction-valtest 1, aggregate by mean).
     # None: the whole record.
     fine_tuning_crop_s: float | None
+    # Validation and test records: crops every `evaluation_stride_fraction` x the crop length
+    # (1.0: no overlap, as arXiv 2509.25095; 0.5: Strodthoff et al. 2021, stride_length_valid =
+    # input_size // 2), and their probabilities joined by mean (2509.25095) or max (Strodthoff,
+    # aggregate_fn "max").
+    evaluation_stride_fraction: float
+    evaluation_aggregate: Literal["mean", "max"]
+    # Where the channel slot embedding trains: "lower" (the input embedding's group, lr x
+    # factor^2; pretraining taught it only "same channel") or "head" (at the head's rate, so
+    # fixed slots can learn the leads; user, 2026-10-29).
+    fine_tuning_slot_group: Literal["lower", "head"]
+    # The optimizer: AdamW with these betas, linear warmup over `fine_tuning_warmup_epochs`,
+    # then a constant rate or a cosine decay to 0 at fine_tuning_epochs; gradients clipped to
+    # this norm (None: not clipped). Pretraining used beta2 0.95, warmup and clip 1.0; the
+    # recipe of 2509.25095 is constant, without warmup or clipping.
+    fine_tuning_betas: tuple[float, float]
+    fine_tuning_warmup_epochs: float
+    fine_tuning_schedule: Literal["constant", "cosine"]
+    fine_tuning_grad_clip: float | None
+    # "linear": a linear head on the mean feature. "reference": the xresnet1d101 head of
+    # Strodthoff et al. (fastai create_head1d, lin_ftrs [128], ps 0.5): mean and max over the
+    # tokens, BatchNorm, dropout 0.25, Linear(2 x width, 128), ReLU, BatchNorm, dropout 0.5,
+    # Linear(128, classes).
+    fine_tuning_head: Literal["linear", "reference"]
     seed: int
 
 
@@ -229,21 +253,62 @@ def _pooled(
 
 
 def _mean_features(
-    model: Encoder, batch: Batch, where: list[tuple[int, int]], device: torch.device
-) -> torch.Tensor:
+    model: Encoder, batch: Batch, where: list[tuple[int, int]], device: torch.device,
+    with_max: bool = False,
+) -> torch.Tensor:  # fmt: skip
     """The mean feature over the tokens of each (row, document) in `where`, in one pass
-    over the batch: [len(where), width]."""
+    over the batch: [len(where), width]; `with_max`: the mean and the maximum, concatenated,
+    [len(where), 2 x width]."""
     x = batch.inputs.to(device)
     with torch.autocast(device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"):
         features = model.features(x).float()
     rows, length, width = features.shape
     key = (torch.arange(rows, device=device)[:, None] * length + x.document).flatten()
     real = x.document.flatten() >= 0
+    flat = features.reshape(-1, width)[real]
     sums = torch.zeros(rows * length, width, device=device, dtype=features.dtype)
-    sums.index_add_(0, key[real], features.reshape(-1, width)[real])
+    sums.index_add_(0, key[real], flat)
     counts = torch.bincount(key[real], minlength=rows * length)
     chosen = torch.tensor([r * length + d for r, d in where], device=device)
-    return sums[chosen] / counts[chosen, None]
+    mean = sums[chosen] / counts[chosen, None]
+    if not with_max:
+        return mean
+    highest = torch.full((rows * length, width), -torch.inf, device=device, dtype=features.dtype)
+    highest.scatter_reduce_(0, key[real][:, None].expand(-1, width), flat, "amax")
+    return torch.cat([mean, highest[chosen]], dim=-1)
+
+
+class ReferenceHead(torch.nn.Module):
+    """The xresnet1d101 head of Strodthoff et al. on [mean, max] features (see
+    PtbxlSettings.fine_tuning_head)."""
+
+    def __init__(self, width: int, classes: int) -> None:
+        super().__init__()
+        self.layers = torch.nn.Sequential(
+            torch.nn.BatchNorm1d(2 * width), torch.nn.Dropout(0.25),
+            torch.nn.Linear(2 * width, 128), torch.nn.ReLU(),
+            torch.nn.BatchNorm1d(128), torch.nn.Dropout(0.5), torch.nn.Linear(128, classes),
+        )  # fmt: skip
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out: torch.Tensor = self.layers(x)
+        return out
+
+
+def _schedule(s: PtbxlSettings, steps_per_epoch: int) -> Callable[[int], float]:
+    """The learning-rate factor of each optimizer step (see PtbxlSettings)."""
+    warmup = s.fine_tuning_warmup_epochs * steps_per_epoch
+    total = s.fine_tuning_epochs * steps_per_epoch
+
+    def factor(step: int) -> float:
+        if step < warmup:
+            return (step + 1) / warmup
+        if s.fine_tuning_schedule == "constant":
+            return 1.0
+        done = (step - warmup) / max(1.0, total - warmup)
+        return 0.5 * (1.0 + math.cos(math.pi * min(1.0, done)))
+
+    return factor
 
 
 class _Packed(torch.utils.data.Dataset[tuple[Batch, list[tuple[int, int]]]]):
@@ -369,19 +434,30 @@ def end_to_end(
     model = Encoder(config).to(device)
     if start is not None:
         model.load_state_dict(start)
-    head = torch.nn.Linear(config.width, y.shape[1]).to(device)
+    with_max = s.fine_tuning_head == "reference"
+    head: torch.nn.Module = (
+        ReferenceHead(config.width, y.shape[1]) if with_max
+        else torch.nn.Linear(config.width, y.shape[1])
+    ).to(device)  # fmt: skip
     factor = s.fine_tuning_discriminative_factor if start is not None else 1.0
     groups = parameter_groups(model, head, s.fine_tuning_learning_rate, factor,
-                              s.fine_tuning_lower_blocks_fraction)  # fmt: skip
-    optimizer = torch.optim.AdamW(groups, weight_decay=s.fine_tuning_weight_decay)
+                              s.fine_tuning_lower_blocks_fraction,
+                              s.fine_tuning_slot_group)  # fmt: skip
+    optimizer = torch.optim.AdamW(
+        groups, weight_decay=s.fine_tuning_weight_decay, betas=s.fine_tuning_betas
+    )
     packer = _packer(config, max_tokens, s.rows, lead_slots(records.examples, s.fixed_slots))
     train = [i for i in range(len(records.ids)) if records.folds[i] in TRAIN]
     rng = random.Random(s.seed)  # noqa: S311 - not secret
+    n = s.fine_tuning_examples_per_step
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, _schedule(s, -(-len(train) // n)))
+    trained = [p for g in groups for p in g["params"]]
 
     def predict(indices: list[int]) -> np.ndarray:
         examples = [records.examples[i] for i in indices]
         return _predict(model, head, examples, s.fine_tuning_crop_s, packer, s.rows, device,
-                        s.workers, f"{s.seed}/predict")  # fmt: skip
+                        s.workers, f"{s.seed}/predict", s.evaluation_stride_fraction,
+                        s.evaluation_aggregate, with_max)  # fmt: skip
 
     def crop(example: Example, rng: random.Random) -> Example:
         return _random_crop(example, s.fine_tuning_crop_s, rng)
@@ -396,18 +472,21 @@ def end_to_end(
     step = 0
     for epoch in range(1, s.fine_tuning_epochs + 1):
         model.train()
+        head.train()
         rng.shuffle(train)
         started, losses, window = time.monotonic(), [], []
-        n = s.fine_tuning_examples_per_step
         steps = [train[k : k + n] for k in range(0, len(train), n)]
         batches = _packed(records.examples, steps, crop, packer, f"{s.seed}/{epoch}", s.workers)
         for ids, (batch, where) in zip(steps, batches, strict=True):
-            pooled = _mean_features(model, batch, where, device)
+            pooled = _mean_features(model, batch, where, device, with_max)
             target = torch.from_numpy(y[ids]).to(device)
             loss = F.binary_cross_entropy_with_logits(head(pooled), target)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()  # type: ignore[no-untyped-call]
+            if s.fine_tuning_grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(trained, s.fine_tuning_grad_clip)
             optimizer.step()
+            scheduler.step()
             step += 1
             window.append(loss.item())
             if step % LOG_EVERY_STEPS == 0:
@@ -443,39 +522,48 @@ def end_to_end(
 def _predict(
     model: Encoder, head: torch.nn.Module, examples: list[Example], crop_s: float | None,
     packer: Packer, rows: int, device: torch.device, workers: int, seed: str,
+    stride_fraction: float, aggregate: Literal["mean", "max"], with_max: bool,
 ) -> np.ndarray:  # fmt: skip
-    """The probabilities of each example: the mean over its crops."""
+    """The probabilities of each example: the mean or the maximum over its crops."""
     model.eval()
+    head.eval()
     crops, owner = [], []
     for n, example in enumerate(examples):
-        for c in _crops(example, crop_s):
+        for c in _crops(example, crop_s, stride_fraction):
             crops.append(c)
             owner.append(n)
     out = []
     groups = _batches(len(crops), packer, crops, rows)
     for batch, where in _packed(crops, groups, _unchanged, packer, seed, workers):
-        pooled = _mean_features(model, batch, where, device)
+        pooled = _mean_features(model, batch, where, device, with_max)
         out.append(torch.sigmoid(head(pooled)).float().cpu())
     p = torch.cat(out).numpy()
+    if aggregate == "max":
+        highest = np.zeros((len(examples), p.shape[1]))
+        np.maximum.at(highest, owner, p)
+        return highest
     sums = np.zeros((len(examples), p.shape[1]))
     np.add.at(sums, owner, p)
     return sums / np.bincount(owner, minlength=len(examples))[:, None]
 
 
 def parameter_groups(
-    model: Encoder, head: torch.nn.Module, lr: float, factor: float, lower_fraction: float
-) -> list[dict[str, Any]]:
+    model: Encoder, head: torch.nn.Module, lr: float, factor: float, lower_fraction: float,
+    slot_group: Literal["lower", "head"],
+) -> list[dict[str, Any]]:  # fmt: skip
     """AdamW groups: the head at `lr`; the encoder's upper blocks and final norm at
     lr x factor; its input embedding and lowest blocks (`lower_fraction` of them, rounded) at
-    lr x factor^2. The pretraining head (`model.head`) is not used by a task and left out."""
+    lr x factor^2; the slot embedding with the lower part or the head (`slot_group`). The
+    pretraining head (`model.head`) is not used by a task and left out."""
     lower_blocks = round(len(model.blocks) * lower_fraction)
-    embedding = [model.samples, model.context, model.slot]
+    embedding = [model.samples, model.context] + ([model.slot] if slot_group == "lower" else [])
     lower = [p for m in embedding for p in m.parameters()] + [model.hidden]
     lower += [p for b in model.blocks[:lower_blocks] for p in b.parameters()]
     upper = [p for b in model.blocks[lower_blocks:] for p in b.parameters()]
     upper += list(model.norm.parameters())
+    top = list(head.parameters()) + (list(model.slot.parameters()) if slot_group == "head" else [])
     return [
-        {"params": list(head.parameters()), "lr": lr},
+        {"params": top, "lr": lr},
         {"params": upper, "lr": lr * factor},
         {"params": lower, "lr": lr * factor * factor},
     ]
@@ -503,13 +591,14 @@ def _random_crop(example: Example, length_s: float | None, rng: random.Random) -
     return _crop(example, rng.randint(0, max(0, starts)) / rate, length_s)
 
 
-def _crops(example: Example, length_s: float | None) -> list[Example]:
-    """The non-overlapping crops of a record, from its start; a rest shorter than one crop
-    is left out (their min_chunk_length)."""
+def _crops(example: Example, length_s: float | None, stride_fraction: float) -> list[Example]:
+    """The crops of a record, from its start, every `stride_fraction` x `length_s` (1: no
+    overlap); a rest shorter than one crop is left out (their min_chunk_length)."""
     if length_s is None:
         return [example]
-    n = int(_duration_s(example) / length_s + 1e-9)
-    return [_crop(example, k * length_s, length_s) for k in range(n)]
+    stride = length_s * stride_fraction
+    n = int((_duration_s(example) - length_s) / stride + 1e-9) + 1
+    return [_crop(example, k * stride, length_s) for k in range(max(0, n))]
 
 
 def _bce(y: np.ndarray, p: np.ndarray) -> float:

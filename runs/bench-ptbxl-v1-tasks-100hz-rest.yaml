@@ -35,6 +35,14 @@ settings:
   fine_tuning_discriminative_factor: 0.1
   fine_tuning_lower_blocks_fraction: 0.25
   fine_tuning_crop_s: 2.5
+  evaluation_stride_fraction: 1.0    # crops without overlap (arXiv 2509.25095)
+  evaluation_aggregate: mean
+  fine_tuning_slot_group: lower
+  fine_tuning_betas: [0.9, 0.999]
+  fine_tuning_warmup_epochs: 0.0
+  fine_tuning_schedule: constant
+  fine_tuning_grad_clip: null
+  fine_tuning_head: linear
   seed: 0
 wandb_project: biosignal-fm
 wandb_entity: schnyox-s
