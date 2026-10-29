@@ -134,9 +134,14 @@ class S4InContextModel(nn.Module):
         # the same weights).
         self.icl = nn.ModuleList(
             nn.TransformerEncoderLayer(
-                d, s.icl_heads, s.icl_feed_forward, s.dropout, activation="gelu",
-                batch_first=True, norm_first=True,
-            )  # fmt: skip
+                d,
+                s.icl_heads,
+                s.icl_feed_forward,
+                s.dropout,
+                activation="gelu",
+                batch_first=True,
+                norm_first=True,
+            )
             for _ in range(s.icl_layers)
         )
         self.icl_norm = nn.LayerNorm(d)
@@ -155,9 +160,7 @@ class S4InContextModel(nn.Module):
             indices, sims = retrieve(F.normalize(q_raw.detach(), dim=-1), patients, memory, self.k)
             e = memory.embeddings[indices]  # (B, K, d)
             y = self.label_input(memory.labels[indices])  # (B, K, C)
-        context = (
-            self.embed(e) + self.label_embed(y) + sims.unsqueeze(-1) * self.v_sim + self.t_ctx
-        )
+        context = self.embed(e) + self.label_embed(y) + sims.unsqueeze(-1) * self.v_sim + self.t_ctx
         query = self.embed(q_raw) + self.t_query
         h = torch.cat([query.unsqueeze(1), context], dim=1)  # the set, no positions
         for layer in self.icl:
@@ -208,7 +211,7 @@ def train_and_score(
     torch.manual_seed(seed)
     tr, va, te = (np.flatnonzero(np.isin(folds, f)) for f in (train, validation, test))
     _, counts = np.unique(patients[tr], return_counts=True)
-    if s.context_k > len(tr) - int(counts.max()):
+    if s.context_k > len(tr) - int(np.max(counts)):
         raise ValueError(f"context_k {s.context_k} is more than the records of other patients")
     data = torch.from_numpy(x.astype(np.float32)).to(device)  # normalize False: as recorded
     target = torch.from_numpy(y.astype(np.float32)).to(device)
@@ -234,7 +237,8 @@ def train_and_score(
     def predict(memory: Memory, ids: np.ndarray, on: str) -> tuple[np.ndarray, np.ndarray]:
         """(in-context, auxiliary) predictions per record, over its crops."""
         model.eval()
-        icl_out, aux_out = [], []
+        icl_out: list[torch.Tensor] = []
+        aux_out: list[torch.Tensor] = []
         with torch.no_grad():
             for k in range(0, len(ids), s.batch_size):
                 index = torch.from_numpy(ids[k : k + s.batch_size]).to(device)
