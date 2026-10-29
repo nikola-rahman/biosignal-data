@@ -24,9 +24,12 @@ SETTINGS = ic.S4InContextSettings(
 
 
 def _memory(n: int, d: int, classes: int, patients: list[int]) -> ic.Memory:
-    e = torch.nn.functional.normalize(torch.randn(n, d), dim=-1)
+    raw = 3 * torch.randn(n, d)
     y = (torch.rand(n, classes) > 0.5).float()
-    return ic.Memory(e, y, torch.tensor(patients))
+    return ic.Memory(
+        raw=raw, embeddings=torch.nn.functional.normalize(raw, dim=-1), labels=y,
+        patients=torch.tensor(patients),
+    )  # fmt: skip
 
 
 def test_retrieval_never_takes_a_record_of_the_querys_patient() -> None:
@@ -60,24 +63,29 @@ def test_the_memory_has_no_gradient_and_follows_the_weights() -> None:
     starts = [0, 50]
     memory = ic.build_memory(model.encoder, data, ids, labels, patients, starts, 50, 3)
     assert model.encoder.training  # back in its mode
-    assert memory.embeddings.shape == (8, 16) and not memory.embeddings.requires_grad
+    assert memory.embeddings.shape == memory.raw.shape == (8, 16)
+    assert not memory.embeddings.requires_grad and not memory.raw.requires_grad
     torch.testing.assert_close(memory.embeddings.norm(dim=-1), torch.ones(8))
     assert torch.equal(memory.labels, labels[:8]) and torch.equal(memory.patients, patients[:8])
     model.eval()
-    with torch.no_grad():  # the mean of the eval crops' embeddings, normalized
+    with torch.no_grad():  # the mean of the eval crops' embeddings, raw and normalized
         e = (model.encoder(data[:8, :, :50]) + model.encoder(data[:8, :, 50:])) / 2
+    torch.testing.assert_close(memory.raw, e)
     torch.testing.assert_close(memory.embeddings, torch.nn.functional.normalize(e, dim=-1))
     with torch.no_grad():
         for p in model.encoder.parameters():
             p.add_(0.1 * torch.randn_like(p))
     again = ic.build_memory(model.encoder, data, ids, labels, patients, starts, 50, 3)
-    assert not torch.allclose(again.embeddings, memory.embeddings)
+    assert not torch.allclose(again.raw, memory.raw)
 
 
 def test_shapes_and_zero_label_input_of_the_control() -> None:
     torch.manual_seed(0)
     memory = _memory(20, 16, 3, list(range(20)))
-    flipped = ic.Memory(memory.embeddings, 1 - memory.labels, memory.patients)
+    flipped = ic.Memory(
+        raw=memory.raw, embeddings=memory.embeddings, labels=1 - memory.labels,
+        patients=memory.patients,
+    )  # fmt: skip
     x = torch.randn(5, 12, 50)
     patients = torch.full((5,), 100)
     outputs = {}
@@ -105,6 +113,27 @@ def test_the_in_context_path_trains_the_encoder() -> None:
         assert p.grad is not None and p.grad.abs().sum() > 0, name
     assert model.aux_head.weight.grad is None  # only the in-context loss was used
     assert memory.embeddings.grad is None and not memory.embeddings.requires_grad
+    assert memory.raw.grad is None and not memory.raw.requires_grad
+
+
+def test_query_and_context_tokens_get_raw_embeddings_through_w_e() -> None:
+    """A memory record that is the query's own crop (another patient code) is retrieved first
+    (cosine 1), and W_e gets the same raw vector for it as for the query, not its normalized
+    version."""
+    torch.manual_seed(0)
+    model = ic.S4InContextModel(SETTINGS, 12, 3, 50).eval()
+    data = torch.randn(6, 12, 50)
+    memory = ic.build_memory(model.encoder, data, np.arange(6), (torch.rand(6, 3) > 0.5).float(),
+                             torch.arange(6), [0], 50, 6)  # fmt: skip
+    inputs: list[torch.Tensor] = []
+    model.embed.register_forward_pre_hook(lambda _, args: inputs.append(args[0].detach()))
+    with torch.no_grad():
+        model(data[:2], torch.full((2,), 99), memory)
+    context, query = inputs  # heads() maps the context first
+    assert context.shape == (2, 3, 16) and query.shape == (2, 16)
+    torch.testing.assert_close(context[:, 0], query)  # the same kind: raw
+    torch.testing.assert_close(context[:, 0], memory.raw[:2])
+    assert not torch.allclose(query.norm(dim=-1), torch.ones(2))  # not the normalized ones
 
 
 def test_a_tiny_run_refreshes_the_memory_and_logs_like_reference_s4(

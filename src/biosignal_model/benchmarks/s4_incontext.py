@@ -7,13 +7,15 @@ context, never a record of the query's own patient.
    channel dropout) without its decoder; the embedding is the mean over time of the last block.
 2. Memory (no gradient): before epoch 1 (the initial weights) and after each training epoch, in
    eval mode, the embedding of every training record (folds 1-8) = the mean of its crop
-   embeddings over the evaluation crops (crop_starts with valid_stride_fraction), L2-normalized,
-   with the record's label vector and patient id.
+   embeddings over the evaluation crops (crop_starts with valid_stride_fraction), kept raw and
+   L2-normalized, with the record's label vector and patient id.
 3. Retrieval (no gradient): for the L2-normalized query embedding, the context_k memory records
-   with the largest cosine similarity, every record of the query's own patient left out (for
-   validation and test queries too; their patients are not in folds 1-8).
+   with the largest cosine similarity (of the normalized embeddings), every record of the
+   query's own patient left out (for validation and test queries too; their patients are not
+   in folds 1-8).
 4. Tokens (width d_model): context i = W_e e_i + W_y y_i + s_i v_sim + t_ctx; query = W_e q +
-   t_query (q the query's un-normalized embedding, with gradient). W_e is shared, W_e and W_y
+   t_query. e_i is the RAW memory embedding and q the query's raw embedding (with gradient), so
+   W_e gets inputs of one kind; s_i is the cosine of point 3. W_e is shared, W_e and W_y
    are linear maps without bias (t_ctx and t_query are the offsets); context_labels "zeros"
    gives y_i = 0 (the control: the same capacity without the neighbours' labels).
 5. In-context head: icl_layers pre-norm transformer encoder layers (icl_heads, icl_feed_forward,
@@ -95,9 +97,11 @@ class S4Encoder(nn.Module):
 
 @dataclass(frozen=True)
 class Memory:
-    """The training records as context: L2-normalized embeddings (N, d), label vectors (N, C)
-    and patient codes (N,), all without gradient."""
+    """The training records as context, all without gradient: raw embeddings (N, d), the input
+    of W_e; their L2-normalized versions (N, d), for retrieval and s_i; label vectors (N, C);
+    patient codes (N,)."""
 
+    raw: torch.Tensor
     embeddings: torch.Tensor
     labels: torch.Tensor
     patients: torch.Tensor
@@ -158,7 +162,7 @@ class S4InContextModel(nn.Module):
         """(in-context logits, auxiliary logits), each (B, classes), from query embeddings."""
         with torch.no_grad():
             indices, sims = retrieve(F.normalize(q_raw.detach(), dim=-1), patients, memory, self.k)
-            e = memory.embeddings[indices]  # (B, K, d)
+            e = memory.raw[indices]  # (B, K, d): raw, as q_raw
             y = self.label_input(memory.labels[indices])  # (B, K, C)
         context = self.embed(e) + self.label_embed(y) + sims.unsqueeze(-1) * self.v_sim + self.t_ctx
         query = self.embed(q_raw) + self.t_query
@@ -188,11 +192,14 @@ def build_memory(
     for k in range(0, len(ids), batch_size):
         batch = data[torch.from_numpy(ids[k : k + batch_size]).to(data.device)]
         crops = torch.stack([batch[:, :, a : a + size] for a in starts], 1)
-        e = encoder(crops.flatten(0, 1)).view(len(batch), len(starts), -1).mean(1)
-        out.append(F.normalize(e, dim=-1))
+        out.append(encoder(crops.flatten(0, 1)).view(len(batch), len(starts), -1).mean(1))
     encoder.train(was_training)
     index = torch.from_numpy(ids).to(data.device)
-    return Memory(torch.cat(out), labels[index], patients[index])
+    raw = torch.cat(out)
+    return Memory(
+        raw=raw, embeddings=F.normalize(raw, dim=-1), labels=labels[index],
+        patients=patients[index],
+    )  # fmt: skip
 
 
 def train_and_score(
