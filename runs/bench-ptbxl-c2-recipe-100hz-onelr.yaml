@@ -23,6 +23,7 @@ settings:
   probe_l2: [1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]
   probe_steps: 100
   finetune_epochs: 100
+  finetune_patience: null
   finetune_learning_rate: 1.0e-3
   finetune_weight_decay: 1.0e-3
   finetune_examples_per_step: 64

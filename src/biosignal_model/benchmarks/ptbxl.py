@@ -68,6 +68,10 @@ class PtbxlSettings(BaseModel):
     probe_l2: list[float]
     probe_steps: int
     finetune_epochs: int  # the best epoch on fold 9 is the one scored
+    # Stop after this many epochs without a better fold-9 macro-AUC (None: all epochs). The
+    # epochs after a stop cannot be chosen; on "all" the chosen epoch was 15-19 of 100 and
+    # the AUC fell after it (v1 and v2, 2026-10-28/29; 25 asked for by the user).
+    finetune_patience: int | None
     finetune_learning_rate: float  # of the head; the encoder's parts get lower ones
     finetune_weight_decay: float
     finetune_examples_per_step: int
@@ -334,7 +338,8 @@ def end_to_end(
 ) -> dict[str, float]:  # fmt: skip
     """The encoder and a linear head on its mean feature, every weight trained on folds 1-8
     (layer-dependent learning rates and crops: see PtbxlSettings); the epoch with the best
-    macro-AUC on fold 9 is scored on fold 10. `start`: pretrained weights, or None.
+    macro-AUC on fold 9 is scored on fold 10 (at most `finetune_patience` epochs after it are
+    run). `start`: pretrained weights, or None.
     Logged under `prefix`: the training loss every LOG_EVERY_STEPS steps, and per epoch its
     mean training loss, fold-9 macro-AUC, time and speed; fold 10 only for a chosen epoch."""
     torch.manual_seed(s.seed)
@@ -405,8 +410,10 @@ def end_to_end(
             record[f"{prefix}/chosen_epoch"] = float(epoch)
             record[f"{prefix}/chosen_test_macro_auc"] = best_test
         log(record)
+        if s.finetune_patience is not None and epoch - best_epoch >= s.finetune_patience:
+            break
     return {"macro_auc": best_test, "labels": float(labels_n), "epoch": float(best_epoch),
-            "validation_macro_auc": best_val}  # fmt: skip
+            "validation_macro_auc": best_val, "epochs_run": float(epoch)}  # fmt: skip
 
 
 @torch.no_grad()
