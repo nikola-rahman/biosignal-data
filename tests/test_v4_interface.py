@@ -5,10 +5,13 @@ still validates."""
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pytest
+
+if TYPE_CHECKING:
+    from torch import Tensor
 
 torch = pytest.importorskip("torch")
 
@@ -71,7 +74,7 @@ class _OnlyTheInterface:
     def config(self) -> ModelConfig:
         return self._model.config
 
-    def features(self, x: Inputs) -> torch.Tensor:
+    def features(self, x: Inputs) -> Tensor:
         return self._model.features(x)
 
     def layer_groups(self) -> LayerGroups:
@@ -91,12 +94,10 @@ def _records(n: int, dataset: str) -> list[Example]:
     rng = np.random.default_rng(0)
     channels = tuple(Channel("100Hz", k, 100.0, 1.0, 0.0, None, f"L{k}", "ecg", "mV")
                      for k in range(2))  # fmt: skip
-    return [
-        Example(tuple(Signal(rng.normal(size=500).astype(np.float32), 100.0, 0.0)
-                      for _ in range(2)),
-                Origin(dataset, f"r{i}", f"p{i}", 0.0, channels))  # fmt: skip
-        for i in range(n)
-    ]
+    def signals() -> tuple[Signal, ...]:
+        return tuple(Signal(rng.normal(size=500).astype(np.float32), 100.0, 0.0) for _ in range(2))
+
+    return [Example(signals(), Origin(dataset, f"r{i}", f"p{i}", 0.0, channels)) for i in range(n)]
 
 
 @pytest.mark.parametrize("tokenizer", ALL, ids=IDS)

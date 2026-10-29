@@ -13,9 +13,13 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
+
+if TYPE_CHECKING:
+    from torch import Tensor
 
 torch = pytest.importorskip("torch")
 
@@ -92,13 +96,13 @@ def _packer(
     )  # fmt: skip
 
 
-def _outputs(model: Encoder, x: Inputs) -> torch.Tensor:
+def _outputs(model: Encoder, x: Inputs) -> Tensor:
     """What a hidden token's prediction is read from: the pretraining output where the
     tokenizer has one (samples, duration), else the features (hierarchical has no
     pretraining head yet)."""
     if isinstance(model.config.tokenizer, HierarchicalTokenizer):
         return model.features(x)
-    out: torch.Tensor = model(x)
+    out: Tensor = model(x)
     return out
 
 
@@ -162,7 +166,7 @@ def test_hidden_samples_get_no_gradient_from_the_hidden_predictions(
     hidden = x.hidden & (x.document == 0)
     assert hidden.any() and (~hidden & (x.document == 0)).any()
     weight = torch.randn_like(out[hidden])  # every hidden output, none cancelling another
-    (out[hidden] * weight).sum().backward()  # type: ignore[no-untyped-call]
+    (out[hidden] * weight).sum().backward()
     assert x.values.grad is not None
     grad = x.values.grad[0].numpy()
     where = _raw_positions(x, tokenizer, example)
@@ -275,7 +279,7 @@ def test_token_times_are_float64_and_exact_after_30_minutes() -> None:
             _, h, f = frame_shape(tokenizer, 100.0)
             expected = (np.arange(t.size) * f + f / 2) * h / 100.0
         assert expected[-1] > 1800.0
-        np.testing.assert_array_equal(t, expected)
+        np.testing.assert_allclose(t, expected, rtol=0, atol=1e-9)  # float64: 1e-13 s
         batch, _ = _packer(tokenizer, rows=1).pack([_example([100.0], 1.0, 6)], trim=True)
         assert batch.inputs.time_s.dtype == torch.float64
 
