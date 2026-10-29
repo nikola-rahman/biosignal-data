@@ -68,7 +68,7 @@ def test_the_probe_chooses_on_fold_9_and_scores_fold_10() -> None:
     settings = ptbxl.PtbxlSettings(
         rate=100, tasks=["all"], rows=2, read_threads=1, workers=0,
         linear_probing=True, fixed_slots=False,
-        methods=["fine_tuning", "from_scratch"], reference=None,
+        methods=["fine_tuning", "from_scratch"], reference=None, reference_s4=None,
         linear_probing_l2=[1e-3, 1.0], linear_probing_steps=50,
         fine_tuning_epochs=1, fine_tuning_patience=None, fine_tuning_learning_rate=1e-3,
         fine_tuning_weight_decay=0.0,
@@ -100,7 +100,7 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model(monkeypatch: pytest.Monkey
     settings = ptbxl.PtbxlSettings(
         rate=100, tasks=["diagnostic"], rows=2, read_threads=1, workers=0,
         linear_probing=True, fixed_slots=False,
-        methods=["fine_tuning", "from_scratch"], reference=None,
+        methods=["fine_tuning", "from_scratch"], reference=None, reference_s4=None,
         linear_probing_l2=[1.0], linear_probing_steps=10,
         fine_tuning_epochs=2, fine_tuning_patience=None, fine_tuning_learning_rate=1e-3,
         fine_tuning_weight_decay=0.0,
@@ -193,7 +193,7 @@ def test_the_schedule_warms_up_then_decays_to_zero() -> None:
 def _settings_for_schedule(schedule: str) -> ptbxl.PtbxlSettings:
     return ptbxl.PtbxlSettings(
         rate=100, tasks=["all"], rows=2, read_threads=1, workers=0, linear_probing=False,
-        fixed_slots=False, methods=["fine_tuning"], reference=None,
+        fixed_slots=False, methods=["fine_tuning"], reference=None, reference_s4=None,
         linear_probing_l2=[1.0], linear_probing_steps=1,
         fine_tuning_epochs=10, fine_tuning_patience=None, fine_tuning_learning_rate=1e-3,
         fine_tuning_weight_decay=0.0, fine_tuning_examples_per_step=4,
