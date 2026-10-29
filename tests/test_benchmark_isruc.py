@@ -84,3 +84,10 @@ def test_fine_tuning_and_linear_probing_run_on_a_small_model() -> None:
     scored = isruc.linear_probing(features, labels, subjects, s, logged.append, "p",
                                   torch.device("cpu"))  # fmt: skip
     assert scored["l2"] in (1e-3, 1.0) and -1.0 <= scored["kappa"] <= 1.0
+
+
+def test_cbramods_columns_2_to_7_come_from_the_files_channel_order() -> None:
+    labels = ["LOC-A2", "ROC-A1", "C3-A2", "O1-A2", "C4-A1", "O2-A1", "X1", "X2", "SaO2"]
+    header = " " * 252 + f"{len(labels):<4}" + "".join(f"{x:<16}" for x in labels) + "x" * 80
+    assert isruc.edf_labels(header) == labels
+    assert isruc.edf_labels(header)[isruc.CBRAMOD_COLUMNS] == labels[2:8]  # subject 8's layout

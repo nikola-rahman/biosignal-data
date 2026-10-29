@@ -22,12 +22,16 @@ follow:
 - metrics over all test epochs: balanced accuracy, Cohen's kappa, weighted F1 (sklearn's
   definitions).
 
-What differs, by design: CBraMod reads 6 EEG channels (F3-A2, C3-A2, O1-A2, F4-A1, C4-A1,
-O2-A1: columns 2-7 of the .rec file), filters them (0.3-35 Hz band-pass, 50 Hz notch) and
-divides by 100. Here the model gets the stored samples in physical units, at their native
-rates, unfiltered: `channels: eeg6` takes the same 6 EEG channels, `channels: all` every
-channel of the recording (EEG, EOG, chin and leg EMG, ECG, respiration, SpO2, at 200, 25
-and 12.5 Hz): the comparison of one signal type with all of them together.
+What differs, by design: CBraMod reads columns 2-7 of each .rec file (prepare_ISRUC_1.py:
+`psg_array[:, 1:][:, 2:8]` of MNE's data frame, whose first column is the time), filters
+them (0.3-35 Hz band-pass, 50 Hz notch) and divides by 100. Here the model gets the stored
+samples in physical units, at their native rates, unfiltered: `channels: eeg6` takes the
+same columns 2-7, `channels: all` every channel of the recording (19 to 24: EEG, EOG and the
+X and DC channels, at 200, 100, 25 and 12.5 Hz): one signal type against all of them.
+Columns 2-7 are F3, C3, O1, F4, C4, O2 against the opposite mastoid in most recordings
+(named -A1/-A2 or -M1/-M2); subject 8 has no F3 and F4, so its columns 2-7 are C3-A2, O1-A2,
+C4-A1, O2-A1, X1, X2 (checked on 2026-10-29 on the first 35 subjects); CBraMod's
+paper names the 6 EEG channels for all subjects.
 
 Methods, as in the PTB-XL benchmark:
 
@@ -68,7 +72,7 @@ TRAIN, VALIDATION, TEST = SUBJECTS[:80], SUBJECTS[80:90], SUBJECTS[90:]
 STAGES = {"0": 0, "1": 1, "2": 2, "3": 3, "5": 4}  # CBraMod's label2id
 STAGE_NAMES = ("W", "N1", "N2", "N3", "REM")
 EPOCH_S = 30.0
-EEG6 = ("F3-A2", "C3-A2", "O1-A2", "F4-A1", "C4-A1", "O2-A1")
+CBRAMOD_COLUMNS = slice(2, 8)  # of the EDF file's channels, in its order
 
 
 class IsrucSettings(BaseModel):
@@ -144,12 +148,18 @@ def stages(text: str, record: str) -> np.ndarray:
     return np.array(out, dtype=np.int64)
 
 
+def edf_labels(header: str) -> list[str]:
+    """The channel labels of an EDF header, in the file's order (16 characters each)."""
+    count = int(header[252:256].strip())
+    return [header[256 + 16 * i : 256 + 16 * (i + 1)].strip() for i in range(count)]
+
+
 def _signal_type(name: str) -> str:
     """For analysis only (the model gets no types). The X and DC channels are left `other`:
     the dataset's pages do not say which is which."""
-    if name in ("LOC-A2", "ROC-A1"):
+    if name in ("LOC-A2", "ROC-A1", "E1-M2", "E2-M1"):
         return "eog"
-    if name == "SaO2":
+    if name in ("SaO2", "SpO2"):
         return "spo2"
     return "eeg" if name[:2] in ("F3", "C3", "O1", "F4", "C4", "O2") else "other"
 
@@ -157,6 +167,10 @@ def _signal_type(name: str) -> str:
 def load(store: Store, s: IsrucSettings, log: Log) -> list[Night]:
     """The 100 nights of cohort I: the chosen channels as stored, and the stages."""
     dataset = StandardDataset.open(store, DATASET, "latest")
+    header = dict(
+        zip(dataset.recordings.column("recording_id").to_pylist(),
+            dataset.recordings.column("source_header").to_pylist(), strict=True)
+    )  # fmt: skip
     by_record: dict[str, list[dict[str, Any]]] = {}
     for c in dataset.channels.to_pylist():
         by_record.setdefault(c["recording_id"], []).append(c)
@@ -167,10 +181,10 @@ def load(store: Store, s: IsrucSettings, log: Log) -> list[Night]:
         rows = sorted(by_record[record], key=lambda c: (c["array"], c["index"]))
         if s.channels == "eeg6":
             named = {c["name"]: c for c in rows}
-            missing = [name for name in EEG6 if name not in named]
-            if missing:
-                raise ValueError(f"{DATASET}: {record} has no channel {missing}")
-            rows = [named[name] for name in EEG6]
+            order = edf_labels(header[record])
+            if len(named) != len(rows) or sorted(order) != sorted(named):
+                raise ValueError(f"{DATASET}: {record}: channel names not one to one with its file")
+            rows = [named[name] for name in order[CBRAMOD_COLUMNS]]
         arrays = sorted({c["array"] for c in rows})
         stored = dataset.read_many([(record, a) for a in arrays], threads=s.read_threads)
         channels = [
