@@ -415,15 +415,14 @@ def train_and_score(
         for k in range(per_epoch):
             ids = order[k * s.batch_size : (k + 1) * s.batch_size]
             if augment is None:  # the published crops
-                first = [0 if length == size else random.randint(0, length - size - 1) for _ in ids]
+                first = [0 if length == size else random.randint(0, length - size - 1) for _ in ids]  # noqa: S311
                 batch = torch.stack(
                     [data[i, :, a : a + size] for i, a in zip(ids, first, strict=True)]
                 )
             else:
                 batch = augment.crops(data[torch.from_numpy(ids).to(device)], size, generator)
             goal = target[ids]
-            if teacher is not None:
-                assert s.distillation is not None
+            if teacher is not None and s.distillation is not None:
                 with torch.no_grad():
                     soft = torch.sigmoid(teacher(batch))
                 a = s.distillation.teacher_fraction

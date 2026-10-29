@@ -128,11 +128,11 @@ def loss_function(
     """None for the plain BCE path; else a callable (logits, target) -> loss."""
     if s.loss == "bce":
         return None
-    if s.loss == "class_balanced_bce":
-        assert s.class_balanced_beta is not None
+    if s.class_balanced_beta is not None:  # loss class_balanced_bce (checked in RecipeSettings)
         w = class_balanced_weights(train_targets.sum(0), s.class_balanced_beta)
         return _WeightedBce(torch.as_tensor(w, dtype=torch.float32, device=device))
-    assert s.asymmetric is not None
+    if s.asymmetric is None:
+        raise ValueError(f"loss {s.loss} needs its settings")
     return _Asymmetric(s.asymmetric)
 
 
