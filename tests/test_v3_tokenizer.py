@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
+F = torch.nn.functional
 
 from biosignal_data.training.loader import Channel, Example, Origin, Signal  # noqa: E402
 from biosignal_model.batch import (  # noqa: E402
@@ -134,7 +135,7 @@ def test_padding_and_other_examples_never_reach_an_example(
 
 def test_s4d_keeps_masked_frames_at_zero() -> None:
     torch.manual_seed(0)
-    block = S4DBlock(8, 8)
+    block = S4DBlock(8, 8, 0.0, 0.0)
     u = torch.randn(2, 30, 8)
     mask = torch.ones(2, 30, dtype=torch.bool)
     mask[1, 20:] = False
@@ -144,6 +145,24 @@ def test_s4d_keeps_masked_frames_at_zero() -> None:
     changed[1, 20:] = 99.0  # masked frames: their values never reach the others
     torch.testing.assert_close(block(changed, mask)[1, :20], out[1, :20])
     assert (block(changed, mask)[1, 20:] == 0).all()
+
+
+def test_s4d_is_the_sum_of_a_causal_and_an_anticausal_convolution() -> None:
+    torch.manual_seed(0)
+    block = S4DBlock(4, 8, 0.0, 0.0)
+    u, mask = torch.randn(3, 17, 4), torch.ones(3, 17, dtype=torch.bool)
+    with torch.no_grad():
+        z = block.norm(u).transpose(1, 2).double()  # [B, H, T]
+        k = block.kernel(17).double()  # [2, H, T]
+        expected = z * block.d.double()[:, None]
+        for t in range(17):
+            for m in range(17):
+                if t - m >= 0:
+                    expected[..., t] += k[0, :, m] * z[..., t - m]
+                if t + m < 17:
+                    expected[..., t] += k[1, :, m] * z[..., t + m]
+        y = F.glu(block.out(F.gelu(expected.transpose(1, 2).float())), dim=-1)
+        torch.testing.assert_close(block(u, mask), u + y, atol=1e-5, rtol=1e-4)
 
 
 def test_the_duration_loss_uses_observed_samples_of_hidden_tokens_only() -> None:

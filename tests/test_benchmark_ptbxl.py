@@ -390,7 +390,7 @@ def test_drop_path_drops_whole_items_in_training_only() -> None:
     y = torch.ones(2000, 3, 5)
     out = _drop_path(y, 0.25, training=True)
     per_item = out.flatten(1)
-    assert set(per_item.unique().tolist()) <= {0.0, 1 / 0.75}
+    assert all(v == 0.0 or v == pytest.approx(1 / 0.75) for v in per_item.unique().tolist())
     assert torch.equal(per_item.min(1).values, per_item.max(1).values)  # whole items
     assert 0.2 < (per_item[:, 0] == 0).float().mean().item() < 0.3
     assert torch.equal(_drop_path(y, 0.25, training=False), y)

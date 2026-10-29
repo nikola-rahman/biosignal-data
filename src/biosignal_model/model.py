@@ -306,12 +306,14 @@ class S4DBlock(nn.Module):
         keep = mask[..., None].to(u.dtype)
         z = (self.norm(u) * keep).float().transpose(1, 2)  # [B, H, T]
         k = self.kernel(length)
+        # Both directions as one kernel over the lags -(T-1)..T-1, one FFT pair: forward
+        # y[t] += k0[m] z[t-m], backward y[t] += k1[m] z[t+m] (lag 0 gets both); with circular
+        # length 2T, lag -m sits at 2T-m and nothing wraps onto a used output.
+        both = F.pad(k[0], (0, length)) + F.pad(k[1, :, 1:].flip(-1), (length + 1, 0))
+        both[:, 0] += k[1, :, 0]
         n = 2 * length
-        forward = torch.fft.irfft(torch.fft.rfft(z, n) * torch.fft.rfft(k[0], n), n)[..., :length]
-        back = torch.fft.irfft(
-            torch.fft.rfft(z.flip(-1), n) * torch.fft.rfft(k[1], n), n
-        )[..., :length].flip(-1)
-        y = (forward + back + z * self.d[:, None]).transpose(1, 2).to(u.dtype)
+        y = torch.fft.irfft(torch.fft.rfft(z, n) * torch.fft.rfft(both, n), n)[..., :length]
+        y = (y + z * self.d[:, None]).transpose(1, 2).to(u.dtype)
         y = F.glu(self.out(F.gelu(y)), dim=-1)
         y = _drop_path(F.dropout(y, self.dropout, self.training), self.drop_path, self.training)
         return (u + y) * keep
