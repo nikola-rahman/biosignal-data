@@ -626,12 +626,12 @@ def run(
             raise ValueError("from_scratch_samples_per_token is only for from_scratch runs alone")
         config = replace(config, samples_per_token=settings.from_scratch_samples_per_token)
     records, statements = load(store, settings, log)
-    pretrained = Encoder(config).to(device)
-    pretrained.load_state_dict(checkpoint["model"])
-    torch.manual_seed(settings.seed)
-    untrained = Encoder(config).to(device)
     features = {}
     if settings.linear_probing:
+        pretrained = Encoder(config).to(device)
+        pretrained.load_state_dict(checkpoint["model"])
+        torch.manual_seed(settings.seed)
+        untrained = Encoder(config).to(device)
         features = {
             "linear_probing": embed(
                 pretrained, records.examples, max_tokens, settings.rows, device, log,
