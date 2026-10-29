@@ -212,3 +212,43 @@ the same convolution (tested against the direct sums). d2second: 224 -> 312 exam
 training epoch, 250 -> 377 on a cached batch, prediction 148 -> 211 records/s, memory
 9.9 -> 7.7 GiB. torch.compile of the local blocks gave no further gain; compiling the whole
 encoder fails in inductor with the dynamic shapes of the packed batches.
+
+### Halving bench with WSD cooldown rungs (built, not started)
+
+At full size D2 led D1 on fold 9 from epoch 2 to 9 and they tied at epoch 10; D1 won only
+after epoch 13. A cut on a mid-schedule snapshot therefore keeps fast learners that overfit.
+The bench cuts on cooldown branches instead (Hägele et al. 2024, arXiv 2405.18392):
+
+- The main run trains at a constant lr after a 1.5-epoch warmup, for 20 epochs.
+- Rungs are at epochs 5, 10 and 20. At each rung, the run keeps its whole state (weights,
+  optimizer, scheduler, random states, data order). A branch then decays the lr linearly to 0
+  over max(2, round(0.2 × epoch)) epochs (2, 2, 4). The branch is scored on fold 9 and
+  fold 10, with its train-minus-fold-9 loss gap. The main run then continues from the kept
+  state.
+- Proof that a branch does not change the main run: a run with branches at 1, 2 and 4, and a
+  run with a branch only at 4, give the same main run and the same last branch. The CPU test
+  shows equal results with dropout and drop path on. On the L40S (flex attention), the
+  difference is 0.0.
+- Learning rate: 3e-5, 1e-4 and 3e-4 for each design. At rung 5, the best lr of each design
+  continues. At rung 10, the designs are ranked and half are stopped. Fold 9 of the branches
+  makes every decision.
+- Configs: `runs/bench-ptbxl-rungs-*-100hz.yaml`. Runner: `scripts/proxy_bench_rungs.py`.
+  The runner was tested with a fake benchmark. It starts the runs while the GPU memory budget
+  allows. A run that waits for a decision continues to train.
+
+GPU time per design: L40S alone, from the measured compute rates. T is one training epoch, P
+is one prediction of fold 9.
+
+| design | rungs, design kept at 10 | rungs, design cut at 10 | old plan (cosine 25, one lr), kept / cut | extra, kept / cut |
+|---|---|---|---|---|
+| samples64 | 7.8 min | 5.3 min | 5.6 / 2.2 min | +2.2 / +3.1 min |
+| samples8 | 14.6 | 9.9 | 10.2 / 4.1 | +4.4 / +5.8 |
+| d1 | 20.2 | 13.7 | 13.7 / 5.5 | +6.5 / +8.2 |
+| d1fine | 36.9 | 24.9 | 24.7 / 9.9 | +12.2 / +15.0 |
+| d2 | 22.3 | 15.1 | 15.1 / 6.0 | +7.2 / +9.0 |
+| d2prime | 41.8 | 28.2 | 28.0 / 11.2 | +13.9 / +17.0 |
+| d2second | 45.4 | 30.6 | 30.1 / 12.1 | +15.3 / +18.6 |
+
+Most of the extra time is the lr grid: two more runs per design, each to the end of the
+rung-5 branch (7 epochs). The branches themselves cost 8 epochs (2 + 2 + 4) for a design that
+runs to the end.
