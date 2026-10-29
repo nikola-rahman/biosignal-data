@@ -152,7 +152,15 @@ datasets:
       - name: '^[A-Z]{1,2}\d{0,2}Z?-(Ref|CS2)$'
         type: eeg
         source: https://physionet.org/content/chbmit/1.0.0/
-        notes: EEG electrodes against a reference (FC1-Ref, O1-CS2). The '-' and '.' dummy channels and VNS stay unknown.
+        notes: EEG electrodes against a reference (FC1-Ref, O1-CS2).
+      - name: '^(-|VNS)$'
+        type: other
+        source: https://physionet.org/content/chbmit/1.0.0/
+        evidence: >-
+          In some cases, up to 5 "dummy" signals (named "-") were interspersed among the EEG
+          signals [...] these dummy signals can be ignored. [...] a vagal nerve stimulus (VNS)
+          signal in the last 18 files belonging to case chb09.
+        notes: The '.' channels (320) are not described on the page and stay unknown.
 
   - id: physionet/ctu-uhb-ctgdb
     subject:
@@ -578,6 +586,17 @@ datasets:
       certain: true
       source: https://physionet.org/content/siena-scalp-eeg/1.0.0/
       evidence: Each folder refers to a specific subject including between 1 and 5 data files
+    channels:
+      - name: '^(SPO2|HR|MK|PLET|\d{1,2}|[A-D])$'
+        type: other
+        source: https://physionet.org/content/siena-scalp-eeg/1.0.0/
+        evidence: >-
+          the list of the channels from which the EEG and EKG signals are extracted [...]
+          (all other channels in the edf files must be ignored)
+        notes: >-
+          The Seizures-list-PNxx.txt files list EEG and EKG channels only. SPO2 and HR (at
+          512 Hz) were constant in every sampled recording (analysis of 2026-10-29); MK is a
+          marker channel; 1, 2, 3, 23, 31, 33, 61-64 and A-D are not described.
 
   - id: physionet/sleep-edfx
     subject:
@@ -591,6 +610,28 @@ datasets:
       notes: >-
         Group 1 keeps the study (SC4, ST7) with the subject number: the page does not say
         that SC and ST subject numbers are the same persons.
+    channels:
+      - name: '^EMG submental$'
+        recording: '(?:^|/)SC\d{4}[A-Z]\d-PSG$'
+        type: emg_envelope
+        source: https://physionet.org/content/sleep-edfx/1.0.0/
+        evidence: >-
+          The submental-EMG signal was electronically highpass filtered, rectified and
+          low-pass filtered after which the resulting EMG envelope expressed in uV rms
+          (root-mean-square) was sampled at 1Hz.
+        notes: >-
+          Sleep Cassette (SC) files only. In the Sleep Telemetry (ST) files "EOG, EMG and EEG
+          signals were sampled at 100 Hz": that EMG stays emg (general rule).
+      - name: '^(Event marker|Marker)$'
+        type: other
+        source: https://physionet.org/content/sleep-edfx/1.0.0/
+        evidence: >-
+          Oro-nasal airflow, rectal body temperature and the event marker were also sampled
+          at 1Hz. [...] EOG, EMG and EEG signals were sampled at 100 Hz, and the event marker
+          at 1 Hz.
+        notes: >-
+          SC "Event marker" (1 Hz) and ST "Marker" (unit ID+M-E). The ST marker is stored at
+          10 Hz, not 1 Hz as the page says.
 
   - id: physionet/stdb
     subject:

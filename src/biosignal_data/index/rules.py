@@ -83,8 +83,19 @@ class SubjectRule(_Model):
 class ChannelRule(_Model):
     name: str  # a regex on the channel name as the source wrote it
     type: SignalType
+    # A regex on the recording id: the rule holds only for these recordings (sleep-edfx:
+    # "EMG submental" is an envelope at 1 Hz in the SC files, the signal at 100 Hz in ST).
+    recording: str | None = None
     source: HttpUrl | None = None
+    evidence: str | None = None  # an exact quote from the source
     notes: str | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> ChannelRule:
+        re.compile(self.name)
+        if self.recording is not None:
+            re.compile(self.recording)
+        return self
 
 
 class ExcludeRule(_Model):
@@ -200,5 +211,12 @@ class IndexRules:
         return self.datasets.get(dataset_id) or DatasetRules(id=dataset_id)
 
 
-def channel_overrides(rules: DatasetRules) -> list[tuple[re.Pattern[str], SignalType]]:
-    return [(re.compile(c.name), c.type) for c in rules.channels]
+def channel_overrides(
+    rules: DatasetRules, recording_id: str
+) -> list[tuple[re.Pattern[str], SignalType]]:
+    """The dataset's channel rules that hold for one recording, in their order."""
+    return [
+        (re.compile(c.name), c.type)
+        for c in rules.channels
+        if c.recording is None or re.search(c.recording, recording_id)
+    ]

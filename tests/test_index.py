@@ -11,7 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from biosignal_data.index import AlreadyIndexed, IndexRules, build_index, signal_type, split_of
-from biosignal_data.index.rules import RulesError, SubjectRule
+from biosignal_data.index.rules import DatasetRules, RulesError, SubjectRule, channel_overrides
 from biosignal_data.index.signals import SignalType
 from biosignal_data.index.subjects import subject_of
 from biosignal_data.standard import kept_files, tables
@@ -45,6 +45,34 @@ def test_a_dataset_rule_goes_before_the_general_rules() -> None:
     assert signal_type("Abdomen_1") == (SignalType.RESP, "name")
     override = [(re.compile(r"^Abdomen_\d$"), SignalType.ECG)]
     assert signal_type("Abdomen_1", override) == (SignalType.ECG, "dataset")
+
+
+def test_a_channel_rule_can_hold_for_some_recordings_only() -> None:
+    # sleep-edfx: "EMG submental" is a 1 Hz envelope in the SC files, the signal in ST
+    rules = DatasetRules.model_validate(
+        {"id": "physionet/sleep-edfx",
+         "channels": [{"name": "^EMG submental$", "recording": "(?:^|/)SC\\d{4}[A-Z]\\d-PSG$",
+                       "type": "emg_envelope"}]}
+    )  # fmt: skip
+    sc = channel_overrides(rules, "sleep-cassette/SC4001E0-PSG")
+    st = channel_overrides(rules, "sleep-telemetry/ST7011J0-PSG")
+    assert signal_type("EMG submental", sc) == (SignalType.EMG_ENVELOPE, "dataset")
+    assert signal_type("EMG submental", st) == (SignalType.EMG, "name")
+
+
+def test_new_signal_types_come_after_the_others() -> None:
+    """The model numbers the types by their order (batch.SIGNAL_TYPES)."""
+    assert [t.value for t in SignalType][-2:] == ["unknown", "emg_envelope"]
+
+
+def test_index_yaml_types_sleep_edfx_markers_and_envelopes() -> None:
+    rules = IndexRules.load().get("physionet/sleep-edfx")
+    sc = channel_overrides(rules, "sleep-cassette/SC4001E0-PSG")
+    assert signal_type("EMG submental", sc)[0] is SignalType.EMG_ENVELOPE
+    assert signal_type("Event marker", sc)[0] is SignalType.OTHER
+    st = channel_overrides(rules, "sleep-telemetry/ST7011J0-PSG")
+    assert signal_type("EMG submental", st)[0] is SignalType.EMG
+    assert signal_type("Marker", st)[0] is SignalType.OTHER
 
 
 def _rule(**fields: object) -> SubjectRule:
