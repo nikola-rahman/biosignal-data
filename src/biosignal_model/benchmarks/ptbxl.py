@@ -908,6 +908,9 @@ def run(
                 )
             val, test = np.isin(kept.folds, VALIDATION), np.isin(kept.folds, TEST)
             scores |= per_label(classes, y[keep][val], p_val, y[keep][test], p_test)
+            if task == "all" and name.startswith("reference"):  # end_to_end scores its own
+                for group, c in label_groups(classes, statements).items():
+                    scores[f"macro_auc_{group}"] = macro_auc(y[keep][test][:, c], p_test[:, c])[0]
             results |= {f"{task}/{name}/{k}": v for k, v in scores.items()}
             log({f"{task}/{name}/macro_auc": scores["macro_auc"]})
     return results

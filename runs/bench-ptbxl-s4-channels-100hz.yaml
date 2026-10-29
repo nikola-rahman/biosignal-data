@@ -32,6 +32,16 @@ settings:
     dropout: 0.2                # s4_dropout default
     dt_min: 1.0e-3              # HippoSSKernel defaults
     dt_max: 1.0e-1
+    loss: bce                   # RecipeSettings (benchmarks/supervised.py): the published recipe
+    class_balanced_beta: null
+    asymmetric: null
+    ema_decay: null
+    augmentation: null
+    schedule: constant
+    warmup_epochs: 0
+    patience_epochs: null       # 100 epochs, no early stop
+    distillation: null
+    save_chosen_to: null
     heads: 8                    # attention across the 12 leads, 38 per head
     base_rate_hz: 100.0         # time steps as published at 100 Hz
     identity_std: 0.02          # lead-identity vectors start small
