@@ -25,3 +25,15 @@ The settings are in the `quality` section of `biosignal-data.yaml`.
 | `at_low`, `at_high`, `limits_from` | the share of samples at the recorder's limits: the EDF header's digital minimum and maximum (`header`), else the limits of the stored integer type (`dtype`) |
 | `minimum`, `maximum`, `mean`, `std` | of the valid physical values, exact |
 | `p01`, `p50`, `p99` | percentiles from a seeded uniform random sample of at most `percentile_sample` valid values per channel; exact percentiles would need a whole channel in memory |
+
+## Flat channels and runs in training
+
+The columns above are per channel and need a run over the whole standard version (on
+2026-10-29 only 8 small datasets had one). Training does not wait for them:
+
+- A run of one stored value much longer than the usual runs of its channel is marked as
+  not observed by the data loader, on the span it reads (`flat_runs`, see
+  [training-layer.md](training-layer.md)).
+- A channel that holds a placeholder in every recording (i-care and siena SpO2: the stored
+  value 0) gets the type `other` by a rule in [`index.yaml`](../index.yaml), with the
+  evidence, so a run that selects types leaves it out.
