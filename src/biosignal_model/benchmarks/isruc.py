@@ -180,7 +180,9 @@ def load(store: Store, s: IsrucSettings, log: Log) -> list[Night]:
         ]  # fmt: skip
         samples = [stored[record, c.array][c.index] for c in channels]
         labels = stages(dataset.file(f"{n}/{n}_1.txt").decode("ascii"), record)
-        epochs = min(len(x) / (EPOCH_S * c.sampling_rate) for x, c in zip(samples, channels))
+        epochs = min(
+            len(x) / (EPOCH_S * c.sampling_rate) for x, c in zip(samples, channels, strict=True)
+        )
         if len(labels) != math.floor(epochs):
             raise ValueError(
                 f"{DATASET}: {record} has {len(labels)} stages and {epochs:g} epochs of signal"
