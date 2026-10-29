@@ -46,6 +46,7 @@ from biosignal_data.storage.stores import Store
 from biosignal_data.training.loader import Channel, Example, Origin, Signal
 from biosignal_model.batch import Batch, Packer
 from biosignal_model.benchmarks import LOG_EVERY_STEPS, Log
+from biosignal_model.benchmarks.xresnet1d import ReferenceSettings, train_and_score
 from biosignal_model.model import Encoder, ModelConfig
 
 DATASET = "physionet/ptb-xl"
@@ -69,7 +70,10 @@ class PtbxlSettings(BaseModel):
     # (a CNN gets them in a fixed order). Test asked for by the user, 2026-10-29.
     fixed_slots: bool
     # fine_tuning: the pretrained encoder and a head; from_scratch: the same from random weights
-    methods: list[Literal["fine_tuning", "from_scratch"]]
+    # reference_xresnet1d101: the paper's own baseline (benchmarks/xresnet1d.py) trained through
+    # this pipeline, with its recipe (`reference`), to check the pipeline itself
+    methods: list[Literal["fine_tuning", "from_scratch", "reference_xresnet1d101"]]
+    reference: ReferenceSettings | None  # the recipe of reference_xresnet1d101; None: not run
     linear_probing_l2: list[float]
     linear_probing_steps: int
     fine_tuning_epochs: int  # the best epoch on fold 9 is the one scored
@@ -562,10 +566,33 @@ def run(
             log({f"{task}/{name}/macro_auc": scores["macro_auc"]})
         starts = {"fine_tuning": checkpoint["model"], "from_scratch": None}
         for name in settings.methods:
-            start = starts[name]
-            scores = end_to_end(
-                config, kept, y[keep], max_tokens, settings, device, start, log, f"{task}/{name}"
-            )
+            if name == "reference_xresnet1d101":
+                scores = _reference(kept, y[keep], settings, device, log, f"{task}/{name}")
+            else:
+                scores = end_to_end(
+                    config, kept, y[keep], max_tokens, settings, device, starts[name], log,
+                    f"{task}/{name}",
+                )
             results |= {f"{task}/{name}/{k}": v for k, v in scores.items()}
             log({f"{task}/{name}/macro_auc": scores["macro_auc"]})
     return results
+
+
+def _reference(
+    records: Records, y: np.ndarray, s: PtbxlSettings, device: torch.device, log: Log, prefix: str
+) -> dict[str, float]:
+    """reference_xresnet1d101 on the records: the leads in the order of the files (I, II, III,
+    aVR, aVL, aVF, V1-V6, as the paper's wfdb.rdsamp), in physical units (mV)."""
+    if s.reference is None:
+        raise ValueError("reference_xresnet1d101 needs the `reference` settings")
+    lengths = {sig.values.size for e in records.examples for sig in e.signals}
+    leads = {len(e.signals) for e in records.examples}
+    if len(lengths) != 1 or len(leads) != 1:
+        raise ValueError(f"records of different lengths {lengths} or leads {leads}")
+    x = np.stack([np.stack([sig.values for sig in e.signals]) for e in records.examples])
+    if not np.isfinite(x).all():
+        raise ValueError("a record has invalid samples")
+    return train_and_score(
+        x, y, records.folds, TRAIN, VALIDATION, TEST, float(s.rate), s.reference, s.seed, device,
+        log, prefix, macro_auc,
+    )

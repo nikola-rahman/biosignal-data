@@ -68,7 +68,7 @@ def test_the_probe_chooses_on_fold_9_and_scores_fold_10() -> None:
     settings = ptbxl.PtbxlSettings(
         rate=100, tasks=["all"], rows=2, read_threads=1, workers=0,
         linear_probing=True, fixed_slots=False,
-        methods=["fine_tuning", "from_scratch"],
+        methods=["fine_tuning", "from_scratch"], reference=None,
         linear_probing_l2=[1e-3, 1.0], linear_probing_steps=50,
         fine_tuning_epochs=1, fine_tuning_patience=None, fine_tuning_learning_rate=1e-3,
         fine_tuning_weight_decay=0.0,
@@ -95,7 +95,7 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model(monkeypatch: pytest.Monkey
     settings = ptbxl.PtbxlSettings(
         rate=100, tasks=["diagnostic"], rows=2, read_threads=1, workers=0,
         linear_probing=True, fixed_slots=False,
-        methods=["fine_tuning", "from_scratch"],
+        methods=["fine_tuning", "from_scratch"], reference=None,
         linear_probing_l2=[1.0], linear_probing_steps=10,
         fine_tuning_epochs=2, fine_tuning_patience=None, fine_tuning_learning_rate=1e-3,
         fine_tuning_weight_decay=0.0,
@@ -222,3 +222,37 @@ def test_batches_made_in_workers_are_the_same_as_in_the_main_process() -> None:
         assert wa == wb
         for name in ("values", "observed", "time_s", "slot", "document"):
             torch.testing.assert_close(getattr(a.inputs, name), getattr(b.inputs, name))
+
+
+def test_the_reference_xresnet1d101_has_the_papers_shape_schedule_and_crops() -> None:
+    from biosignal_model.benchmarks import xresnet1d  # noqa: PLC0415
+
+    model = xresnet1d.xresnet1d101(12, 71, 5, 0.5, [128]).eval()
+    assert model(torch.zeros(2, 12, 250)).shape == (2, 71)
+    convs = [m for m in model.modules() if isinstance(m, torch.nn.Conv1d)]
+    # the stem, 3 per block, and one projection (the first block: 64 -> 256 channels)
+    assert len(convs) == 3 + 3 * 33 + 1
+    head = list(model[-1])
+    assert [type(m).__name__ for m in head] == [
+        "_ConcatPool", "BatchNorm1d", "Dropout", "Linear", "ReLU", "BatchNorm1d", "Dropout",
+        "Linear",
+    ] and head[2].p == 0.25 and head[6].p == 0.5  # fmt: skip
+    s = xresnet1d.ReferenceSettings(
+        input_size_s=2.5, valid_stride_fraction=0.5, aggregate="max", batch_size=4, epochs=1,
+        max_lr=1e-2, weight_decay=1e-2, pct_start=0.3, div_factor=25.0, final_div=25e4,
+        moms=(0.95, 0.85), beta2=0.99, eps=1e-8, kernel_size=5, ps_head=0.5, lin_ftrs_head=[128],
+    )  # fmt: skip
+    assert xresnet1d.one_cycle(0, 100, s) == pytest.approx((1e-2 / 25, 0.95))
+    assert xresnet1d.one_cycle(30, 100, s) == pytest.approx((1e-2, 0.85))
+    assert xresnet1d.one_cycle(100, 100, s) == pytest.approx((1e-2 / 25e4, 0.95))
+    assert xresnet1d.crop_starts(1000, 250, 125) == [0, 125, 250, 375, 500, 625, 750]
+    rng = np.random.default_rng(0)
+    y = np.tile(np.eye(2), (6, 1))
+    x = rng.normal(size=(12, 12, 1000)).astype(np.float32) + y[:, :1, None] * 3.0
+    logged: list[dict[str, float]] = []
+    scores = xresnet1d.train_and_score(
+        x, y, np.array([1] * 8 + [9] * 2 + [10] * 2), (1,), (9,), (10,), 100.0, s, 0,
+        torch.device("cpu"), logged.append, "r", ptbxl.macro_auc,
+    )
+    assert 0.0 <= scores["macro_auc"] <= 1.0 and scores["epoch"] == 1.0
+    assert [r["r/epoch"] for r in logged] == [1.0]
