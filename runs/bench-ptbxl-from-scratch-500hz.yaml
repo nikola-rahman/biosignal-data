@@ -23,6 +23,7 @@ settings:
   methods: [from_scratch]
   reference: null              # the reference_xresnet1d101 recipe; not run
   reference_s4: null
+  reference_s4_channels: null   # the channel-set S4; not run
   linear_probing: false
   fixed_slots: false           # a random channel slot per record, as in pretraining
   linear_probing_l2: [1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]

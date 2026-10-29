@@ -24,7 +24,9 @@ def test_the_nplr_kernel_is_the_kernel_of_the_discrete_state_space() -> None:
     the dense bilinear discretization, for the original C before the length correction."""
     torch.manual_seed(0)
     length = 16
-    kernel = s4.NPLRKernel(h=3, n=8, length=length, channels=2, dt_min=1e-3, dt_max=1e-1)
+    kernel = s4.NPLRKernel(
+        h=3, n=8, length=length, channels=2, dt_min=1e-3, dt_max=1e-1, dt_scale=1.0
+    )
     k = kernel().double()
     da, db = kernel.discrete()
     da, db = da.to(torch.cdouble), db.to(torch.cdouble)
@@ -51,7 +53,7 @@ def test_the_model_has_their_shape_and_drops_whole_features() -> None:
     torch.testing.assert_close(model(x), model(x))  # no dropout in eval
     y = s4._channel_dropout(torch.ones(4, 6, 10), 0.5, training=True)
     assert ((y == 0).all(-1) | (y == 2).all(-1)).all()  # a feature is dropped for all times
-    layer = s4.S4Layer(SETTINGS, length=50)
+    layer = s4.S4Layer(SETTINGS, length=50, dt_scale=1.0)
     assert layer(torch.randn(2, 8, 50)).shape == (2, 8, 50)
     buffers = {n for n, _ in model.named_buffers()}
     assert any(n.endswith("log_dt") for n in buffers)  # A, B, dt fixed (trainable=None)
@@ -98,3 +100,71 @@ def test_every_ptbxl_config_is_valid_and_the_s4_config_has_their_recipe() -> Non
     r = ptbxl.PtbxlSettings.model_validate(s).reference_s4
     assert r is not None and (r.d_model, r.d_state, r.n_layers, r.batch_size) == (512, 8, 4, 128)
     assert (r.input_size_s, r.epochs, r.learning_rate, r.weight_decay) == (2.5, 100, 1e-3, 1e-3)
+
+
+CHANNELS = s4.S4ChannelsSettings(
+    **SETTINGS.model_dump(), heads=2, base_rate_hz=100.0, identity_std=0.02
+)
+
+
+def test_the_channel_set_model_takes_the_leads_as_a_set() -> None:
+    torch.manual_seed(0)
+    model = s4.S4ChannelModel(CHANNELS, leads=12, classes=5, length=50, rate_hz=100.0).eval()
+    x = torch.randn(3, 12, 50)
+    assert model(x).shape == (3, 5) and torch.isfinite(model(x)).all()
+    # without the identity vectors, any order of the leads gives the same output
+    with torch.no_grad():
+        model.identity.zero_()
+    order = torch.randperm(12)
+    torch.testing.assert_close(model(x[:, order]), model(x), rtol=1e-4, atol=1e-5)
+    # with them, the leads are told apart
+    with torch.no_grad():
+        model.identity.normal_()
+    assert not torch.allclose(model(x[:, order]), model(x), atol=1e-4)
+
+
+def test_the_channel_set_time_steps_follow_the_rate() -> None:
+    torch.manual_seed(0)
+    at_100 = s4.S4ChannelModel(CHANNELS, leads=2, classes=3, length=50, rate_hz=100.0)
+    torch.manual_seed(0)
+    at_500 = s4.S4ChannelModel(CHANNELS, leads=2, classes=3, length=50, rate_hz=500.0)
+    dt_100 = at_100.layers[0].kernel._parts()[-1]
+    dt_500 = at_500.layers[0].kernel._parts()[-1]
+    torch.testing.assert_close(dt_500 * 5, dt_100)  # the same steps in seconds
+
+
+def test_the_channel_set_model_trains_and_is_chosen_on_validation() -> None:
+    rng = np.random.default_rng(0)
+    folds = np.array([1] * 16 + [9] * 6 + [10] * 6)
+    y = rng.integers(0, 2, (28, 3)).astype(np.float32)
+    x = rng.normal(size=(28, 12, 100)).astype(np.float32)
+    x[:, 0] += 2 * y[:, :1]
+    logged: list[dict[str, float]] = []
+
+    def auc(yy: np.ndarray, pp: np.ndarray) -> tuple[float, int]:
+        from biosignal_model.benchmarks.ptbxl import macro_auc  # noqa: PLC0415
+
+        return macro_auc(yy, pp)
+
+    out = s4.train_and_score(
+        x, y, folds, (1,), (9,), (10,), 100.0, CHANNELS, 0, torch.device("cpu"),
+        logged.append, "c", auc,
+    )  # fmt: skip
+    assert 0.0 <= out["macro_auc"] <= 1.0 and out["epoch"] in (1.0, 2.0)
+    assert logged[0]["c/parameters"] > 0
+
+
+def test_the_channel_set_config_has_the_size_of_the_reference() -> None:
+    import yaml  # noqa: PLC0415
+
+    from biosignal_model.benchmarks import ptbxl  # noqa: PLC0415
+
+    runs = Path(__file__).resolve().parents[1] / "runs"
+    s = yaml.safe_load((runs / "bench-ptbxl-s4-channels-100hz.yaml").read_text())["settings"]
+    c = ptbxl.PtbxlSettings.model_validate(s).reference_s4_channels
+    r = yaml.safe_load((runs / "bench-ptbxl-reference-s4-100hz.yaml").read_text())["settings"]
+    ref = ptbxl.PtbxlSettings.model_validate(r).reference_s4
+    assert c is not None and ref is not None
+    size = sum(p.numel() for p in s4.S4ChannelModel(c, 12, 71, 250, 100.0).parameters())
+    ref_size = sum(p.numel() for p in s4.S4Model(ref, 12, 71, 250).parameters())
+    assert abs(size / ref_size - 1) <= 0.10

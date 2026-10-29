@@ -47,7 +47,7 @@ from biosignal_data.storage.stores import Store
 from biosignal_data.training.loader import Channel, Example, Origin, Signal
 from biosignal_model.batch import Batch, Packer
 from biosignal_model.benchmarks import LOG_EVERY_STEPS, Log
-from biosignal_model.benchmarks.s4 import S4Settings
+from biosignal_model.benchmarks.s4 import S4ChannelsSettings, S4Settings
 from biosignal_model.benchmarks.s4 import train_and_score as train_and_score_s4
 from biosignal_model.benchmarks.xresnet1d import ReferenceSettings, train_and_score
 from biosignal_model.model import Encoder, ModelConfig
@@ -75,10 +75,17 @@ class PtbxlSettings(BaseModel):
     # fine_tuning: the pretrained encoder and a head; from_scratch: the same from random weights
     # reference_xresnet1d101: the paper's own baseline (benchmarks/xresnet1d.py) trained through
     # this pipeline, with its recipe (`reference`), to check the pipeline itself;
-    # reference_s4: the supervised S4 of Mehari & Strodthoff (benchmarks/s4.py, `reference_s4`)
-    methods: list[Literal["fine_tuning", "from_scratch", "reference_xresnet1d101", "reference_s4"]]
+    # reference_s4: the supervised S4 of Mehari & Strodthoff (benchmarks/s4.py, `reference_s4`);
+    # reference_s4_channels: the same with the leads as a set (S4ChannelModel)
+    methods: list[
+        Literal[
+            "fine_tuning", "from_scratch", "reference_xresnet1d101", "reference_s4",
+            "reference_s4_channels",
+        ]
+    ]  # fmt: skip
     reference: ReferenceSettings | None  # the recipe of reference_xresnet1d101; None: not run
     reference_s4: S4Settings | None  # the recipe of reference_s4; None: not run
+    reference_s4_channels: S4ChannelsSettings | None  # of reference_s4_channels; None: not run
     linear_probing_l2: list[float]
     linear_probing_steps: int
     fine_tuning_epochs: int  # the best epoch on fold 9 is the one scored
@@ -669,8 +676,10 @@ def run(
         for name in settings.methods:
             if name == "reference_xresnet1d101":
                 scores = _reference(kept, y[keep], settings, device, log, f"{task}/{name}")
-            elif name == "reference_s4":
-                scores = _reference_s4(kept, y[keep], settings, device, log, f"{task}/{name}")
+            elif name in ("reference_s4", "reference_s4_channels"):
+                scores = _reference_s4(
+                    kept, y[keep], settings, device, log, f"{task}/{name}", name
+                )
             else:
                 scores = end_to_end(
                     config, kept, y[keep], max_tokens, settings, device, starts[name], log,
@@ -695,14 +704,16 @@ def _records_array(records: Records) -> np.ndarray:
 
 
 def _reference_s4(
-    records: Records, y: np.ndarray, s: PtbxlSettings, device: torch.device, log: Log, prefix: str
-) -> dict[str, float]:
-    """reference_s4 on the records (see benchmarks/s4.py)."""
-    if s.reference_s4 is None:
-        raise ValueError("reference_s4 needs the `reference_s4` settings")
+    records: Records, y: np.ndarray, s: PtbxlSettings, device: torch.device, log: Log, prefix: str,
+    name: str,
+) -> dict[str, float]:  # fmt: skip
+    """reference_s4 or reference_s4_channels on the records (see benchmarks/s4.py)."""
+    recipe = s.reference_s4 if name == "reference_s4" else s.reference_s4_channels
+    if recipe is None:
+        raise ValueError(f"{name} needs the `{name}` settings")
     return train_and_score_s4(
         _records_array(records), y, records.folds, TRAIN, VALIDATION, TEST, float(s.rate),
-        s.reference_s4, s.seed, device, log, prefix, macro_auc,
+        recipe, s.seed, device, log, prefix, macro_auc,
     )
 
 

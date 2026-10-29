@@ -75,6 +75,15 @@ class S4Settings(BaseModel):
     dt_max: float  # 0.1
 
 
+class S4ChannelsSettings(S4Settings):
+    """reference_s4_channels: the recipe of reference_s4 (every field above) and the settings of
+    the channel-set variant (see S4ChannelModel); none has a default."""
+
+    heads: int  # of the attention across channels after each S4 block
+    base_rate_hz: float  # the rate at which the S4 time steps are the published ones (100)
+    identity_std: float  # initial standard deviation of the lead-identity embedding
+
+
 # --- HiPPO-LegS NPLR (dl_models/s4.py transition, rank_correction, nplr) -----------------------
 
 
@@ -126,10 +135,13 @@ class NPLRKernel(nn.Module):
     B and dt are buffers, C (`channels` x H x N/2, complex) the only parameter."""
 
     def __init__(
-        self, h: int, n: int, length: int, channels: int, dt_min: float, dt_max: float
-    ) -> None:
+        self, h: int, n: int, length: int, channels: int, dt_min: float, dt_max: float,
+        dt_scale: float,
+    ) -> None:  # fmt: skip
+        """`dt_scale`: every time step is multiplied by it (1: the published model; for a channel
+        at rate fs, base_rate / fs, so the steps are the same in seconds at every rate)."""
         super().__init__()
-        self.H, self.L = h, length
+        self.H, self.L, self.dt_scale = h, length, dt_scale
         w, p, b = nplr_legs(n)
         self.N = w.size(-1)
         log_dt = torch.rand(h) * (math.log(dt_max) - math.log(dt_min)) + math.log(dt_min)
@@ -149,7 +161,8 @@ class NPLRKernel(nn.Module):
 
     def _parts(self) -> tuple[torch.Tensor, ...]:
         r2c = torch.view_as_complex
-        return r2c(self.w), r2c(self.B), r2c(self.P), r2c(self.Q), torch.exp(self.log_dt)
+        dt = torch.exp(self.log_dt) * self.dt_scale
+        return r2c(self.w), r2c(self.B), r2c(self.P), r2c(self.Q), dt
 
     def discrete(self) -> tuple[torch.Tensor, torch.Tensor]:
         """dense dA (H, 2N, 2N) and dB (H, 2N) of the bilinear discretization, through the
@@ -230,12 +243,12 @@ class S4Layer(nn.Module):
     """The S4 block of dl_models/s4.py: bidirectional SSM convolution + D skip, GELU, channel
     dropout, 1x1 linear to 2H, GLU."""
 
-    def __init__(self, s: S4Settings, length: int) -> None:
+    def __init__(self, s: S4Settings, length: int, dt_scale: float) -> None:
         super().__init__()
         h = s.d_model
         self.dropout = s.dropout
         self.D = nn.Parameter(torch.randn(1, h))
-        self.kernel = NPLRKernel(h, s.d_state, length, 2, s.dt_min, s.dt_max)
+        self.kernel = NPLRKernel(h, s.d_state, length, 2, s.dt_min, s.dt_max, dt_scale)
         self.output_weight = nn.Parameter(torch.empty(2 * h, h))
         nn.init.kaiming_uniform_(self.output_weight, a=math.sqrt(5))
         bound = 1 / math.sqrt(h)
@@ -262,7 +275,7 @@ class S4Model(nn.Module):
         super().__init__()
         self.dropout = s.dropout
         self.encoder = nn.Conv1d(inputs, s.d_model, 1)
-        self.layers = nn.ModuleList(S4Layer(s, length) for _ in range(s.n_layers))
+        self.layers = nn.ModuleList(S4Layer(s, length, 1.0) for _ in range(s.n_layers))
         self.norms = nn.ModuleList(nn.LayerNorm(s.d_model) for _ in range(s.n_layers))
         self.decoder = nn.Linear(s.d_model, classes)
 
@@ -275,6 +288,56 @@ class S4Model(nn.Module):
         return out
 
 
+class S4ChannelModel(nn.Module):
+    """reference_s4_channels: S4Model with the leads as a set (user, 2026-10-29). Each lead is its
+    own sequence through ONE shared stack:
+
+    - a per-sample Linear(1, d) (the encoder of S4Model mixes the 12 leads in a fixed order:
+      here no lead order exists), plus a learned identity vector per lead (one per lead name,
+      the fixed slots of our model), small at start (`identity_std`);
+    - the S4 blocks of S4Model (S4 -> channel dropout -> + input -> LayerNorm), with the time
+      steps scaled by base_rate / fs, so the same weights take another rate in seconds;
+    - after each block, attention across the leads at each sample time (pre-norm LayerNorm,
+      multi-head self-attention over the C leads, residual): the only place leads meet;
+    - the head of S4Model on the mean over time and leads.
+
+    Without the identity vectors the model is the same for any order of the leads."""
+
+    def __init__(
+        self, s: S4ChannelsSettings, leads: int, classes: int, length: int, rate_hz: float
+    ) -> None:
+        super().__init__()
+        d = s.d_model
+        self.dropout = s.dropout
+        self.encoder = nn.Linear(1, d)
+        self.identity = nn.Parameter(torch.randn(leads, d) * s.identity_std)
+        dt_scale = s.base_rate_hz / rate_hz
+        self.layers = nn.ModuleList(S4Layer(s, length, dt_scale) for _ in range(s.n_layers))
+        self.norms = nn.ModuleList(nn.LayerNorm(d) for _ in range(s.n_layers))
+        self.mix_norms = nn.ModuleList(nn.LayerNorm(d) for _ in range(s.n_layers))
+        self.mixers = nn.ModuleList(
+            nn.MultiheadAttention(d, s.heads, batch_first=True) for _ in range(s.n_layers)
+        )
+        self.decoder = nn.Linear(d, classes)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # (B, leads, L) -> (B, classes)
+        b, c, length = x.shape
+        h = self.encoder(x.unsqueeze(-1)) + self.identity[None, :, None, :]  # (B, C, L, d)
+        h = h.flatten(0, 1).transpose(-1, -2)  # (B C, d, L)
+        for layer, norm, mix_norm, mixer in zip(
+            self.layers, self.norms, self.mix_norms, self.mixers, strict=True
+        ):
+            z = _channel_dropout(layer(h), self.dropout, self.training)
+            h = norm((z + h).transpose(-1, -2)).transpose(-1, -2)
+            t = h.view(b, c, -1, length).permute(0, 3, 1, 2).reshape(b * length, c, -1)
+            q = mix_norm(t)
+            t = t + mixer(q, q, q, need_weights=False)[0]  # across the leads, per sample time
+            h = t.view(b, length, c, -1).permute(0, 2, 3, 1).reshape(b * c, -1, length)
+        pooled = h.view(b, c, -1, length).mean(dim=(1, 3))  # (B, d): over leads and time
+        out: torch.Tensor = self.decoder(pooled)
+        return out
+
+
 def train_and_score(
     x: np.ndarray, y: np.ndarray, folds: np.ndarray, train: tuple[int, ...],
     validation: tuple[int, ...], test: tuple[int, ...], rate: float, s: S4Settings,
@@ -282,14 +345,20 @@ def train_and_score(
     macro_auc: Callable[[np.ndarray, np.ndarray], tuple[float, int]],
 ) -> dict[str, float]:  # fmt: skip
     """Train with the recipe; the epoch with the best validation macro-AUC is scored on the test
-    folds (fold 10 only for the epochs fold 9 chooses). `x`: [records, leads, samples], mV."""
+    folds (fold 10 only for the epochs fold 9 chooses). `x`: [records, leads, samples], mV.
+    S4ChannelsSettings: the channel-set model (S4ChannelModel), otherwise S4Model."""
     random.seed(seed)
     torch.manual_seed(seed)
     tr, va, te = (np.flatnonzero(np.isin(folds, f)) for f in (train, validation, test))
     data = torch.from_numpy(x.astype(np.float32)).to(device)  # normalize False: as recorded
     target = torch.from_numpy(y.astype(np.float32)).to(device)
     size = int(round(s.input_size_s * rate))
-    model = S4Model(s, x.shape[1], y.shape[1], size).to(device)
+    model: nn.Module = (
+        S4ChannelModel(s, x.shape[1], y.shape[1], size, rate)
+        if isinstance(s, S4ChannelsSettings)
+        else S4Model(s, x.shape[1], y.shape[1], size)
+    ).to(device)
+    log({f"{prefix}/parameters": float(sum(p.numel() for p in model.parameters()))})
     optimizer = torch.optim.AdamW(model.parameters(), lr=s.learning_rate, betas=s.betas,
                                   eps=s.eps, weight_decay=s.weight_decay)  # fmt: skip
     per_epoch = len(tr) // s.batch_size  # drop_last
