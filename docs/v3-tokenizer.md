@@ -146,7 +146,11 @@ size set so that every proxy has 4.2-4.3 M parameters (without the pretraining h
 lr 1e-4, betas (0.9, 0.95), warmup 1.5 epochs, cosine over 25 epochs, clip 1.0, weight decay
 1e-3, fixed slots, 2.5 s crops, no dropout (`dropout`, `drop_path` 0; 0.1 is the second
 level). Task "all" is also scored per statement group (diagnostic, form, rhythm; fold 9 alone
-chooses the epoch). First the proxies must rank as the full-size models did.
+chooses the epoch). Every method (also reference_xresnet1d101) stores in the result JSON each
+label's AUC on fold 9 and fold 10 for the chosen epoch (`<task>/<method>/label/<code>/
+{validation,test}_auc`) and its positives per fold (`..._positives`): to find the labels that
+make our runs lose ~1.3 points from fold 9 to fold 10 (S4 and xresnet lose ~0). First the
+proxies must rank as the full-size models did.
 
 | proxy (config `bench-ptbxl-proxy-*-100hz`) | global tokens per 2.5 s, 12 leads, 100 Hz | params (global ff) |
 |---|---|---|

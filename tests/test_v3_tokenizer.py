@@ -215,7 +215,7 @@ def test_ptbxl_fine_tuning_runs_with_the_new_tokenizers(
         from_scratch_tokenizer=tokenizer, from_scratch_model=None, seed=0,
     )  # fmt: skip
     logged: list[dict[str, float]] = []
-    scores = ptbxl.end_to_end(
+    scores, _ = ptbxl.end_to_end(
         _config(tokenizer), records, y, 1024, settings, torch.device("cpu"), None,
         logged.append, "f",
     )  # fmt: skip

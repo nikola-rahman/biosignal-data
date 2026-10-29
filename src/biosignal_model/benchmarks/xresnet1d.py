@@ -170,9 +170,10 @@ def train_and_score(
     validation: tuple[int, ...], test: tuple[int, ...], rate: float, s: ReferenceSettings,
     seed: int, device: torch.device, log: Callable[[dict[str, float]], None], prefix: str,
     macro_auc: Callable[[np.ndarray, np.ndarray], tuple[float, int]],
-) -> dict[str, float]:  # fmt: skip
+) -> tuple[dict[str, float], tuple[np.ndarray, np.ndarray]]:  # fmt: skip
     """Train on the training folds with the recipe; the last epoch is scored on the test folds
-    (the fold-9 macro-AUC of each epoch is logged, not used). `x`: [records, leads, samples]."""
+    (the fold-9 macro-AUC of each epoch is logged, not used). `x`: [records, leads, samples].
+    Also returned: the last epoch's probabilities on the validation and test folds."""
     random.seed(seed)
     torch.manual_seed(seed)
     tr, va, te = (np.flatnonzero(np.isin(folds, f)) for f in (train, validation, test))
@@ -220,9 +221,11 @@ def train_and_score(
             optimizer.step()
             step += 1
             losses.append(loss.item())
-        auc_val, _ = macro_auc(y[va], predict(va))
+        p_val = predict(va)
+        auc_val, _ = macro_auc(y[va], p_val)
         log({f"{prefix}/epoch": float(epoch), f"{prefix}/epoch_train_loss": float(np.mean(losses)),
              f"{prefix}/epoch_validation_macro_auc": auc_val, f"{prefix}/lr": lr})  # fmt: skip
-    auc, labels_n = macro_auc(y[te], predict(te))
+    p_test = predict(te)
+    auc, labels_n = macro_auc(y[te], p_test)
     return {"macro_auc": auc, "labels": float(labels_n), "epoch": float(s.epochs),
-            "validation_macro_auc": auc_val}  # fmt: skip
+            "validation_macro_auc": auc_val}, (p_val, p_test)  # fmt: skip

@@ -197,18 +197,37 @@ def label_groups(classes: list[str], statements: list[dict[str, str]]) -> dict[s
     }
 
 
+def _auc(y: np.ndarray, p: np.ndarray) -> float | None:
+    """The ROC AUC of one label (ties get average ranks); None without both classes."""
+    positive = y == 1
+    n_pos, n_neg = int(positive.sum()), int((~positive).sum())
+    if n_pos == 0 or n_neg == 0:
+        return None
+    ranks = rankdata(p)
+    return float((ranks[positive].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
+
+
 def macro_auc(y: np.ndarray, p: np.ndarray) -> tuple[float, int]:
     """The mean ROC AUC over the labels with both classes in `y` (ties get average ranks),
     and how many labels that is."""
-    aucs = []
-    for k in range(y.shape[1]):
-        positive = y[:, k] == 1
-        n_pos, n_neg = int(positive.sum()), int((~positive).sum())
-        if n_pos == 0 or n_neg == 0:
-            continue
-        ranks = rankdata(p[:, k])
-        aucs.append((ranks[positive].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
+    aucs = [a for k in range(y.shape[1]) if (a := _auc(y[:, k], p[:, k])) is not None]
     return float(np.mean(aucs)), len(aucs)
+
+
+def per_label(
+    classes: list[str], y_val: np.ndarray, p_val: np.ndarray, y_test: np.ndarray,
+    p_test: np.ndarray,
+) -> dict[str, float]:  # fmt: skip
+    """Each label's score for the chosen epoch: `label/<code>/validation_positives`,
+    `.../test_positives` (fold 9, fold 10) and `.../validation_auc`, `.../test_auc` (only
+    where the fold has both classes)."""
+    out: dict[str, float] = {}
+    for k, code in enumerate(classes):
+        for fold, y, p in (("validation", y_val, p_val), ("test", y_test, p_test)):
+            out[f"label/{code}/{fold}_positives"] = float((y[:, k] == 1).sum())
+            if (auc := _auc(y[:, k], p[:, k])) is not None:
+                out[f"label/{code}/{fold}_auc"] = auc
+    return out
 
 
 def load(store: Store, settings: PtbxlSettings, log: Log) -> tuple[Records, list[dict[str, str]]]:
@@ -459,7 +478,7 @@ def end_to_end(
     config: ModelConfig, records: Records, y: np.ndarray, max_tokens: int, s: PtbxlSettings,
     device: torch.device, start: dict[str, torch.Tensor] | None, log: Log, prefix: str,
     scored_groups: dict[str, np.ndarray] | None = None,
-) -> dict[str, float]:  # fmt: skip
+) -> tuple[dict[str, float], tuple[np.ndarray, np.ndarray]]:  # fmt: skip
     """The encoder and a linear head on its mean feature, every weight trained on folds 1-8
     (layer-dependent learning rates and crops: see PtbxlSettings); the epoch with the best
     macro-AUC on fold 9 is scored on fold 10 (at most `fine_tuning_patience` epochs after it are
@@ -468,7 +487,8 @@ def end_to_end(
     mean training loss, fold-9 macro-AUC, time and speed; fold 10 only for a chosen epoch.
     `scored_groups`: columns of label groups (label_groups), also scored on their own
     (macro-AUC over the group's labels), on fold 9 each epoch and on fold 10 for a chosen
-    epoch; fold 9 alone (all labels) still chooses the epoch."""
+    epoch; fold 9 alone (all labels) still chooses the epoch. Also returned: the chosen
+    epoch's probabilities on fold 9 and fold 10 (records in order)."""
     torch.manual_seed(s.seed)
     model = Encoder(config).to(device)
     if start is not None:
@@ -509,6 +529,7 @@ def end_to_end(
     train_eval = sorted(rng_eval.sample(train, min(len(train), len(val))))
     best_val, best_test, best_epoch, labels_n = -1.0, 0.0, 0, 0
     best_groups: dict[str, float] = {}
+    chosen = np.zeros((0, y.shape[1])), np.zeros((0, y.shape[1]))
     step = 0
     for epoch in range(1, s.fine_tuning_epochs + 1):
         model.train()
@@ -553,6 +574,7 @@ def end_to_end(
         if auc_val > best_val:  # fold 10 is scored for the epoch fold 9 chooses
             best_val, best_epoch = auc_val, epoch
             p_test = predict(test)
+            chosen = p_val, p_test
             best_test, labels_n = macro_auc(y[test], p_test)
             record[f"{prefix}/chosen_epoch"] = float(epoch)
             record[f"{prefix}/chosen_test_macro_auc"] = best_test
@@ -568,7 +590,7 @@ def end_to_end(
     return {"macro_auc": best_test, "labels": float(labels_n), "epoch": float(best_epoch),
             "validation_macro_auc": best_val, "epochs_run": float(epoch)} | {
         f"macro_auc_{name}": value for name, value in best_groups.items()
-    }  # fmt: skip
+    }, chosen  # fmt: skip
 
 
 @torch.no_grad()
@@ -724,13 +746,17 @@ def run(
         starts = {"fine_tuning": checkpoint["model"], "from_scratch": None}
         for name in settings.methods:
             if name == "reference_xresnet1d101":
-                scores = _reference(kept, y[keep], settings, device, log, f"{task}/{name}")
+                scores, (p_val, p_test) = _reference(
+                    kept, y[keep], settings, device, log, f"{task}/{name}"
+                )
             else:
-                scores = end_to_end(
+                scores, (p_val, p_test) = end_to_end(
                     config, kept, y[keep], max_tokens, settings, device, starts[name], log,
                     f"{task}/{name}",
                     scored_groups=label_groups(classes, statements) if task == "all" else None,
                 )
+            val, test = np.isin(kept.folds, VALIDATION), np.isin(kept.folds, TEST)
+            scores |= per_label(classes, y[keep][val], p_val, y[keep][test], p_test)
             results |= {f"{task}/{name}/{k}": v for k, v in scores.items()}
             log({f"{task}/{name}/macro_auc": scores["macro_auc"]})
     return results
@@ -738,7 +764,7 @@ def run(
 
 def _reference(
     records: Records, y: np.ndarray, s: PtbxlSettings, device: torch.device, log: Log, prefix: str
-) -> dict[str, float]:
+) -> tuple[dict[str, float], tuple[np.ndarray, np.ndarray]]:
     """reference_xresnet1d101 on the records: the leads in the order of the files (I, II, III,
     aVR, aVL, aVF, V1-V6, as the paper's wfdb.rdsamp), in physical units (mV)."""
     if s.reference is None:

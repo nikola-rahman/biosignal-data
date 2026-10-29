@@ -118,7 +118,7 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model(monkeypatch: pytest.Monkey
     logged: list[dict[str, float]] = []
     for start in (None, Encoder(config).state_dict()):
         logged.clear()
-        scores = ptbxl.end_to_end(
+        scores, _ = ptbxl.end_to_end(
             config, records, y, 256, settings, device, start, logged.append, "f"
         )
         assert 0.0 <= scores["macro_auc"] <= 1.0 and scores["epoch"] in (1.0, 2.0)
@@ -132,7 +132,7 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model(monkeypatch: pytest.Monkey
     monkeypatch.setattr(ptbxl, "macro_auc", lambda y, p: (aucs.pop(0), 1))
     patient = settings.model_copy(update={"fine_tuning_epochs": 6, "fine_tuning_patience": 2})
     logged.clear()
-    scores = ptbxl.end_to_end(config, records, y, 256, patient, device, None, logged.append, "f")
+    scores, _ = ptbxl.end_to_end(config, records, y, 256, patient, device, None, logged.append, "f")
     assert scores["epochs_run"] == 3.0 and scores["epoch"] == 1.0 and scores["macro_auc"] == 0.5
     assert [r["f/epoch"] for r in logged if "f/epoch" in r] == [1.0, 2.0, 3.0] and aucs == []
     monkeypatch.undo()
@@ -144,7 +144,7 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model(monkeypatch: pytest.Monkey
         "fine_tuning_grad_clip": 1.0, "fine_tuning_head": "reference",
     })  # fmt: skip
     logged.clear()
-    scores = ptbxl.end_to_end(config, records, y, 256, options, device, None, logged.append, "o")
+    scores, _ = ptbxl.end_to_end(config, records, y, 256, options, device, None, logged.append, "o")
     assert 0.0 <= scores["macro_auc"] <= 1.0 and scores["epochs_run"] == 2.0
     assert all(np.isfinite(r["o/epoch_train_loss"]) for r in logged if "o/epoch" in r)
     logged.clear()
@@ -312,11 +312,13 @@ def test_the_reference_xresnet1d101_has_the_papers_shape_schedule_and_crops() ->
     y = np.tile(np.eye(2), (6, 1))
     x = rng.normal(size=(12, 12, 1000)).astype(np.float32) + y[:, :1, None] * 3.0
     logged: list[dict[str, float]] = []
-    scores = xresnet1d.train_and_score(
+    scores, (p_val, p_test) = xresnet1d.train_and_score(
         x, y, np.array([1] * 8 + [9] * 2 + [10] * 2), (1,), (9,), (10,), 100.0, s, 0,
         torch.device("cpu"), logged.append, "r", ptbxl.macro_auc,
     )
     assert 0.0 <= scores["macro_auc"] <= 1.0 and scores["epoch"] == 1.0
+    assert p_val.shape == p_test.shape == (2, 2)
+    assert ptbxl.macro_auc(y[10:], p_test)[0] == scores["macro_auc"]
     assert [r["r/epoch"] for r in logged] == [1.0]
 
 
@@ -348,10 +350,14 @@ def test_label_groups_are_scored_on_their_own_and_fold_9_still_chooses() -> None
         seed=0,
     )  # fmt: skip
     logged: list[dict[str, float]] = []
-    scores = ptbxl.end_to_end(
+    scores, (p_val, p_test) = ptbxl.end_to_end(
         config, records, y, 256, settings, torch.device("cpu"), None, logged.append, "f",
         scored_groups=groups,
     )
+    # the chosen epoch's probabilities: fold 9 and fold 10, records in order
+    assert p_val.shape == p_test.shape == (4, len(classes))
+    assert ptbxl.macro_auc(y[16:20], p_val)[0] == scores["validation_macro_auc"]
+    assert ptbxl.macro_auc(y[20:], p_test)[0] == scores["macro_auc"]
     epochs = [r for r in logged if "f/epoch" in r]
     for g in groups:
         assert all(0.0 <= r[f"f/epoch_validation_macro_auc/{g}"] <= 1.0 for r in epochs)
@@ -359,6 +365,22 @@ def test_label_groups_are_scored_on_their_own_and_fold_9_still_chooses() -> None
         assert chosen[-1][f"f/chosen_test_macro_auc/{g}"] == scores[f"macro_auc_{g}"]
     best = max(epochs, key=lambda r: r["f/epoch_validation_macro_auc"])
     assert scores["epoch"] == best["f/epoch"]  # all labels on fold 9 choose the epoch
+
+
+def test_per_label_scores_give_each_label_its_auc_and_positives_per_fold() -> None:
+    y_val = np.array([[1, 0], [0, 0], [1, 0], [0, 0]])
+    p_val = np.array([[0.9, 0.1], [0.2, 0.3], [0.4, 0.2], [0.6, 0.4]])
+    y_test = np.array([[1, 1], [0, 0], [0, 1]])
+    p_test = np.array([[0.3, 0.8], [0.3, 0.1], [0.1, 0.5]])
+    out = ptbxl.per_label(["A", "B"], y_val, p_val, y_test, p_test)
+    assert out == {
+        "label/A/validation_positives": 2.0, "label/A/validation_auc": 0.75,
+        "label/A/test_positives": 1.0, "label/A/test_auc": 0.75,  # a tie: half a pair
+        "label/B/validation_positives": 0.0,  # one class: no AUC
+        "label/B/test_positives": 2.0, "label/B/test_auc": 1.0,
+    }  # fmt: skip
+    # the macro-AUC is the mean of these AUCs
+    assert ptbxl.macro_auc(y_test, p_test)[0] == pytest.approx((0.75 + 1.0) / 2)
 
 
 def test_drop_path_drops_whole_items_in_training_only() -> None:
