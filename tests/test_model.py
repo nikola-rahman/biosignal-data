@@ -15,7 +15,14 @@ torch = pytest.importorskip("torch")
 from biosignal_data.storage.stores import LocalStore, StoreFactory  # noqa: E402
 from biosignal_data.training import Selection  # noqa: E402
 from biosignal_data.training.loader import Channel, Example, Origin, Signal  # noqa: E402
-from biosignal_model.batch import SIGNAL_TYPES, Batch, Inputs, Packer, concat  # noqa: E402
+from biosignal_model.batch import (  # noqa: E402
+    SIGNAL_TYPES,
+    Batch,
+    Inputs,
+    Packer,
+    SamplesTokenizer,
+    concat,
+)
 from biosignal_model.model import Encoder, ModelConfig, masked_loss  # noqa: E402
 from biosignal_model.train import (  # noqa: E402
     ADDED_LATER,
@@ -44,6 +51,7 @@ def _packer(**kw: object) -> Packer:
     fields: dict[str, object] = {
         "datasets": ["d/x", "d/y"], "max_tokens": 64, "samples_per_token": 8,
         "max_channels": 4, "rows": 2, "mask_ratio": 0.5, "seed": 3, "slots": None,
+        "tokenizer": SamplesTokenizer(kind="samples"),
     }  # fmt: skip
     return Packer(**(fields | kw))  # type: ignore[arg-type]
 
@@ -118,7 +126,7 @@ def _config(**model: object) -> ModelConfig:
     fields: dict[str, object] = {
         "samples_per_token": 8, "max_channels": 4, "width": 32, "layers": 2, "heads": 4,
         "feed_forward": 64, "min_wavelength_s": 0.01, "max_wavelength_s": 1000.0,
-        "attention": "dense",
+        "attention": "dense", "tokenizer": SamplesTokenizer(kind="samples"),
     }  # fmt: skip
     return ModelConfig(**(fields | model))  # type: ignore[arg-type]
 
@@ -153,7 +161,7 @@ def test_a_short_run_learns_and_logs_without_artifacts(store: LocalStore, tmp_pa
                        "rows": 2, "mask_ratio": 0.4},
             "model": {"width": 32, "layers": 2, "heads": 4, "feed_forward": 64,
                       "min_wavelength_s": 0.01, "max_wavelength_s": 1000.0,
-                      "attention": "dense"},
+                      "attention": "dense", "tokenizer": {"kind": "samples"}},
             "optim": {"learning_rate": 3e-3, "min_learning_rate": 3e-4, "warmup_steps": 5,
                       "steps": 40, "weight_decay": 0.01, "beta1": 0.9, "beta2": 0.95,
                       "grad_clip": 1.0, "schedule": "cosine", "decay_steps": None,
@@ -190,7 +198,7 @@ def _short_config(store: LocalStore, tmp_path: Path, **run: object) -> TrainConf
                        "rows": 2, "mask_ratio": 0.4},
             "model": {"width": 32, "layers": 1, "heads": 4, "feed_forward": 64,
                       "min_wavelength_s": 0.01, "max_wavelength_s": 1000.0,
-                      "attention": "dense"},
+                      "attention": "dense", "tokenizer": {"kind": "samples"}},
             "optim": {"learning_rate": 1e-3, "min_learning_rate": 1e-4, "warmup_steps": 2,
                       "steps": 10, "weight_decay": 0.0, "beta1": 0.9, "beta2": 0.95,
                       "grad_clip": 1.0, "schedule": "cosine", "decay_steps": None,

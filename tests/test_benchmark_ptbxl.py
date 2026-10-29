@@ -6,6 +6,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from biosignal_data.training.loader import Channel, Example, Origin, Signal  # noqa: E402
+from biosignal_model.batch import SamplesTokenizer  # noqa: E402
 from biosignal_model.benchmarks import ptbxl  # noqa: E402
 from biosignal_model.model import Encoder, ModelConfig  # noqa: E402
 
@@ -77,7 +78,7 @@ def test_the_probe_chooses_on_fold_9_and_scores_fold_10() -> None:
         evaluation_stride_fraction=1.0, evaluation_aggregate="mean", fine_tuning_slot_group="lower",
         fine_tuning_betas=(0.9, 0.999), fine_tuning_warmup_epochs=0.0,
         fine_tuning_schedule="constant", fine_tuning_grad_clip=None, fine_tuning_head="linear",
-        from_scratch_samples_per_token=None,
+        from_scratch_samples_per_token=None, from_scratch_tokenizer=None,
         seed=0,
     )  # fmt: skip
     logged: list[dict[str, float]] = []
@@ -93,6 +94,7 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model(monkeypatch: pytest.Monkey
     config = ModelConfig(
         samples_per_token=50, max_channels=4, width=32, layers=1, heads=4, feed_forward=64,
         min_wavelength_s=0.01, max_wavelength_s=1000.0, attention="dense",
+        tokenizer=SamplesTokenizer(kind="samples"),
     )  # fmt: skip
     codes = [["NORM"], ["IMI"]] * 12
     records = _records(codes, [1] * 16 + [9] * 4 + [10] * 4)
@@ -109,7 +111,7 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model(monkeypatch: pytest.Monkey
         evaluation_stride_fraction=1.0, evaluation_aggregate="mean", fine_tuning_slot_group="lower",
         fine_tuning_betas=(0.9, 0.999), fine_tuning_warmup_epochs=0.0,
         fine_tuning_schedule="constant", fine_tuning_grad_clip=None, fine_tuning_head="linear",
-        from_scratch_samples_per_token=None,
+        from_scratch_samples_per_token=None, from_scratch_tokenizer=None,
         seed=0,
     )  # fmt: skip
     device = torch.device("cpu")
@@ -157,6 +159,7 @@ def test_layer_dependent_learning_rates_cover_every_weight_a_task_uses() -> None
     config = ModelConfig(
         samples_per_token=50, max_channels=4, width=32, layers=8, heads=4, feed_forward=64,
         min_wavelength_s=0.01, max_wavelength_s=1000.0, attention="dense",
+        tokenizer=SamplesTokenizer(kind="samples"),
     )  # fmt: skip
     model, head = Encoder(config), torch.nn.Linear(32, 3)
     groups = ptbxl.parameter_groups(model, head, 1e-3, 0.1, 0.25, "lower")
@@ -202,7 +205,7 @@ def _settings_for_schedule(schedule: str) -> ptbxl.PtbxlSettings:
         fine_tuning_slot_group="head", fine_tuning_betas=(0.9, 0.95),
         fine_tuning_warmup_epochs=2.0, fine_tuning_schedule=schedule,  # type: ignore[arg-type]
         fine_tuning_grad_clip=1.0, fine_tuning_head="reference",
-        from_scratch_samples_per_token=None, seed=0,
+        from_scratch_samples_per_token=None, from_scratch_tokenizer=None, seed=0,
     )  # fmt: skip
 
 
@@ -228,6 +231,7 @@ def _small() -> ModelConfig:
     return ModelConfig(
         samples_per_token=50, max_channels=4, width=32, layers=2, heads=4, feed_forward=64,
         min_wavelength_s=0.01, max_wavelength_s=1000.0, attention="dense",
+        tokenizer=SamplesTokenizer(kind="samples"),
     )  # fmt: skip
 
 

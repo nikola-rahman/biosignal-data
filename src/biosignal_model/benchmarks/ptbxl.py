@@ -45,7 +45,7 @@ from scipy.stats import rankdata
 from biosignal_data.read.standard import StandardDataset
 from biosignal_data.storage.stores import Store
 from biosignal_data.training.loader import Channel, Example, Origin, Signal
-from biosignal_model.batch import Batch, Packer
+from biosignal_model.batch import Batch, Packer, Tokenizer
 from biosignal_model.benchmarks import LOG_EVERY_STEPS, Log
 from biosignal_model.benchmarks.xresnet1d import ReferenceSettings, train_and_score
 from biosignal_model.model import Encoder, ModelConfig
@@ -124,6 +124,9 @@ class PtbxlSettings(BaseModel):
     # from_scratch, whose weights are new: a test of the token size without pretraining (at
     # 100 Hz the checkpoint's 64 samples are 0.64 s, about a whole beat; user, 2026-10-29).
     from_scratch_samples_per_token: int | None
+    # The tokenizer of from_scratch runs (docs/v3-tokenizer.md); None: the checkpoint's. Only for
+    # from_scratch runs alone, like from_scratch_samples_per_token (the v3 tokenizer bench).
+    from_scratch_tokenizer: Tokenizer | None
     seed: int
 
 
@@ -237,6 +240,7 @@ def _packer(
     return Packer(
         datasets=[DATASET], max_tokens=max_tokens, samples_per_token=model.samples_per_token,
         max_channels=model.max_channels, rows=rows, mask_ratio=0.0, seed=0, slots=slots,
+        tokenizer=model.tokenizer,
     )  # fmt: skip
 
 
@@ -558,13 +562,16 @@ def parameter_groups(
     """AdamW groups: the head at `lr`; the encoder's upper blocks and final norm at
     lr x factor; its input embedding and lowest blocks (`lower_fraction` of them, rounded) at
     lr x factor^2; the slot embedding with the lower part or the head (`slot_group`). The
-    pretraining head (`model.head`) is not used by a task and left out."""
+    pretraining heads (`model.head`, `head_kernel`) are not used by a task and left out; the
+    input embedding is `model.input_modules()` (with the stem and local stage of the v3
+    tokenizers)."""
     lower_blocks = round(len(model.blocks) * lower_fraction)
-    embedding = [model.samples, model.context] + ([model.slot] if slot_group == "lower" else [])
-    lower = [p for m in embedding for p in m.parameters()] + [model.hidden]
+    embedding = [*model.input_modules(), model.context]
+    embedding += [model.slot] if slot_group == "lower" else []
+    lower = [p for m in embedding for p in m.parameters()] + model.input_parameters()
     lower += [p for b in model.blocks[:lower_blocks] for p in b.parameters()]
     upper = [p for b in model.blocks[lower_blocks:] for p in b.parameters()]
-    upper += list(model.norm.parameters())
+    upper += [p for m in model.output_modules() for p in m.parameters()]
     top = list(head.parameters()) + (list(model.slot.parameters()) if slot_group == "head" else [])
     return [
         {"params": top, "lr": lr},
@@ -625,6 +632,10 @@ def run(
         if settings.methods != ["from_scratch"] or settings.linear_probing:
             raise ValueError("from_scratch_samples_per_token is only for from_scratch runs alone")
         config = replace(config, samples_per_token=settings.from_scratch_samples_per_token)
+    if settings.from_scratch_tokenizer is not None:
+        if settings.methods != ["from_scratch"] or settings.linear_probing:
+            raise ValueError("from_scratch_tokenizer is only for from_scratch runs alone")
+        config = replace(config, tokenizer=settings.from_scratch_tokenizer)
     records, statements = load(store, settings, log)
     features = {}
     if settings.linear_probing:

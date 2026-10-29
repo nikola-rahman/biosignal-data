@@ -7,6 +7,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+from biosignal_model.batch import SamplesTokenizer  # noqa: E402
 from biosignal_model.benchmarks import apnea  # noqa: E402
 from biosignal_model.model import Encoder, ModelConfig  # noqa: E402
 
@@ -75,6 +76,7 @@ def test_the_benchmark_runs_end_to_end_on_a_small_model() -> None:
     config = ModelConfig(
         samples_per_token=50, max_channels=4, width=32, layers=1, heads=4, feed_forward=64,
         min_wavelength_s=0.01, max_wavelength_s=1000.0, attention="dense",
+        tokenizer=SamplesTokenizer(kind="samples"),
     )  # fmt: skip
     data = _Dataset({"a01": ["N", "A"] * 4, "x01": ["A", "N"] * 3})
     learn = apnea.minutes(data, ["a01"], SETTINGS.context_s)  # type: ignore[arg-type]
