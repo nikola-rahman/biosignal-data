@@ -18,6 +18,7 @@ Guarantees:
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import logging
@@ -168,6 +169,12 @@ def plan_standard(
     mine = (rules or StandardRules.load()).get(dataset_id)
     edf_rule = mine.edf_annotation_files if mine is not None else None
     discovery = discover((f.path for f in raw.files), read_text, read_texts, edf_rule)
+    if mine is not None and mine.units:  # every recording carries the unit rules
+        corrections = tuple(mine.units)
+        discovery = dataclasses.replace(
+            discovery, units=[dataclasses.replace(u, unit_corrections=corrections)
+                              for u in discovery.units],
+        )  # fmt: skip
     reading.finish()
     done = set() if complete else set(_done_parts(store, location))
     plan = StandardPlan(
@@ -436,7 +443,7 @@ def convert_unit(raw: RawFiles, store: Store | None, unit: Unit, work_dir: Path)
             files = {p: raw.entry(p).sha256 for p in used}
             parts = {
                 "recordings": tables.recording_table(unit.id, source, bool(source.groups), files),
-                "channels": tables.channel_table(unit.id, source, sha256),
+                "channels": tables.channel_table(unit.id, source, sha256, unit.unit_corrections),
                 "events": tables.event_table(unit.id, events),
             }
             return UnitResult(unit, parts, used, skipped, problems, encoded)

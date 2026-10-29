@@ -6,10 +6,11 @@ A dataset without an entry is converted by the general rules of discover.py only
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, ValidationError, model_validator
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -40,9 +41,45 @@ class EdfAnnotationFiles(_Model):
     notes: str | None = None
 
 
+class UnitCorrection(_Model):
+    """The physical unit of channels whose header names another one: the dataset's own
+    documentation or its values show that the written unit is wrong. Only the `unit` of the
+    channels table changes; the unit as written stays in the channel's `source`
+    (`unit_as_written`), and the samples, scale and offset stay as stored. A channel that
+    `channels` matches but whose header names another unit than `written` fails its
+    recording: the rule does not describe that file."""
+
+    channels: str  # a regex on the channel name as the source wrote it
+    written: str  # the unit the header gives
+    unit: str  # the true unit
+    source: HttpUrl
+    evidence: str  # exact quotes from the source
+    checked: str  # how the values were compared: what shows the written unit is wrong
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> UnitCorrection:
+        re.compile(self.channels)
+        if self.written == self.unit:
+            raise ValueError("`written` and `unit` are the same")
+        return self
+
+    def unit_of(self, name: str, written: str) -> str | None:
+        """The true unit of channel `name`, or None if the rule is not for it."""
+        if re.search(self.channels, name) is None:
+            return None
+        if written != self.written:
+            raise ValueError(
+                f"channel {name!r} has the unit {written!r}; the standard.yaml rule for "
+                f"{self.channels!r} expects {self.written!r}"
+            )
+        return self.unit
+
+
 class DatasetRules(_Model):
     id: str
     edf_annotation_files: EdfAnnotationFiles | None = None
+    units: list[UnitCorrection] = Field(default_factory=list)
 
 
 class StandardRules(_Model):
