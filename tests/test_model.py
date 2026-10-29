@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import os
@@ -42,7 +43,7 @@ def _example(lengths: list[int], rates: list[float], dataset: str = "d/x") -> Ex
 def _packer(**kw: object) -> Packer:
     fields: dict[str, object] = {
         "datasets": ["d/x", "d/y"], "max_tokens": 64, "samples_per_token": 8,
-        "max_channels": 4, "rows": 2, "mask_ratio": 0.5, "seed": 3,
+        "max_channels": 4, "rows": 2, "mask_ratio": 0.5, "seed": 3, "slots": None,
     }  # fmt: skip
     return Packer(**(fields | kw))  # type: ignore[arg-type]
 
@@ -83,6 +84,20 @@ def test_a_change_in_a_flat_channel_stays_small_enough_to_learn() -> None:
     for _ in range(20):  # whichever tokens are hidden
         tokens = packer.tokens(example)
         assert np.abs(tokens.values).max() < 20  # asinh(1e8) is 19.1
+
+
+def test_fixed_slots_follow_the_channel_name_in_any_order() -> None:
+    example = _example([16, 24, 8], [100.0, 100.0, 100.0])  # channels c0, c1, c2
+    turned = Example(example.signals[::-1], dataclasses.replace(
+        example.origin, channels=example.origin.channels[::-1]))  # fmt: skip
+    packer = _packer(slots={"c0": 3, "c1": 0, "c2": 1}, mask_ratio=0.0)
+    for e in (example, turned):
+        tokens = packer.tokens(e)
+        names = [c.name for c, s in zip(e.origin.channels, e.signals, strict=True)
+                 for _ in range(-(-s.values.size // 8))]  # fmt: skip
+        assert tokens.slot.tolist() == [{"c0": 3, "c1": 0, "c2": 1}[n] for n in names]
+    with pytest.raises(ValueError, match="slot"):
+        _packer(slots={"c0": 4})  # max_channels is 4
 
 
 def test_examples_are_packed_whole_into_rows() -> None:

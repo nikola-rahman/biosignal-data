@@ -66,7 +66,8 @@ def test_the_probe_chooses_on_fold_9_and_scores_fold_10() -> None:
     features[:, 0] += 3 * y[:, 0]
     features[:, 1] += 3 * y[:, 1]
     settings = ptbxl.PtbxlSettings(
-        rate=100, tasks=["all"], rows=2, read_threads=1, workers=0, linear_probing=True,
+        rate=100, tasks=["all"], rows=2, read_threads=1, workers=0,
+        linear_probing=True, fixed_slots=False,
         methods=["fine_tuning", "from_scratch"],
         linear_probing_l2=[1e-3, 1.0], linear_probing_steps=50,
         fine_tuning_epochs=1, fine_tuning_patience=None, fine_tuning_learning_rate=1e-3,
@@ -92,7 +93,8 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model(monkeypatch: pytest.Monkey
     records = _records(codes, [1] * 16 + [9] * 4 + [10] * 4)
     y, _, _ = ptbxl.labels(records, STATEMENTS, "diagnostic")
     settings = ptbxl.PtbxlSettings(
-        rate=100, tasks=["diagnostic"], rows=2, read_threads=1, workers=0, linear_probing=True,
+        rate=100, tasks=["diagnostic"], rows=2, read_threads=1, workers=0,
+        linear_probing=True, fixed_slots=False,
         methods=["fine_tuning", "from_scratch"],
         linear_probing_l2=[1.0], linear_probing_steps=10,
         fine_tuning_epochs=2, fine_tuning_patience=None, fine_tuning_learning_rate=1e-3,
@@ -123,7 +125,9 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model(monkeypatch: pytest.Monkey
     assert [r["f/epoch"] for r in logged if "f/epoch" in r] == [1.0, 2.0, 3.0] and aucs == []
     monkeypatch.undo()
     logged.clear()
-    features = ptbxl.embed(Encoder(config), records.examples, 256, 2, device, logged.append, "e")
+    features = ptbxl.embed(
+        Encoder(config), records.examples, 256, 2, device, logged.append, "e", None
+    )
     assert features.shape == (24, 32) and np.isfinite(features).all()
     assert logged[-1]["embed/e/batches"] == logged[-1]["embed/e/of"]
 

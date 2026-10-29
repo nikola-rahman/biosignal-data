@@ -13,6 +13,7 @@ settings:
   workers: 6                  # data loader processes that crop and pack batches
   methods: []
   linear_probing: true
+  fixed_slots: false           # a random channel slot per record, as in pretraining
   # down to 1e-7: on "all" the fold-9 AUC fell from 1e-4 on, the smallest of the first grid
   linear_probing_l2: [1.0e-7, 1.0e-6, 1.0e-5, 1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]
   linear_probing_steps: 100

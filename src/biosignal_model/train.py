@@ -204,7 +204,7 @@ class BatchStream(IterableDataset[Batch]):
             samples_per_token=t.samples_per_token, max_channels=t.max_channels, rows=self.rows,
             mask_ratio=t.mask_ratio,
             seed=((self.config.run.seed * 1_000_003 + self.epoch) * 1_009 + part) * 101
-            + self.piece,
+            + self.piece, slots=None,
         )  # fmt: skip
         yield from packer.batches(
             self.source.examples(self.epoch, part, parts, self.piece, self.pieces)

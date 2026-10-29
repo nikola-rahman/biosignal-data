@@ -8,7 +8,8 @@ gets, and nothing else:
   (below), with a flag per sample: observed or not (invalid in the source, or past the
   end of the channel);
 - the time of its centre and its length, in seconds from the start of the example;
-- a channel slot: a number drawn at random per example, which only says "same channel";
+- a channel slot: a number drawn at random per example, which only says "same channel"
+  (or, with `slots`, a fixed number per channel name: for fine-tuning on one montage);
 - the scale of its channel: the mean and standard deviation of the channel's visible
   samples, so nothing is lost: x = sinh(value) * std + mean.
 
@@ -138,9 +139,16 @@ class Packer:
         rows: int,
         mask_ratio: float,
         seed: int,
+        slots: dict[str, int] | None,
     ) -> None:
+        """`slots`: None, a random slot per channel and example (pretraining: a slot only says
+        "same channel"); or the slot of each channel name, the same in every example, so a
+        task head can learn which channel is which (e.g. the 12 ECG leads)."""
         if not 0.0 <= mask_ratio < 1.0:
             raise ValueError("mask_ratio is in [0, 1)")
+        if slots is not None and not all(0 <= k < max_channels for k in slots.values()):
+            raise ValueError(f"every slot is in [0, {max_channels})")
+        self.slots = slots
         self.datasets = datasets
         self._dataset_index = {d: i for i, d in enumerate(datasets)}
         self.max_tokens = max_tokens
@@ -211,7 +219,10 @@ class Packer:
             raise ValueError(
                 f"{len(example.signals)} channels; max_channels is {self.max_channels}"
             )
-        slots = self._rng.sample(range(self.max_channels), len(example.signals))
+        if self.slots is None:
+            slots = self._rng.sample(range(self.max_channels), len(example.signals))
+        else:
+            slots = [self.slots[channel.name] for channel in example.origin.channels]
         parts: list[_Tokens] = []
         for signal, channel, slot in zip(
             example.signals, example.origin.channels, slots, strict=True

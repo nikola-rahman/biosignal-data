@@ -64,6 +64,10 @@ class PtbxlSettings(BaseModel):
     read_threads: int  # requests to the store at the same time
     workers: int  # data loader processes that crop and pack batches; 0: the main process
     linear_probing: bool  # also linear probing of the frozen encoder (pretrained and random)
+    # False: a random channel slot per record, as in pretraining (the model is not told which
+    # lead is which). True: one fixed slot per lead name, so fine-tuning can learn the leads
+    # (a CNN gets them in a fixed order). Test asked for by the user, 2026-10-29.
+    fixed_slots: bool
     # fine_tuning: the pretrained encoder and a head; from_scratch: the same from random weights
     methods: list[Literal["fine_tuning", "from_scratch"]]
     linear_probing_l2: list[float]
@@ -195,11 +199,21 @@ def load(store: Store, settings: PtbxlSettings, log: Log) -> tuple[Records, list
     ), statements
 
 
-def _packer(model: ModelConfig, max_tokens: int, rows: int) -> Packer:
+def _packer(
+    model: ModelConfig, max_tokens: int, rows: int, slots: dict[str, int] | None
+) -> Packer:
     return Packer(
         datasets=[DATASET], max_tokens=max_tokens, samples_per_token=model.samples_per_token,
-        max_channels=model.max_channels, rows=rows, mask_ratio=0.0, seed=0,
+        max_channels=model.max_channels, rows=rows, mask_ratio=0.0, seed=0, slots=slots,
     )  # fmt: skip
+
+
+def lead_slots(examples: list[Example], fixed: bool) -> dict[str, int] | None:
+    """None (random slots), or one slot per channel name of the records, in name order."""
+    if not fixed:
+        return None
+    names = sorted({c.name for e in examples for c in e.origin.channels})
+    return {name: k for k, name in enumerate(names)}
 
 
 def _pooled(
@@ -280,11 +294,11 @@ def _batches(n: int, packer: Packer, examples: list[Example], rows: int) -> list
 @torch.no_grad()
 def embed(
     model: Encoder, examples: list[Example], max_tokens: int, rows: int, device: torch.device,
-    log: Log, name: str,
+    log: Log, name: str, slots: dict[str, int] | None,
 ) -> np.ndarray:  # fmt: skip
     """The mean feature of every example; progress as `embed/<name>/...`."""
     model.eval()
-    packer = _packer(model.config, max_tokens, rows)
+    packer = _packer(model.config, max_tokens, rows, slots)
     batches = _batches(len(examples), packer, examples, rows)
     parts, started = [], time.monotonic()
     for k, ids in enumerate(batches, 1):
@@ -356,7 +370,7 @@ def end_to_end(
     groups = parameter_groups(model, head, s.fine_tuning_learning_rate, factor,
                               s.fine_tuning_lower_blocks_fraction)  # fmt: skip
     optimizer = torch.optim.AdamW(groups, weight_decay=s.fine_tuning_weight_decay)
-    packer = _packer(config, max_tokens, s.rows)
+    packer = _packer(config, max_tokens, s.rows, lead_slots(records.examples, s.fixed_slots))
     train = [i for i in range(len(records.ids)) if records.folds[i] in TRAIN]
     rng = random.Random(s.seed)  # noqa: S311 - not secret
 
@@ -520,11 +534,11 @@ def run(
         features = {
             "linear_probing": embed(
                 pretrained, records.examples, max_tokens, settings.rows, device, log,
-                "linear_probing",
+                "linear_probing", lead_slots(records.examples, settings.fixed_slots),
             ),
             "linear_probing_random": embed(
                 untrained, records.examples, max_tokens, settings.rows, device, log,
-                "linear_probing_random",
+                "linear_probing_random", lead_slots(records.examples, settings.fixed_slots),
             ),
         }
     results: dict[str, float] = {
