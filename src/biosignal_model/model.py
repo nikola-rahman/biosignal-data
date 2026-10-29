@@ -7,7 +7,9 @@ slot stay: the model knows where and in which channel to predict).
 
 Position: rotary embedding on continuous time in seconds, not on token index, so tokens
 of channels at different rates line up by time. The wavelengths are spread on a log scale
-from `min_wavelength_s` to `max_wavelength_s`.
+from `min_wavelength_s` to `max_wavelength_s`. The angles (time x frequency) are computed in
+float64 and only cos and sin are cast to the model's dtype: in float32 the angle at 1800 s and
+a 10 ms wavelength (1.1e6 rad) is off by up to 0.06 rad, and the time itself by 6e-5 s.
 
 Attention: each token attends to the tokens of its own example only (`document`).
 Blocks: pre-norm (RMSNorm), multi-head attention, SwiGLU feed-forward.
@@ -18,6 +20,10 @@ Tokenizers (`ModelConfig.tokenizer`, docs/v3-tokenizer.md): `samples` is the abo
 `duration` (D1) embeds frames of a fixed duration with a continuous-time stem; `hierarchical`
 (D2) runs the stem on short frames, bidirectional S4D over each channel's frames, attention
 pooling into tokens, and adds the local features back to the output.
+
+Benchmark interface: a task reads `features()` and trains with `layer_groups()` (the weights in
+order from the input to the output, for layer-wise learning rates); nothing else of the
+model is named outside it.
 """
 
 from __future__ import annotations
@@ -63,9 +69,18 @@ class ModelConfig:
     drop_path: float
 
 
-class Encoder(nn.Module):
-    frequencies: torch.Tensor  # radians per second, one per pair of head dimensions
+@dataclass(frozen=True)
+class LayerGroups:
+    """The weights a task uses, in order from the input to the output, for layer-wise learning
+    rates (benchmarks); each weight is in one group. The pretraining heads are not in it."""
 
+    input: list[nn.Parameter]  # samples -> token vectors: tokenizer, context, hidden vectors
+    channel: list[nn.Parameter]  # the channel identity (slot embedding)
+    layers: list[list[nn.Parameter]]  # each global layer, the lowest first
+    output: list[nn.Parameter]  # after the last layer: the final norm (and D2's residual)
+
+
+class Encoder(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
         if config.width % config.heads or (config.width // config.heads) % 2:
@@ -97,37 +112,44 @@ class Encoder(nn.Module):
             self.head = nn.Linear(d, p)
         elif isinstance(t, DurationTokenizer):
             self.head_kernel = nn.Linear(self.stem.basis_size, d, bias=False)
-        half = d // config.heads // 2
-        wavelengths = torch.logspace(
-            math.log10(config.min_wavelength_s), math.log10(config.max_wavelength_s), half
-        )
-        self.register_buffer("frequencies", 2 * math.pi / wavelengths, persistent=False)
 
-    def input_modules(self) -> list[nn.Module]:
-        """The parts that turn samples into token vectors (before the global blocks): the
-        lower group of fine-tuning (benchmarks)."""
-        if isinstance(self.config.tokenizer, SamplesTokenizer):
-            return [self.samples]
-        if isinstance(self.config.tokenizer, DurationTokenizer):
-            return [self.stem]
-        parts: list[nn.Module] = [self.stem, self.local, self.pool]
-        if self.config.tokenizer.residual_pool == "attention":
-            parts.append(self.residual_pool)
-        return parts
-
-    def input_parameters(self) -> list[nn.Parameter]:
-        """The learned vectors of hidden tokens / frames: with the input modules."""
-        hidden = [self.hidden]
-        if isinstance(self.config.tokenizer, HierarchicalTokenizer):
-            hidden.append(self.hidden_local)
-        return hidden
-
-    def output_modules(self) -> list[nn.Module]:
-        """Parts after the global blocks that a task uses (not the pretraining heads)."""
+    def layer_groups(self) -> LayerGroups:
+        """The weights a task uses, from the input to the output (see LayerGroups)."""
+        t = self.config.tokenizer
+        parts: list[nn.Module]
+        if isinstance(t, SamplesTokenizer):
+            parts = [self.samples]
+        elif isinstance(t, DurationTokenizer):
+            parts = [self.stem]
+        else:
+            parts = [self.stem, self.local, self.pool]
+            if t.residual_pool == "attention":
+                parts.append(self.residual_pool)
+        parts.append(self.context)
+        hidden = [self.hidden]  # the learned vectors of hidden tokens / frames
         out: list[nn.Module] = [self.norm]
-        if isinstance(self.config.tokenizer, HierarchicalTokenizer):
+        if isinstance(t, HierarchicalTokenizer):
+            hidden.append(self.hidden_local)
             out.append(self.residual)
-        return out
+        return LayerGroups(
+            input=[p for m in parts for p in m.parameters()] + hidden,
+            channel=list(self.slot.parameters()),
+            layers=[list(b.parameters()) for b in self.blocks],
+            output=[p for m in out for p in m.parameters()],
+        )
+
+    def rotary(self, time_s: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """(cos, sin) of the rotary angles of tokens at `time_s` [R, L], [R, 1, L, half], in
+        the dtype of the weights; the angles in float64 (see the module docstring)."""
+        c = self.config
+        half = c.width // c.heads // 2
+        wavelengths = torch.logspace(
+            math.log10(c.min_wavelength_s), math.log10(c.max_wavelength_s), half,
+            dtype=torch.float64, device=time_s.device,
+        )  # fmt: skip
+        angles = time_s.to(torch.float64)[..., None] * (2 * math.pi / wavelengths)
+        dtype = self.hidden.dtype
+        return angles.cos().to(dtype)[:, None], angles.sin().to(dtype)[:, None]
 
     def forward(self, x: Inputs) -> torch.Tensor:
         """The predicted samples of every token, [R, L, P] ([R, L, 1, P] for `duration`), in
@@ -164,8 +186,7 @@ class Encoder(nn.Module):
         h = torch.where(x.hidden[..., None], self.hidden.to(h.dtype), h)
         h = h + self.context(torch.cat([x.log_length_s[..., None], x.channel_scale], dim=-1))
         h = h + self.slot(x.slot)
-        angles = x.time_s[..., None] * self.frequencies  # [R, L, half]
-        rotary = (angles.cos()[:, None], angles.sin()[:, None])  # [R, 1, L, half]
+        rotary = self.rotary(x.time_s)  # [R, 1, L, half]
         attend = _attention(x.document, self.config.attention)
         for block in self.blocks:
             h = block(h, rotary, attend)

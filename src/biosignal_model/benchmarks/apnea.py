@@ -43,7 +43,7 @@ from biosignal_data.read.standard import StandardDataset
 from biosignal_data.storage.stores import Store
 from biosignal_data.training.loader import Channel, Example, Origin, Signal
 from biosignal_model.batch import Packer
-from biosignal_model.benchmarks import LOG_EVERY_STEPS, Log
+from biosignal_model.benchmarks import LOG_EVERY_STEPS, Log, TaskModel
 from biosignal_model.model import Encoder, ModelConfig
 
 DATASET = "physionet/apnea-ecg"
@@ -152,7 +152,7 @@ def _chunks(m: Minutes, packer: Packer, rows: int) -> list[list[int]]:
 
 
 def _pooled(
-    model: Encoder, m: Minutes, ids: list[int], packer: Packer, device: torch.device
+    model: TaskModel, m: Minutes, ids: list[int], packer: Packer, device: torch.device
 ) -> torch.Tensor:
     """The mean feature over the tokens of each labelled minute, [len(ids), width]."""
     batch, where = packer.pack([m.examples[i] for i in ids], trim=True)
@@ -170,7 +170,7 @@ def _pooled(
 
 @torch.no_grad()
 def embed(
-    model: Encoder, m: Minutes, max_tokens: int, rows: int, device: torch.device, log: Log,
+    model: TaskModel, m: Minutes, max_tokens: int, rows: int, device: torch.device, log: Log,
     name: str,
 ) -> np.ndarray:  # fmt: skip
     """The mean feature of every labelled minute; progress as `embed/<name>/...`."""
@@ -260,7 +260,10 @@ def end_to_end(
     if start is not None:
         model.load_state_dict(start)
     head = torch.nn.Linear(config.width, 1).to(device)
-    parameters = [*model.parameters(), *head.parameters()]
+    g = model.layer_groups()  # every weight a task uses, at one rate (the pretraining heads
+    # get no gradient, so AdamW skipped them before as well)
+    parameters = [*g.input, *g.channel, *(p for layer in g.layers for p in layer), *g.output,
+                  *head.parameters()]  # fmt: skip
     optimizer = torch.optim.AdamW(
         parameters, lr=s.fine_tuning_learning_rate, weight_decay=s.fine_tuning_weight_decay
     )

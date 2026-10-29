@@ -141,7 +141,9 @@ class Inputs:
     values: torch.Tensor  # float32 [R, L, P]: samples / channel scale; 0 where not observed
     observed: torch.Tensor  # bool [R, L, P]
     hidden: torch.Tensor  # bool [R, L]: masked token, the model does not see its samples
-    time_s: torch.Tensor  # float32 [R, L]: centre of the token, from the example's start
+    # float64 [R, L]: centre of the token, from the example's start (float32 is off by 6e-5 s
+    # at 30 min, too coarse for rotary angles at 10 ms wavelengths)
+    time_s: torch.Tensor
     log_length_s: torch.Tensor  # float32 [R, L]: log of the token's length in seconds
     channel_scale: torch.Tensor  # float32 [R, L, 2]: asinh(mean), log(std) of the channel
     slot: torch.Tensor  # int64 [R, L]
@@ -357,7 +359,7 @@ class Packer:
                     ),
                     observed=observed,
                     hidden=hidden,
-                    time_s=(starts + length_s / 2).astype(np.float32),
+                    time_s=(starts + length_s / 2).astype(np.float64),
                     log_length_s=np.full(n, math.log(length_s), dtype=np.float32),
                     channel_scale=np.tile(
                         np.array([math.asinh(mean), math.log(scale)], dtype=np.float32), (n, 1)
@@ -418,7 +420,7 @@ class Packer:
             parts.append(
                 _FrameTokens(
                     values=values, observed=seen, hidden=hidden,
-                    time_s=centre.astype(np.float32),
+                    time_s=centre.astype(np.float64),
                     log_length_s=np.full(tokens, math.log(f * h / rate), dtype=np.float32),
                     channel_scale=np.tile(
                         np.array([math.asinh(mean), math.log(scale)], dtype=np.float32),
@@ -453,7 +455,7 @@ class Packer:
         values = np.zeros((r, length, p), dtype=np.float32)
         observed = np.zeros((r, length, p), dtype=bool)
         hidden = np.zeros((r, length), dtype=bool)
-        time_s = np.zeros((r, length), dtype=np.float32)
+        time_s = np.zeros((r, length), dtype=np.float64)
         log_length_s = np.zeros((r, length), dtype=np.float32)
         channel_scale = np.zeros((r, length, 2), dtype=np.float32)
         slot = np.zeros((r, length), dtype=np.int64)
@@ -486,7 +488,7 @@ class Packer:
         values = np.zeros((r, length, f, p), dtype=np.float32)
         observed = np.zeros((r, length, f, p), dtype=bool)
         hidden = np.zeros((r, length), dtype=bool)
-        time_s = np.zeros((r, length), dtype=np.float32)
+        time_s = np.zeros((r, length), dtype=np.float64)
         log_length_s = np.zeros((r, length), dtype=np.float32)
         channel_scale = np.zeros((r, length, 2), dtype=np.float32)
         slot = np.zeros((r, length), dtype=np.int64)

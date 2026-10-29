@@ -47,7 +47,7 @@ from biosignal_data.read.standard import StandardDataset
 from biosignal_data.storage.stores import Store
 from biosignal_data.training.loader import Channel, Example, Origin, Signal
 from biosignal_model.batch import Batch, Packer, Tokenizer
-from biosignal_model.benchmarks import LOG_EVERY_STEPS, Log
+from biosignal_model.benchmarks import LOG_EVERY_STEPS, Log, TaskModel
 from biosignal_model.benchmarks.s4 import S4ChannelsSettings, S4Settings
 from biosignal_model.benchmarks.s4 import train_and_score as train_and_score_s4
 from biosignal_model.benchmarks.xresnet1d import ReferenceSettings, train_and_score
@@ -343,7 +343,7 @@ def lead_slots(examples: list[Example], fixed: bool) -> dict[str, int] | None:
 
 
 def _pooled(
-    model: Encoder, examples: list[Example], packer: Packer, device: torch.device
+    model: TaskModel, examples: list[Example], packer: Packer, device: torch.device
 ) -> torch.Tensor:
     """The mean feature over all tokens of each example, [len(examples), width]."""
     batch, where = packer.pack(examples, trim=True)
@@ -351,7 +351,7 @@ def _pooled(
 
 
 def _mean_features(
-    model: Encoder, batch: Batch, where: list[tuple[int, int]], device: torch.device,
+    model: TaskModel, batch: Batch, where: list[tuple[int, int]], device: torch.device,
     with_max: bool = False,
 ) -> torch.Tensor:  # fmt: skip
     """The mean feature over the tokens of each (row, document) in `where`, in one pass
@@ -460,7 +460,7 @@ def _batches(n: int, packer: Packer, examples: list[Example], rows: int) -> list
 
 @torch.no_grad()
 def embed(
-    model: Encoder, examples: list[Example], max_tokens: int, rows: int, device: torch.device,
+    model: TaskModel, examples: list[Example], max_tokens: int, rows: int, device: torch.device,
     log: Log, name: str, slots: dict[str, int] | None,
 ) -> np.ndarray:  # fmt: skip
     """The mean feature of every example; progress as `embed/<name>/...`."""
@@ -746,7 +746,7 @@ def cooldown_epochs(rungs: CooldownRungs, epoch: int) -> int:
 
 @torch.no_grad()
 def _predict(
-    model: Encoder, head: torch.nn.Module, examples: list[Example], crop_s: float | None,
+    model: TaskModel, head: torch.nn.Module, examples: list[Example], crop_s: float | None,
     packer: Packer, rows: int, device: torch.device, workers: int, seed: str,
     stride_fraction: float, aggregate: Literal["mean", "max"], with_max: bool,
 ) -> np.ndarray:  # fmt: skip
@@ -774,23 +774,19 @@ def _predict(
 
 
 def parameter_groups(
-    model: Encoder, head: torch.nn.Module, lr: float, factor: float, lower_fraction: float,
+    model: TaskModel, head: torch.nn.Module, lr: float, factor: float, lower_fraction: float,
     slot_group: Literal["lower", "head"],
 ) -> list[dict[str, Any]]:  # fmt: skip
-    """AdamW groups: the head at `lr`; the encoder's upper blocks and final norm at
-    lr x factor; its input embedding and lowest blocks (`lower_fraction` of them, rounded) at
-    lr x factor^2; the slot embedding with the lower part or the head (`slot_group`). The
-    pretraining heads (`model.head`, `head_kernel`) are not used by a task and left out; the
-    input embedding is `model.input_modules()` (with the stem and local stage of the v3
-    tokenizers)."""
-    lower_blocks = round(len(model.blocks) * lower_fraction)
-    embedding = [*model.input_modules(), model.context]
-    embedding += [model.slot] if slot_group == "lower" else []
-    lower = [p for m in embedding for p in m.parameters()] + model.input_parameters()
-    lower += [p for b in model.blocks[:lower_blocks] for p in b.parameters()]
-    upper = [p for b in model.blocks[lower_blocks:] for p in b.parameters()]
-    upper += [p for m in model.output_modules() for p in m.parameters()]
-    top = list(head.parameters()) + (list(model.slot.parameters()) if slot_group == "head" else [])
+    """AdamW groups from `model.layer_groups()`: the head at `lr`; the upper layers and the
+    output part at lr x factor; the input part and the lowest layers (`lower_fraction` of them,
+    rounded) at lr x factor^2; the channel identity (slot embedding) with the lower part or the
+    head (`slot_group`). The pretraining heads are not in the layer groups."""
+    g = model.layer_groups()
+    lower_layers = round(len(g.layers) * lower_fraction)
+    lower = g.input + (g.channel if slot_group == "lower" else [])
+    lower += [p for layer in g.layers[:lower_layers] for p in layer]
+    upper = [p for layer in g.layers[lower_layers:] for p in layer] + g.output
+    top = list(head.parameters()) + (g.channel if slot_group == "head" else [])
     return [
         {"params": top, "lr": lr},
         {"params": upper, "lr": lr * factor},

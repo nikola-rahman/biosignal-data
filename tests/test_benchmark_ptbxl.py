@@ -175,11 +175,14 @@ def test_layer_dependent_learning_rates_cover_every_weight_a_task_uses() -> None
         id(p) for n, p in model.named_parameters() if not n.startswith("head.")
     }
     assert set.union(*ids) == used and sum(map(len, ids)) == len(used)  # each once
-    lower = {id(p) for b in model.blocks[:2] for p in b.parameters()} | {id(model.hidden)}
-    assert lower <= ids[2] and not lower & ids[1]  # 2 of 8 blocks, with the embedding
+    g = model.layer_groups()
+    lower = {id(p) for layer in g.layers[:2] for p in layer} | {id(p) for p in g.input}
+    assert lower <= ids[2] and not lower & ids[1]  # 2 of 8 layers, with the input part
+    assert id(model.hidden) in lower and len(g.layers) == 8
     assert {id(p) for p in model.slot.parameters()} <= ids[2]
     moved = ptbxl.parameter_groups(model, head, 1e-3, 0.1, 0.25, "head")
-    slot = {id(p) for p in model.slot.parameters()}
+    slot = {id(p) for p in g.channel}
+    assert slot == {id(p) for p in model.slot.parameters()}
     assert slot <= {id(p) for p in moved[0]["params"]}
     assert not slot & {id(p) for p in moved[2]["params"]}
 
