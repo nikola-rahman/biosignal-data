@@ -1,7 +1,7 @@
 # The scale table of index 2026-11-03 (biosignal_model.scales; docs/architecture.md section 2):
 # windows cut as a v4 training run cuts them, at most 600 a dataset, 4 h a subject.
 store: s3://biosignal-data
-index: 2026-11-03
+index: "2026-11-03"  # quoted: YAML would read a date
 split: train
 signal_types: [ecg, eeg, eog, emg, resp, spo2, ppg, bp, hr, temp, position, accel, scg, pcg, sound,
                emg_envelope]
