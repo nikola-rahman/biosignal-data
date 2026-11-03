@@ -19,6 +19,7 @@ import json
 import logging
 import math
 import os
+import resource
 import time
 from collections.abc import Iterator
 from datetime import timedelta
@@ -482,6 +483,7 @@ def _wandb_run(
 def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[str, float]:
     """Run the pretraining; returns the last logged metrics."""
     run_cfg, o = config.run, config.optim
+    _open_files_limit()
     rank, ranks, device = _process_group(run_cfg.device, config.tokens.rows)
     first = rank == 0
     torch.manual_seed(run_cfg.seed)
@@ -558,6 +560,17 @@ def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[
             window.start = time.perf_counter()
     _finish(run, ranks)
     return last
+
+
+def _open_files_limit() -> None:
+    """Raise this process's soft limit of open files to the hard one. The data loader passes
+    each tensor of a batch from a worker as an open file, and a v4 batch holds ~27 tensors: 10
+    workers x 2 batches ahead came close to the usual soft limit of 1024 and failed with
+    "received 0 items of ancdata" (PyTorch's documented remedy: a higher limit)."""
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft != resource.RLIM_INFINITY and (hard == resource.RLIM_INFINITY or soft < hard):
+        resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+        log.info("open files: soft limit %d -> %s", soft, hard)
 
 
 def _finish(run: Any, ranks: int) -> None:
