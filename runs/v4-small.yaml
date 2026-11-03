@@ -26,7 +26,7 @@ data:
   mixture:
     unit: global_tokens
     rule: unimax
-    budget_tokens: 1.0e+11      # SET from `biosignal-model tokens runs/v4-small.yaml` (one pass)
+    budget_tokens: 23030771932  # one pass: `biosignal-model tokens runs/v4-small.yaml`, 2026-11-03
     max_epochs: 4
     clusters:
       icu-eeg: [physionet/i-care]
