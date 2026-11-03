@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from biosignal_data.index import AlreadyIndexed, IndexRules, build_index, signal_type, split_of
+from biosignal_data.index.build import CHANNELS
 from biosignal_data.index.rules import DatasetRules, RulesError, SubjectRule, channel_overrides
 from biosignal_data.index.signals import SignalType
 from biosignal_data.index.subjects import subject_of
@@ -294,6 +295,34 @@ def test_excluded_recordings_and_subjects_from_a_raw_table(
 
     assert (m.recordings, m.subjects, m.subjects_assumed) == (2, 1, 0)
     assert m.excluded == {"physionet/ephnogram: an excerpt of another recording": 1}
+
+
+def test_a_dataset_without_indexed_recordings_adds_no_channels(store: LocalStore) -> None:
+    """Every recording without signals (or excluded): its channels are left out, and the
+    index is still made."""
+    prefix = "standard-blocks/physionet/mitdb/1.0.0"
+    rows = [{"recording_id": "100", "format": "wfdb", "duration_s": 60.0,
+             "arrays": ["360Hz"], "n_channels": 1, "signals": False, "source_files": [],
+             "source_sha256": []}]  # fmt: skip
+    channels = [{"recording_id": "100", "array": "360Hz", "index": 0,
+                 "name": "ECG", "sampling_rate": 360.0, "unit": "mV", "scale": 1.0,
+                 "offset": 0.0}]  # fmt: skip
+    store.put_bytes(
+        f"{prefix}/recordings.parquet",
+        _parquet(pa.Table.from_pylist(rows, schema=tables.RECORDINGS)),
+    )
+    store.put_bytes(
+        f"{prefix}/channels.parquet",
+        _parquet(pa.Table.from_pylist(channels, schema=tables.CHANNELS)),
+    )
+    store.put_bytes(f"{prefix}/_manifest.json", b'{"raw_version": "1.0.0"}')
+    store.put_bytes(f"{prefix}/_SUCCESS", b"")
+
+    report = build_index(store, ["physionet/mitdb"], IndexRules.load(), version="2026-11-03")
+
+    assert (report.manifest.recordings, report.manifest.recordings_without_signals) == (0, 1)
+    written = pq.read_table(io.BytesIO(store.get_bytes("index/2026-11-03/channels.parquet") or b""))
+    assert written.num_rows == 0 and written.schema.equals(CHANNELS)
 
 
 def test_benchmark_test_records_are_held_out_of_every_split(

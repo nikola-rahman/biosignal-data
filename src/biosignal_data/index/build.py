@@ -255,7 +255,8 @@ def _channels(
     channels of each name that no rule types."""
     dataset_id = location.dataset_id
     table = _read(store, location.table_key("channels"), CHANNEL_COLUMNS)
-    table = table.filter(pc.is_in(table["recording_id"], value_set=pa.array(sorted(indexed))))
+    wanted = pa.array(sorted(indexed), pa.string())  # typed also when it is empty
+    table = table.filter(pc.is_in(table["recording_id"], value_set=wanted))
     recordings = pc.dictionary_encode(table["recording_id"].combine_chunks())
     names = pc.dictionary_encode(table["name"].combine_chunks())
     # which of the dataset's channel rules hold for each recording: few distinct sets
