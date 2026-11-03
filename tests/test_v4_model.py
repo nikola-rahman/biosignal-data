@@ -10,7 +10,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-torch = pytest.importorskip("torch")
+pytest.importorskip("torch")
+
+import torch
+
 F = torch.nn.functional
 
 from biosignal_data.storage.stores import LocalStore, StoreFactory  # noqa: E402
@@ -254,3 +257,95 @@ def test_ptbxl_fine_tunes_a_v4_model_from_its_checkpoint_weights() -> None:
     )
     assert p_val.shape == p_test.shape == (4, len(classes))
     assert 0.0 <= scores["macro_auc"] <= 1.0 and scores["epoch"] in (1.0, 2.0)
+
+
+# --- leakage: nothing but the visible signal tells the predictions anything ----------------
+
+
+def _content_free_features(batch: ChannelBatch) -> torch.Tensor:
+    """Per token, everything a predictor could know without reading any sample: its channel
+    (one-hot), slot, type, level and scale, rate, its time (raw and as sines at 0.04-10 s),
+    its place in its channel and its distance to the ends of its example."""
+    x = batch.inputs
+    t, c = x.tokens, x.channels
+    ch = t.channel
+    n_ch = c.row.numel()
+    parts = [F.one_hot(ch, n_ch).double(), F.one_hot(c.slot[ch], 8).double(),
+             c.level[ch, None].double(), c.log_scale[ch, None].double(),
+             c.rate_hz[ch, None].double() / 500]  # fmt: skip
+    time = t.centre.double()
+    for wavelength in (0.04, 0.1, 0.3, 1.0, 3.0, 10.0):
+        parts += [torch.sin(2 * torch.pi * time / wavelength)[:, None],
+                  torch.cos(2 * torch.pi * time / wavelength)[:, None]]  # fmt: skip
+    first = torch.full((n_ch,), torch.inf, dtype=torch.float64).scatter_reduce(
+        0, ch, time, reduce="amin"
+    )
+    last = torch.full((n_ch,), -torch.inf, dtype=torch.float64).scatter_reduce(
+        0, ch, time, reduce="amax"
+    )
+    parts += [time[:, None], (time - first[ch])[:, None], (last[ch] - time)[:, None]]
+    return torch.cat([*parts, torch.ones(len(ch), 1, dtype=torch.float64)], dim=1)
+
+
+def test_a_predictor_that_reads_no_signal_explains_almost_nothing_of_the_targets() -> None:
+    """Fit a ridge regression from everything but the samples (channel, slot, level, scale,
+    rate, time, place, distance to the ends) to the targets on half of the tokens; on the
+    other half it must explain almost none of their variance. With the first version of the
+    targets (a layer norm per token) such a predictor explained 88.6 %; now 4.4 %."""
+    model = _model().eval()
+    batch = _batch([_example(s, seconds=4.0) for s in range(20, 26)], rows=6)
+    target = model.all_targets(batch).double()
+    features = _content_free_features(batch)
+    order = torch.randperm(len(target), generator=torch.Generator().manual_seed(0))
+    fit, held = order[: len(order) // 2], order[len(order) // 2 :]
+    a = features[fit]
+    w = torch.linalg.solve(a.T @ a + 1e-3 * torch.eye(a.shape[1], dtype=torch.float64),
+                           a.T @ target[fit])  # fmt: skip
+    residual = target[held] - features[held] @ w
+    explained = 1 - residual.pow(2).sum() / (target[held] - target[held].mean(0)).pow(2).sum()
+    assert float(explained) < 0.05
+
+
+def test_another_example_in_the_row_changes_nothing_of_this_ones_predictions() -> None:
+    """Two examples in one row: any change to the second one's samples (hidden or visible)
+    leaves the first one's predictions bit for bit (student and decoder attend within one
+    example only)."""
+    model = _model().eval()
+    a, b = _example(30), _example(31)
+    other = Example(
+        tuple(Signal(np.random.default_rng(5).normal(size=s.values.size).astype(np.float32) * 9,
+                     s.sampling_rate, s.start_s) for s in b.signals),
+        b.origin,
+    )  # fmt: skip
+    first = _batch([a, b], seed=3)
+    second = _batch([a, other], seed=3)
+    assert torch.equal(first.inputs.tokens.hidden, second.inputs.tokens.hidden)
+    t = first.inputs.tokens
+    mine = (first.inputs.channels.document[t.channel] == 0)[t.hidden]
+    with torch.no_grad():
+        p1, p2 = model.predictions(first.inputs), model.predictions(second.inputs)
+    assert mine.any() and not torch.equal(p1[~mine], p2[~mine])
+    torch.testing.assert_close(p1[mine], p2[mine], atol=1e-6, rtol=1e-6)
+
+
+def test_rows_joined_for_a_step_keep_the_masks_on_the_samples() -> None:
+    """The train loop joins single-row batches into a step (channel_batch.concat): after it,
+    hidden samples are still 0 and not observed for the student, present for the teacher,
+    and changing them changes no prediction."""
+    from biosignal_model.channel_batch import concat  # noqa: PLC0415
+
+    rows = [_batch([_example(40 + k)], seed=k) for k in range(3)]
+    joined = concat(rows)
+    x = joined.inputs
+    assert x.hidden.any()
+    assert (x.values[x.hidden] == 0).all() and not x.observed[x.hidden].any()
+    teacher = joined.teacher_inputs()
+    seen = x.hidden & joined.targets.observed
+    assert torch.equal(teacher.values[seen], joined.targets.normalized[seen])
+    assert not teacher.hidden.any()
+    changed = dataclasses.replace(joined, targets=dataclasses.replace(
+        joined.targets, normalized=torch.where(x.hidden, torch.full_like(x.values, 7.0),
+                                               joined.targets.normalized)))  # fmt: skip
+    model = _model().eval()
+    with torch.no_grad():
+        assert torch.equal(model.predictions(joined.inputs), model.predictions(changed.inputs))
