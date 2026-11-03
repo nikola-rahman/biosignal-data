@@ -891,7 +891,11 @@ def _validation_batches(stream: BatchStream, config: TrainConfig, store: Store) 
     store.put_bytes(key, out.getvalue())
     store.put_bytes(f"{VALIDATION_ROOT}/{d.index}/{digest}.json", json.dumps(made_of).encode())
     log.info("validation batches written to %s", key)
-    return batches
+    # The batches as stored, in ordinary memory: those from the data workers are in shared
+    # memory, each tensor with an open file, and kept for the whole run they took the
+    # process past its limit of open files once the training workers started (v4-small).
+    kept: list[Batch] = torch.load(io.BytesIO(out.getvalue()), weights_only=False)
+    return kept
 
 
 @torch.no_grad()
