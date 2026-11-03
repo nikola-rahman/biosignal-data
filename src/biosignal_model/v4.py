@@ -271,8 +271,10 @@ class Data2Vec(nn.Module):
         # a hidden token: the mask vector and its channel; a visible one: the student's output
         # (one dtype for both: under autocast the linear maps give bf16, the mask is float32)
         seen = self.into_decoder(visible)
-        d = (self.mask + channel).to(seen.dtype).index_copy(
-            0, (~t.hidden).nonzero(as_tuple=True)[0], seen
+        d = (
+            (self.mask + channel)
+            .to(seen.dtype)
+            .index_copy(0, (~t.hidden).nonzero(as_tuple=True)[0], seen)
         )
         h = where.scatter(d)
         o = self.spec.objective
