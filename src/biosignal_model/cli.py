@@ -11,6 +11,7 @@ from WANDB_API_KEY.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 from typing import Annotated, Any
@@ -18,6 +19,7 @@ from typing import Annotated, Any
 import typer
 
 from biosignal_data.config import ConfigError, load_config, need
+from biosignal_data.console import setup_logging
 from biosignal_data.storage.stores import StoreFactory
 from biosignal_model.train import TrainConfig, train
 
@@ -28,6 +30,8 @@ REPO = Path(__file__).resolve().parents[2]
 @app.callback()
 def main() -> None:
     """Model v0 for the biosignal foundation model."""
+    setup_logging(verbose=False)
+    logging.getLogger("biosignal_model").setLevel(logging.INFO)
 
 
 @app.command("train")

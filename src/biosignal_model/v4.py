@@ -44,10 +44,11 @@ from biosignal_model.channel_batch import (
     ChannelBatch,
     ChannelInputs,
     ChannelTable,
+    ChannelTokens,
     TokenTable,
 )
 from biosignal_model.local_stage import LocalStageSpec, local_stage
-from biosignal_model.model import Block, _attention
+from biosignal_model.model import Block, LayerGroups, _attention
 
 LENGTH_MULTIPLE = 128  # a row's sequence is padded to a multiple of the flex block size
 
@@ -313,3 +314,44 @@ class Data2Vec(nn.Module):
         for kept_buffer, live_buffer in zip(self.teacher.buffers(), self.student.buffers(),
                                             strict=True):  # fmt: skip
             kept_buffer.copy_(live_buffer)
+
+
+@dataclass(frozen=True)
+class V4Config:
+    """What a downstream task needs of a v4 run: the model's spec and its batch format."""
+
+    spec: V4Spec
+    tokens: ChannelTokens
+
+    @property
+    def width(self) -> int:
+        return self.spec.global_.width
+
+
+class V4Task(V4Encoder):
+    """The pretrained student as a task model: the features of every token, and the layer
+    groups for layer-wise learning rates (benchmarks). Its weights are the student's."""
+
+    def __init__(self, config: V4Config) -> None:
+        super().__init__(config.spec)
+        self.config = config
+
+    def features(self, x: ChannelInputs) -> torch.Tensor:
+        """[T, width]: every token of the batch (nothing hidden), in token-table order."""
+        out: torch.Tensor = self(x, torch.ones_like(x.tokens.hidden))[0]
+        return out
+
+    def layer_groups(self) -> LayerGroups:
+        inputs = [self.local, self.pool, self.signal_type, self.level_scale]
+        return LayerGroups(
+            input=[p for m in inputs for p in m.parameters()],
+            channel=list(self.slot.parameters()),
+            layers=[list(b.parameters()) for b in self.blocks],
+            output=list(self.norm.parameters()),
+        )
+
+    @staticmethod
+    def pretrained(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """The student's weights from a v4 checkpoint's model state (Data2Vec)."""
+        prefix = "student."
+        return {k[len(prefix) :]: v for k, v in state.items() if k.startswith(prefix)}

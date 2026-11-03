@@ -10,7 +10,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from biosignal_data.training.loader import Channel, Example, Origin, Signal  # noqa: E402
-from biosignal_model.batch import SamplesTokenizer  # noqa: E402
+from biosignal_model.batch import Inputs, SamplesTokenizer  # noqa: E402
 from biosignal_model.benchmarks import BenchmarkRun, ptbxl  # noqa: E402
 from biosignal_model.model import Encoder, ModelConfig  # noqa: E402
 
@@ -273,6 +273,7 @@ def test_a_trimmed_batch_gives_each_example_the_same_features() -> None:
         a = ptbxl._mean_features(model, full, where, device)
         b = ptbxl._mean_features(model, trimmed, where, device)
         x = full.inputs
+        assert isinstance(x, Inputs)
         loop = torch.stack([model.features(x)[r][x.document[r] == d].mean(0) for r, d in where])
     torch.testing.assert_close(a, b, rtol=1e-5, atol=1e-5)
     torch.testing.assert_close(a, loop, rtol=1e-5, atol=1e-5)

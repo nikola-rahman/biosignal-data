@@ -348,9 +348,12 @@ class ChannelPacker:
         if count:
             yield self._batch(rows, count)
 
-    def pack(self, examples: list[Example]) -> tuple[ChannelBatch, list[tuple[int, int]]]:
+    def pack(
+        self, examples: list[Example], *, trim: bool = True
+    ) -> tuple[ChannelBatch, list[tuple[int, int]]]:
         """All `examples` in one batch, in order, and the (row, document) of each. Raises if
-        they do not fit `rows` rows."""
+        they do not fit `rows` rows. `trim`: as Packer.pack's (a channel batch is flat, it has
+        no padding to trim: the same batch either way)."""
         rows: list[list[_Example]] = [[]]
         where: list[tuple[int, int]] = []
         tokens = samples = 0

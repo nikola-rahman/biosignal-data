@@ -182,3 +182,45 @@ def test_a_v4_run_trains_validates_and_checkpoints_with_its_teacher(
     assert "validation/loss" in last and np.isfinite(last["validation/loss"])
     saved = torch.load(store._path("models/t/step-00000010.pt"), weights_only=True)
     assert any(k.startswith("teacher.") for k in saved["model"])
+
+
+def test_ptbxl_fine_tunes_a_v4_model_from_its_checkpoint_weights() -> None:
+    """The PTB-XL fine-tuning path with a v4 model: the student's weights from a Data2Vec
+    state, channel batches, token means per record, layer-wise rates; it runs and scores."""
+    from biosignal_model.benchmarks import ptbxl  # noqa: PLC0415
+    from biosignal_model.channel_batch import ChannelTokens  # noqa: PLC0415
+    from biosignal_model.v4 import V4Config, V4Task  # noqa: PLC0415
+    from tests.test_benchmark_ptbxl import STATEMENTS, _records  # noqa: PLC0415
+
+    tokens = ChannelTokens(format="channels", token_s=TOKEN_S, max_tokens=600,
+                           max_samples=4000, max_channels=8, rows=4, mask=None)  # fmt: skip
+    config = V4Config(SPEC, tokens)
+    codes = [["NORM", "SR"], ["IMI", "LVOLT"], ["NORM", "LVOLT"], ["IMI", "SR"]] * 6
+    records = _records(codes, [1] * 16 + [9] * 4 + [10] * 4)
+    y, classes, _ = ptbxl.labels(records, STATEMENTS, "all")
+    state = ptbxl._pretrained_state(config, {"model": _model().state_dict()})
+    student = V4Task(config)
+    student.load_state_dict(state)  # every student weight, nothing else
+    groups = student.layer_groups()
+    grouped = groups.input + groups.channel + [p for g in groups.layers for p in g] + groups.output
+    assert {id(p) for p in grouped} == {id(p) for p in student.parameters()}
+    settings = ptbxl.PtbxlSettings(
+        rate=100, tasks=["all"], rows=4, read_threads=1, workers=0, linear_probing=False,
+        fixed_slots=False, methods=["fine_tuning"], reference=None, reference_s4=None,
+        reference_s4_channels=None, reference_s4_incontext=None,
+        linear_probing_l2=[1.0], linear_probing_steps=10,
+        fine_tuning_epochs=2, fine_tuning_patience=None, fine_tuning_learning_rate=1e-3,
+        fine_tuning_weight_decay=0.0, fine_tuning_examples_per_step=4,
+        fine_tuning_discriminative_factor=0.1, fine_tuning_lower_blocks_fraction=0.25,
+        fine_tuning_crop_s=2.5, evaluation_stride_fraction=1.0, evaluation_aggregate="mean",
+        fine_tuning_slot_group="lower", fine_tuning_betas=(0.9, 0.999),
+        fine_tuning_warmup_epochs=0.0, fine_tuning_schedule="constant",
+        fine_tuning_grad_clip=None, fine_tuning_head="linear",
+        from_scratch_samples_per_token=None, from_scratch_tokenizer=None, from_scratch_model=None,
+        fine_tuning_rungs=None, seed=0,
+    )  # fmt: skip
+    scores, (p_val, p_test) = ptbxl.end_to_end(
+        config, records, y, 600, settings, torch.device("cpu"), state, lambda m: None, "f"
+    )
+    assert p_val.shape == p_test.shape == (4, len(classes))
+    assert 0.0 <= scores["macro_auc"] <= 1.0 and scores["epoch"] in (1.0, 2.0)

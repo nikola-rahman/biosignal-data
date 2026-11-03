@@ -36,7 +36,7 @@ import random
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import torch
@@ -54,7 +54,18 @@ from biosignal_model.benchmarks.s4 import train_and_score as train_and_score_s4
 from biosignal_model.benchmarks.s4_incontext import S4InContextSettings
 from biosignal_model.benchmarks.s4_incontext import train_and_score as train_and_score_incontext
 from biosignal_model.benchmarks.xresnet1d import ReferenceSettings, train_and_score
+from biosignal_model.channel_batch import ChannelBatch, ChannelPacker, ChannelTokens
 from biosignal_model.model import Encoder, ModelConfig
+from biosignal_model.v4 import V4Config, V4Spec, V4Task
+
+if TYPE_CHECKING:
+    from biosignal_model.train import TrainConfig  # a type only: the module imports this one
+
+# A downstream model: v0-v3 (Encoder) or the pretrained v4 student (V4Task)
+Backbone = Encoder | V4Task
+BackboneConfig = ModelConfig | V4Config
+AnyPacker = Packer | ChannelPacker
+AnyBatch = Batch | ChannelBatch
 
 DATASET = "physionet/ptb-xl"
 TASKS = ("all", "diagnostic", "subdiagnostic", "superdiagnostic", "form", "rhythm")
@@ -330,7 +341,23 @@ def load(store: Store, settings: PtbxlSettings, log: Log) -> tuple[Records, list
     ), statements
 
 
-def _packer(model: ModelConfig, max_tokens: int, rows: int, slots: dict[str, int] | None) -> Packer:
+def _backbone(config: BackboneConfig) -> Backbone:
+    return V4Task(config) if isinstance(config, V4Config) else Encoder(config)
+
+
+def _packer(
+    model: BackboneConfig, max_tokens: int, rows: int, slots: dict[str, int] | None
+) -> AnyPacker:
+    """The packer of the model's batch format; nothing hidden (a downstream task)."""
+    if isinstance(model, V4Config):
+        if slots is not None:
+            raise ValueError("fixed_slots is for v0-v3 models; v4 channels get random slots")
+        t = model.tokens
+        return ChannelPacker(
+            datasets=[DATASET], token_s=t.token_s, max_tokens=max_tokens,
+            max_samples=t.max_samples, max_channels=t.max_channels, rows=rows, mask=None,
+            seed=0,
+        )  # fmt: skip
     return Packer(
         datasets=[DATASET], max_tokens=max_tokens, samples_per_token=model.samples_per_token,
         max_channels=model.max_channels, rows=rows, mask_ratio=0.0, seed=0, slots=slots,
@@ -347,7 +374,7 @@ def lead_slots(examples: list[Example], fixed: bool) -> dict[str, int] | None:
 
 
 def _pooled(
-    model: TaskModel, examples: list[Example], packer: Packer, device: torch.device
+    model: TaskModel | V4Task, examples: list[Example], packer: AnyPacker, device: torch.device
 ) -> torch.Tensor:
     """The mean feature over all tokens of each example, [len(examples), width]."""
     batch, where = packer.pack(examples, trim=True)
@@ -355,12 +382,18 @@ def _pooled(
 
 
 def _mean_features(
-    model: TaskModel, batch: Batch, where: list[tuple[int, int]], device: torch.device,
+    model: TaskModel | V4Task, batch: AnyBatch, where: list[tuple[int, int]], device: torch.device,
     with_max: bool = False,
 ) -> torch.Tensor:  # fmt: skip
     """The mean feature over the tokens of each (row, document) in `where`, in one pass
     over the batch: [len(where), width]; `with_max`: the mean and the maximum, concatenated,
     [len(where), 2 x width]."""
+    if isinstance(batch, ChannelBatch):
+        if not isinstance(model, V4Task):
+            raise TypeError("a channel batch goes with a v4 model")
+        return _token_means(model, batch, where, device, with_max)
+    if isinstance(model, V4Task):
+        raise TypeError("a v4 model takes channel batches")
     x = batch.inputs.to(device)
     with torch.autocast(device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"):
         features = model.features(x).float()
@@ -377,6 +410,29 @@ def _mean_features(
         return mean
     highest = torch.full((rows * length, width), -torch.inf, device=device, dtype=features.dtype)
     highest.scatter_reduce_(0, key[real][:, None].expand(-1, width), flat, "amax")
+    return torch.cat([mean, highest[chosen]], dim=-1)
+
+
+def _token_means(
+    model: V4Task, batch: ChannelBatch, where: list[tuple[int, int]], device: torch.device,
+    with_max: bool,
+) -> torch.Tensor:  # fmt: skip
+    """_mean_features of a v4 model: over the global tokens of each example."""
+    x = batch.inputs.to(device)
+    with torch.autocast(device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"):
+        features = model.features(x).float()  # [T, width]
+    document = x.channels.document[x.tokens.channel]
+    per_row = int(document.max()) + 1 if document.numel() else 1
+    key = x.tokens.row * per_row + document
+    slots = x.rows * per_row
+    sums = features.new_zeros(slots, features.shape[1]).index_add_(0, key, features)
+    counts = torch.bincount(key, minlength=slots)
+    chosen = torch.tensor([r * per_row + d for r, d in where], device=device)
+    mean = sums[chosen] / counts[chosen, None]
+    if not with_max:
+        return mean
+    highest = features.new_full((slots, features.shape[1]), -torch.inf)
+    highest.scatter_reduce_(0, key[:, None].expand(-1, features.shape[1]), features, "amax")
     return torch.cat([mean, highest[chosen]], dim=-1)
 
 
@@ -413,14 +469,14 @@ def _schedule(s: PtbxlSettings, steps_per_epoch: int) -> Callable[[int], float]:
     return factor
 
 
-class _Packed(torch.utils.data.Dataset[tuple[Batch, list[tuple[int, int]]]]):
+class _Packed(torch.utils.data.Dataset[tuple[AnyBatch, list[tuple[int, int]]]]):
     """Batch k packs the examples `groups[k]`, each through `prepare` (e.g. a random crop):
     made in data loader workers, with random choices seeded by (seed, k), so a batch is the
     same whichever worker makes it."""
 
     def __init__(
         self, examples: list[Example], groups: list[list[int]],
-        prepare: Callable[[Example, random.Random], Example], packer: Packer, seed: str,
+        prepare: Callable[[Example, random.Random], Example], packer: AnyPacker, seed: str,
     ) -> None:  # fmt: skip
         self.examples, self.groups, self.prepare = examples, groups, prepare
         self.packer, self.seed = packer, seed
@@ -428,7 +484,7 @@ class _Packed(torch.utils.data.Dataset[tuple[Batch, list[tuple[int, int]]]]):
     def __len__(self) -> int:
         return len(self.groups)
 
-    def __getitem__(self, k: int) -> tuple[Batch, list[tuple[int, int]]]:
+    def __getitem__(self, k: int) -> tuple[AnyBatch, list[tuple[int, int]]]:
         rng = random.Random(f"{self.seed}/{k}")  # noqa: S311 - not secret
         self.packer.reseed(rng.getrandbits(63))
         chosen = [self.prepare(self.examples[i], rng) for i in self.groups[k]]
@@ -441,9 +497,9 @@ def _as_is(item: Any) -> Any:
 
 def _packed(
     examples: list[Example], groups: list[list[int]],
-    prepare: Callable[[Example, random.Random], Example], packer: Packer, seed: str,
+    prepare: Callable[[Example, random.Random], Example], packer: AnyPacker, seed: str,
     workers: int,
-) -> Iterable[tuple[Batch, list[tuple[int, int]]]]:  # fmt: skip
+) -> Iterable[tuple[AnyBatch, list[tuple[int, int]]]]:  # fmt: skip
     """The batches of `groups`, in order, prepared ahead by `workers` processes."""
     return torch.utils.data.DataLoader(
         _Packed(examples, groups, prepare, packer, seed), batch_size=None, shuffle=False,
@@ -455,16 +511,21 @@ def _unchanged(example: Example, rng: random.Random) -> Example:
     return example
 
 
-def _batches(n: int, packer: Packer, examples: list[Example], rows: int) -> list[list[int]]:
+def _batches(n: int, packer: AnyPacker, examples: list[Example], rows: int) -> list[list[int]]:
     """Indices in groups that fit one batch (every example of a rate has the same size)."""
-    tokens = len(packer.tokens(examples[0]).slot)
-    per_batch = max(1, (packer.max_tokens // tokens) * rows)
+    if isinstance(packer, ChannelPacker):  # both limits of a row: global tokens and samples
+        e = packer.example(examples[0])
+        per_row = min(packer.max_tokens // e.tokens, packer.max_samples // e.samples)
+    else:
+        per_row = packer.max_tokens // len(packer.tokens(examples[0]).slot)
+    per_batch = max(1, per_row * rows)
     return [list(range(k, min(n, k + per_batch))) for k in range(0, n, per_batch)]
 
 
 @torch.no_grad()
 def embed(
-    model: TaskModel, examples: list[Example], max_tokens: int, rows: int, device: torch.device,
+    model: TaskModel | V4Task, examples: list[Example], max_tokens: int, rows: int,
+    device: torch.device,
     log: Log, name: str, slots: dict[str, int] | None,
 ) -> np.ndarray:  # fmt: skip
     """The mean feature of every example; progress as `embed/<name>/...`."""
@@ -540,12 +601,12 @@ class _FineTuning:
     """The state of one fine-tuning run: the encoder, the head, the optimizer and its schedule,
     the step count, and the rates at the last rung (a cooldown branch decays from them)."""
 
-    model: Encoder
+    model: Backbone
     head: torch.nn.Module
     optimizer: torch.optim.Optimizer
     scheduler: torch.optim.lr_scheduler.LambdaLR
     trained: list[torch.nn.Parameter]
-    packer: Packer
+    packer: AnyPacker
     examples: list[Example]
     y: np.ndarray
     s: PtbxlSettings
@@ -660,7 +721,7 @@ def _cooldown_rung(
 
 
 def end_to_end(
-    config: ModelConfig, records: Records, y: np.ndarray, max_tokens: int, s: PtbxlSettings,
+    config: BackboneConfig, records: Records, y: np.ndarray, max_tokens: int, s: PtbxlSettings,
     device: torch.device, start: dict[str, torch.Tensor] | None, log: Log, prefix: str,
     scored_groups: dict[str, np.ndarray] | None = None,
 ) -> tuple[dict[str, float], tuple[np.ndarray, np.ndarray]]:  # fmt: skip
@@ -678,7 +739,7 @@ def end_to_end(
     the main run's epochs are not scored on fold 10. Also returned: the chosen epoch's (or
     rung's) probabilities on fold 9 and fold 10 (records in order)."""
     torch.manual_seed(s.seed)
-    model = Encoder(config).to(device)
+    model = _backbone(config).to(device)
     if start is not None:
         model.load_state_dict(start)
     with_max = s.fine_tuning_head == "reference"
@@ -804,8 +865,8 @@ def cooldown_epochs(rungs: CooldownRungs, epoch: int) -> int:
 
 @torch.no_grad()
 def _predict(
-    model: TaskModel, head: torch.nn.Module, examples: list[Example], crop_s: float | None,
-    packer: Packer, rows: int, device: torch.device, workers: int, seed: str,
+    model: TaskModel | V4Task, head: torch.nn.Module, examples: list[Example], crop_s: float | None,
+    packer: AnyPacker, rows: int, device: torch.device, workers: int, seed: str,
     stride_fraction: float, aggregate: Literal["mean", "max"], with_max: bool,
 ) -> np.ndarray:  # fmt: skip
     """The probabilities of each example: the mean or the maximum over its crops."""
@@ -832,7 +893,8 @@ def _predict(
 
 
 def parameter_groups(
-    model: TaskModel, head: torch.nn.Module, lr: float, factor: float, lower_fraction: float,
+    model: TaskModel | V4Task, head: torch.nn.Module, lr: float, factor: float,
+    lower_fraction: float,
     slot_group: Literal["lower", "head"],
 ) -> list[dict[str, Any]]:  # fmt: skip
     """AdamW groups from `model.layer_groups()`: the head at `lr`; the upper layers and the
@@ -913,15 +975,35 @@ def _from_scratch_config(config: ModelConfig, settings: PtbxlSettings) -> ModelC
     return config
 
 
+def _pretrained_state(config: BackboneConfig, checkpoint: dict[str, Any]) -> dict[str, Any]:
+    """The encoder's weights in a pretraining checkpoint (v4: the student's)."""
+    state: dict[str, Any] = checkpoint["model"]
+    return V4Task.pretrained(state) if isinstance(config, V4Config) else state
+
+
+def _run_config(train_config: TrainConfig, settings: PtbxlSettings) -> BackboneConfig:
+    """The downstream model's config from the pretraining run's (v0-v3: with the from_scratch_*
+    settings; v4: its model and batch format, which those settings do not change)."""
+    if isinstance(train_config.model, V4Spec):
+        if any(v is not None for v in (settings.from_scratch_samples_per_token,
+                                       settings.from_scratch_tokenizer,
+                                       settings.from_scratch_model)):  # fmt: skip
+            raise ValueError("the from_scratch_* settings are for v0-v3 models")
+        if not isinstance(train_config.tokens, ChannelTokens):
+            raise ValueError("a v4 model goes with tokens.format channels")
+        return V4Config(train_config.model, train_config.tokens)
+    return _from_scratch_config(train_config.model_settings(), settings)
+
+
 def _probe_features(
-    config: ModelConfig, checkpoint: dict[str, Any], records: Records, max_tokens: int,
+    config: BackboneConfig, checkpoint: dict[str, Any], records: Records, max_tokens: int,
     settings: PtbxlSettings, device: torch.device, log: Log,
 ) -> dict[str, np.ndarray]:  # fmt: skip
     """The linear-probing features of the pretrained and of a random encoder."""
-    pretrained = Encoder(config).to(device)
-    pretrained.load_state_dict(checkpoint["model"])
+    pretrained = _backbone(config).to(device)
+    pretrained.load_state_dict(_pretrained_state(config, checkpoint))
     torch.manual_seed(settings.seed)
-    untrained = Encoder(config).to(device)
+    untrained = _backbone(config).to(device)
     slots = lead_slots(records.examples, settings.fixed_slots)
     return {
         name: embed(encoder, records.examples, max_tokens, settings.rows, device, log, name, slots)
@@ -930,7 +1012,7 @@ def _probe_features(
 
 
 def _method_scores(
-    name: str, task: str, config: ModelConfig, kept: Records, y: np.ndarray, max_tokens: int,
+    name: str, task: str, config: BackboneConfig, kept: Records, y: np.ndarray, max_tokens: int,
     settings: PtbxlSettings, device: torch.device, checkpoint: dict[str, Any], log: Log,
     groups: dict[str, np.ndarray] | None,
 ) -> tuple[dict[str, float], tuple[np.ndarray, np.ndarray]]:  # fmt: skip
@@ -940,7 +1022,8 @@ def _method_scores(
         return _reference(kept, y, settings, device, log, prefix)
     if name in ("reference_s4", "reference_s4_channels", "reference_s4_incontext"):
         return _reference_s4(kept, y, settings, device, log, prefix, name)
-    start = {"fine_tuning": checkpoint["model"], "from_scratch": None}[name]
+    pretrained = _pretrained_state(config, checkpoint)
+    start = {"fine_tuning": pretrained, "from_scratch": None}[name]
     return end_to_end(config, kept, y, max_tokens, settings, device, start, log, prefix,
                       scored_groups=groups)  # fmt: skip
 
@@ -953,7 +1036,7 @@ def run(
     from biosignal_model.train import TrainConfig  # noqa: PLC0415 - avoids a cycle
 
     train_config = TrainConfig.from_checkpoint(checkpoint["config"])
-    config = _from_scratch_config(train_config.model_settings(), settings)
+    config = _run_config(train_config, settings)
     max_tokens = train_config.tokens.max_tokens
     records, statements = load(store, settings, log)
     features = {}

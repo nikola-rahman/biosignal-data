@@ -544,13 +544,13 @@ def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[
         if step % run_cfg.log_every == 0 or step == o.steps:
             last = window.report(ranks) | {"train/grad_norm": float(grad_norm),
                                       "train/learning_rate": rate} | _memory(device)  # fmt: skip
-            run.log(last, step=step)
+            _record(run, last, step)
             window = _new_window(model, train_stream.datasets, device)
         if first and (step % run_cfg.validate_every == 0 or step == o.steps):
             validation = _validation(
                 model, validation_batches, validation_stream.datasets, device, autocast
             )
-            run.log(validation, step=step)
+            _record(run, validation, step)
             last |= validation
             window.start = time.perf_counter()  # validation time is not training time
         if first and (step % run_cfg.checkpoint_every == 0 or step == o.steps):
@@ -801,6 +801,20 @@ def _validate_v4(
     k = max(1, len(batches))
     return {"validation/loss": error / max(1.0, count), "validation/target_std": target_std / k,
             "validation/prediction_std": prediction_std / k}  # fmt: skip
+
+
+BRIEF = ("train/loss", "train/target_std", "train/prediction_std", "train/grad_norm",
+         "speed/samples_per_s", "speed/data_wait_fraction", "system/max_memory_gb")  # fmt: skip
+
+
+def _record(run: Any, metrics: dict[str, float], step: int) -> None:
+    """To W&B, and one log line of what shows progress and trouble (the console, log files):
+    the BRIEF training metrics, or the validation metrics."""
+    run.log(metrics, step=step)
+    chosen = [k for k in BRIEF if k in metrics] or [
+        k for k in metrics if k.startswith("validation/") and "_by_" not in k
+    ]
+    log.info("step %d %s", step, " ".join(f"{k}={metrics[k]:.4g}" for k in chosen))
 
 
 def _memory(device: torch.device) -> dict[str, float]:
