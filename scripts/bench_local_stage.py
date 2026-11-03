@@ -6,7 +6,7 @@ line per case (median rate over the timed seconds, peak memory).
 
 Usage (on the pod, GPU 1 only):
     CUDA_VISIBLE_DEVICES=1 python scripts/bench_local_stage.py --seconds 20 --widths 128 256 \
-        --batch-scale 1.0
+        --batch-scale 1.0 --compile 1 --convolution scan --checkpoint 1
 """
 
 from __future__ import annotations
@@ -71,16 +71,17 @@ def examples(case: Case, seed: int) -> list[Example]:
     return out
 
 
-def spec(width: int) -> S4DLocalSpec:
+def spec(width: int, compiled: bool, convolution: str = "fft", ckpt: bool = True) -> S4DLocalSpec:
     return S4DLocalSpec(
         kind="s4d", width=width, layers=4, states=32, min_time_s=0.001, max_time_s=10.0,
         kernel_time_constants=5.0, discretization="zoh_centred", masked_modes="static_gain",
-        mixing_layers=[1, 3], mixing_heads=4,
-        dropout=0.0, checkpoint=True,
+        convolution=convolution, mixing_layers=[1, 3], mixing_heads=4,  # type: ignore[arg-type]
+        dropout=0.0, checkpoint=ckpt, compile=compiled,
     )  # fmt: skip
 
 
-def run(case: Case, width: int, seconds: float, device: torch.device) -> str:
+def run(case: Case, width: int, seconds: float, device: torch.device, compiled: bool,
+        convolution: str, ckpt: bool) -> str:  # fmt: skip
     packer = ChannelPacker(
         datasets=["d/x"], token_s=0.04, max_tokens=10**7, max_samples=10**8,
         max_channels=128, rows=1, mask=None, seed=0,
@@ -89,7 +90,7 @@ def run(case: Case, width: int, seconds: float, device: torch.device) -> str:
     x = batch.inputs.to(device)
     samples = x.values.numel()
     torch.manual_seed(0)
-    stage = S4DLocalStage(spec(width)).to(device)
+    stage = S4DLocalStage(spec(width, compiled, convolution, ckpt)).to(device)
     optimizer = torch.optim.AdamW(stage.parameters(), lr=1e-4)
     torch.cuda.reset_peak_memory_stats(device)
 
@@ -135,6 +136,9 @@ def main() -> None:
     parser.add_argument("--seconds", type=float, required=True)
     parser.add_argument("--widths", type=int, nargs="+", required=True)
     parser.add_argument("--batch-scale", type=float, required=True)  # examples a batch x this
+    parser.add_argument("--compile", type=int, choices=(0, 1), required=True)
+    parser.add_argument("--convolution", choices=("fft", "scan"), required=True)
+    parser.add_argument("--checkpoint", type=int, choices=(0, 1), required=True)
     args = parser.parse_args()
     seconds = args.seconds
     device = torch.device("cuda")
@@ -144,7 +148,8 @@ def main() -> None:
         for full in CASES:
             case = replace(full, examples=max(1, round(full.examples * args.batch_scale)))
             try:
-                summary.append(run(case, width, seconds, device))
+                summary.append(run(case, width, seconds, device, bool(args.compile),
+                                   args.convolution, bool(args.checkpoint)))  # fmt: skip
             except torch.OutOfMemoryError:
                 summary.append(f"{case.name} | width {width} | out of memory")
                 torch.cuda.empty_cache()

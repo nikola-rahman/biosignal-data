@@ -34,6 +34,7 @@ def spec(kind: str, min_time_s: float, masked: str = "drop") -> S4DLocalSpec:
         kind="s4d", width=128, layers=4, states=32, min_time_s=min_time_s, max_time_s=10.0,
         kernel_time_constants=5.0, discretization=kind, masked_modes=masked,  # type: ignore[arg-type]
         mixing_layers=[1, 3], mixing_heads=4, dropout=0.0, checkpoint=False,
+        compile=False, convolution="fft",
     )  # fmt: skip
 
 

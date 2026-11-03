@@ -39,7 +39,9 @@ def _spec(**changes: object) -> S4DLocalSpec:
     base = S4DLocalSpec(
         kind="s4d", width=16, layers=3, states=8, min_time_s=0.001, max_time_s=10.0,
         kernel_time_constants=5.0, discretization="zoh_centred", masked_modes="static_gain",
+        convolution="fft",
         mixing_layers=[0, 2], mixing_heads=4, dropout=0.0, checkpoint=False,
+        compile=False,
     )  # fmt: skip
     return base.model_copy(update=changes)
 
@@ -289,3 +291,14 @@ def test_slow_channels_give_finite_outputs_and_gradients(kind: str, masked: str)
     (out * torch.randn_like(out)).sum().backward()
     assert torch.isfinite(out).all()
     assert all(torch.isfinite(p.grad).all() for p in stage.parameters() if p.grad is not None)
+
+
+def test_the_fft_convolution_has_the_gradients_of_its_forward() -> None:
+    from biosignal_model.local_stage import _FFTConv  # noqa: PLC0415
+
+    gen = torch.Generator().manual_seed(0)
+    z = torch.randn(2, 3, 7, dtype=torch.float64, generator=gen, requires_grad=True)
+    kernel = torch.randn(3, 12, dtype=torch.float64, generator=gen, requires_grad=True)
+    assert torch.autograd.gradcheck(lambda a, b: _FFTConv.apply(a, b, 12), (z, kernel))
+    plain = torch.fft.irfft(torch.fft.rfft(z, 12) * torch.fft.rfft(kernel, 12), 12)[..., :7]
+    assert torch.equal(_FFTConv.apply(z, kernel, 12), plain)

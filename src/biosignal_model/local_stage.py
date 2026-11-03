@@ -51,6 +51,15 @@ mixed later, by the global model. For grids, a neighbour convolution needs the g
 
 Activation checkpointing per layer (`checkpoint`), so the memory is one layer's activations
 plus one [S, width] tensor a layer.
+
+Speed (`convolution`, `compile`): `scan` computes the SSM from its recurrence on the GPU
+(biosignal_model.ssm_scan: one Triton pass a direction in the residual stream's layout, the
+mode parameters' gradients from the adjoint pass, no FFT and no kernel in the time domain;
+D u is folded into the lag-0 weight); `fft` is the reference and runs anywhere. `compile`
+fuses the elementwise chains (norms, GELU, GLU, residuals, the transposes of the mixing).
+Measured 2026-10-29 on an L40S (ECG 32 x 12 x 500 Hz x 10 s, width 128, a training step):
+fft eager 1.65 s (1.14 M samples/s), scan + compile 0.44 s without checkpointing; outputs and
+gradients against float64 as exact as the FFT path (tests/test_local_stage_gpu.py).
 """
 
 from __future__ import annotations
@@ -58,7 +67,7 @@ from __future__ import annotations
 import functools
 import math
 from dataclasses import dataclass
-from typing import Annotated, Literal, cast
+from typing import Annotated, Any, Literal, cast
 
 import numpy as np
 import torch
@@ -84,11 +93,19 @@ class S4DLocalSpec(_Spec):
     max_time_s: float
     kernel_time_constants: float  # the kernel cap, in decay times of the slowest mode
     discretization: Literal["zoh", "zoh_centred", "bilinear"]
+    # how the convolution is computed: fft (any device; the kernel capped as above) or scan
+    # (the recurrence on the GPU, biosignal_model.ssm_scan; the kernel is not capped: the
+    # same convolution as fft wherever the cap does not cut it, and the untruncated one where it
+    # would)
+    convolution: Literal["fft", "scan"]
     masked_modes: Literal["drop", "static_gain"]  # what a mode above |lambda| dt > pi adds
     mixing_layers: list[int]  # the layers (from 0) followed by channel mixing
     mixing_heads: int
     dropout: float  # on the residual branches
     checkpoint: bool  # activation checkpointing per layer
+    # torch.compile of the elementwise chains around the FFT and the attention (the same
+    # operations; outputs within float32 rounding of the eager ones)
+    compile: bool
 
 
 class IdentityLocalSpec(_Spec):
@@ -295,9 +312,9 @@ class S4D(nn.Module):
         """`kernel_length` at one rate (a host sync; for tests and checks)."""
         return self.kernel_length(float(self.slowest((rate,))[0]), longest)
 
-    def kernel(self, rate: float, length: int) -> torch.Tensor:
-        """[2, H, length]: the kernel of each direction at `rate` (float32 for float32
-        weights)."""
+    def _discretized(self, rate: float) -> tuple[Any, ...]:
+        """(weight, power, lag 0 or None, kept, a, c): the kernel at rate is, per direction
+        and feature, 2 Re sum_n weight_n exp(power_n l), with lag 0 replaced (when not None)."""
         z, kept = self.modes(rate)
         # a masked mode adds nothing below: its z set to 0 keeps exp(-z / 2) finite (at 1 Hz a
         # 1 ms mode has Re z = -500, exp(250) is inf in float32, and inf x 0 is NaN)
@@ -313,6 +330,30 @@ class S4D(nn.Module):
         else:
             ratio = (1 + z / 2) / (1 - z / 2)
             weight, power, first = c * (z / a) / (1 - z / 2), ratio.log(), None
+        return weight, power, first, kept, a
+
+    def _lag0(self, weight: Any, first: Any, kept: Any, a: Any) -> torch.Tensor:
+        """[2, H]: the kernel at lag 0 (each direction): 2 Re sum_n weight_n, or the
+        discretization's own lag 0, plus the static gains of the masked modes."""
+        k0 = 2 * weight.sum(-1).real if first is None else first
+        if self.spec.masked_modes == "static_gain":
+            masked = torch.view_as_complex(self.c) * ~kept
+            k0 = k0 + 2 * (masked * (-1.0 / a)).sum(-1).real
+        out: torch.Tensor = k0
+        return out
+
+    def scan_parameters(self, rate: float) -> tuple[torch.Tensor, ...]:
+        """(k0 [2, H], w [2, H, N, 2], p [2, H, N, 2], kept [2, H, N]) at `rate`, with
+        gradients: the lag-0 weight, and real views of the weights and log-modes of the lags
+        from 1 on (biosignal_model.ssm_scan.ScanConv)."""
+        weight, power, first, kept, a = self._discretized(rate)
+        k0 = self._lag0(weight, first, kept, a)
+        return k0, torch.view_as_real(weight), torch.view_as_real(power), kept
+
+    def kernel(self, rate: float, length: int) -> torch.Tensor:
+        """[2, H, length]: the kernel of each direction at `rate` (float32 for float32
+        weights)."""
+        weight, power, first, kept, a = self._discretized(rate)
         pieces = []
         for start in range(0, length, KERNEL_PIECE):
             stop = min(length, start + KERNEL_PIECE)
@@ -322,27 +363,50 @@ class S4D(nn.Module):
                 piece = _kernel_piece(weight, power, start, stop)
             pieces.append(piece)
         k = torch.cat(pieces, dim=-1)
-        if first is not None:
-            k = torch.cat([first[..., None].to(k.dtype), k[..., 1:]], dim=-1)
-        if self.spec.masked_modes == "static_gain":
-            masked = torch.view_as_complex(self.c) * ~kept
-            static = 2 * (masked * (-1.0 / a)).sum(-1).real  # [2, H]
-            k = torch.cat([k[..., :1] + static[..., None].to(k.dtype), k[..., 1:]], dim=-1)
+        if first is not None or self.spec.masked_modes == "static_gain":
+            k0 = self._lag0(weight, first, kept, a)
+            k = torch.cat([k0[..., None].to(k.dtype), k[..., 1:]], dim=-1)
         return k
 
     def forward(self, z: torch.Tensor, size: int, kernel: torch.Tensor) -> torch.Tensor:
-        """`z` [B, H, L] float32 (contiguous) -> [B, H, L]: both directions over the lags
-        -(K-1)..K-1 as one circular kernel of `size` >= L + K - 1, so nothing wraps onto a
-        used output."""
-        length, k = z.shape[-1], kernel.shape[-1]
+        """`z` [B, H, L] float32 (contiguous) -> [B, H, L] (a view): the convolution with both
+        directions over the lags -(K-1)..K-1 as one circular kernel of `size` >= L + K - 1, so
+        nothing wraps onto a used output (the D term is added by the caller)."""
+        k = kernel.shape[-1]
         both = z.new_zeros(z.shape[1], size)
         both[:, :k] = kernel[0]
         if k > 1:
             both[:, size - k + 1 :] = kernel[1, :, 1:].flip(-1)
         both[:, 0] = both[:, 0] + kernel[1, :, 0]
-        y = torch.fft.irfft(torch.fft.rfft(z, size) * torch.fft.rfft(both, size), size)
-        out: torch.Tensor = y[..., :length] + z * self.d[:, None]
+        return cast(torch.Tensor, _FFTConv.apply(z, both, size))
+
+
+class _FFTConv(torch.autograd.Function):
+    """y = irfft(rfft(z, n) rfft(c, n), n)[..., :L]: the circular convolution of z [B, H, L]
+    with the real circular kernel c [H, n]. The forward is the eager one; the backward is
+    written out, so no zero-filled gradient of the slice, no conj kernels: with
+    G = rfft(dy, n) (zero-padded), dz = irfft(G conj(C), n)[..., :L] and
+    dc = irfft(sum over B of G conj(Z), n)."""
+
+    @staticmethod
+    def forward(ctx: Any, z: torch.Tensor, kernel: torch.Tensor, size: int) -> torch.Tensor:
+        spectrum = torch.fft.rfft(z, size)
+        kernel_f = torch.fft.rfft(kernel, size)
+        ctx.save_for_backward(spectrum, kernel_f)
+        ctx.size, ctx.length = size, z.shape[-1]
+        out: torch.Tensor = torch.fft.irfft(spectrum * kernel_f, size)[..., : z.shape[-1]]
         return out
+
+    @staticmethod
+    def backward(ctx: Any, grad: torch.Tensor) -> tuple[torch.Tensor | None, ...]:
+        spectrum, kernel_f = ctx.saved_tensors
+        g = torch.fft.rfft(grad, ctx.size)
+        dz = dk = None
+        if ctx.needs_input_grad[0]:
+            dz = torch.fft.irfft(g * kernel_f.conj(), ctx.size)[..., : ctx.length]
+        if ctx.needs_input_grad[1]:
+            dk = torch.fft.irfft((g * spectrum.conj()).sum(0), ctx.size)
+        return dz, dk, None
 
 
 def _kernel_piece(weight: torch.Tensor, power: torch.Tensor, start: int, stop: int) -> torch.Tensor:
@@ -355,33 +419,128 @@ def _kernel_piece(weight: torch.Tensor, power: torch.Tensor, start: int, stop: i
     return 2 * torch.einsum("dhn,dhnl->dhl", weight, vandermonde).real
 
 
+def _to_channels(rows: torch.Tensor, weight: torch.Tensor, channels: int,
+                 length: int) -> torch.Tensor:  # fmt: skip
+    """[channels x length, H] -> RMS-normed float32 [channels, H, length], contiguous."""
+    x = F.rms_norm(rows.to(torch.promote_types(rows.dtype, torch.float32)), (rows.shape[-1],),
+                   weight)  # fmt: skip
+    return x.view(channels, length, -1).transpose(1, 2).contiguous()
+
+
+def _from_channels(y: torch.Tensor, z: torch.Tensor, d: torch.Tensor,
+                   dtype: torch.dtype) -> torch.Tensor:  # fmt: skip
+    """GELU(y + D z), [channels, H, length] -> [channels x length, H] in `dtype` (the next
+    linear map's)."""
+    out = F.gelu(y + z * d[:, None])
+    return out.transpose(1, 2).reshape(-1, out.shape[1]).to(dtype)
+
+
+def _normed(rows: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    """RMSNorm of the rows [samples, H] in float32 (the scan's input)."""
+    x = rows.to(torch.promote_types(rows.dtype, torch.float32))
+    return F.rms_norm(x, (x.shape[-1],), weight).contiguous()
+
+
+def _activated(y: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """GELU(y) of rows [samples, H] (the scan's y holds D u), in `dtype` (the next linear
+    map's)."""
+    return F.gelu(y).to(dtype)
+
+
+def _dropout(x: torch.Tensor, p: float, training: bool) -> torch.Tensor:
+    """F.dropout, and nothing at p = 0 (F.dropout then still copies)."""
+    return F.dropout(x, p, training) if p > 0 and training else x
+
+
+def _glu_residual(h: torch.Tensor, y: torch.Tensor, p: float, training: bool) -> torch.Tensor:
+    return h + _dropout(F.glu(y, dim=-1), p, training)
+
+
+def _mix_in(block: torch.Tensor, weight: torch.Tensor, groups: int, size: int,
+            length: int) -> torch.Tensor:  # fmt: skip
+    """[G x m x L, H] (G groups of m channels) -> RMS-normed [G x L, m, H]."""
+    x = block.view(groups, size, length, -1).transpose(1, 2).reshape(groups * length, size, -1)
+    return F.rms_norm(x, (x.shape[-1],), weight)
+
+
+def _mix_out(block: torch.Tensor, a: torch.Tensor, groups: int, size: int, length: int,
+             p: float, training: bool) -> torch.Tensor:  # fmt: skip
+    """The residual: block [G x m x L, H] + the attention output a [G x L, m, H]."""
+    a = a.view(groups, length, size, -1).transpose(1, 2).reshape(-1, a.shape[-1])
+    return block + _dropout(a.to(block.dtype), p, training)
+
+
+def _split(h: torch.Tensor, plan: _Plan) -> tuple[torch.Tensor, ...]:
+    """The rows of each bucket (views; the backward is one cat, not a zero-filled gradient a
+    slice)."""
+    sizes = [b.channels * b.length for b in plan.buckets]
+    return (h,) if len(sizes) == 1 else tuple(torch.split(h, sizes))
+
+
+_COMPILED: dict[object, object] = {}
+
+
+def _fn(fn: object, compiled: bool) -> object:
+    """`fn` itself, or its torch.compile (dynamic shapes: the buckets change from batch to
+    batch; one compilation for every layer)."""
+    if not compiled:
+        return fn
+    if fn not in _COMPILED:
+        _COMPILED[fn] = torch.compile(fn, dynamic=True, fullgraph=True)  # type: ignore[call-overload]
+    return _COMPILED[fn]
+
+
 class _Layer(nn.Module):
     def __init__(self, spec: S4DLocalSpec, mixing: bool) -> None:
         super().__init__()
         h = spec.width
         self.dropout = spec.dropout
+        self.compiled = spec.compile
         self.norm = nn.RMSNorm(h)
         self.ssm = S4D(spec)
         self.out = nn.Linear(h, 2 * h)
-        self.mixing = ChannelMixing(h, spec.mixing_heads, spec.dropout) if mixing else None
+        self.mixing = (
+            ChannelMixing(h, spec.mixing_heads, spec.dropout, spec.compile) if mixing else None
+        )
+
+    def _scan_parameters(self, rate: float) -> tuple[torch.Tensor, ...]:
+        """The scan's (k0, w, p, kept) at `rate`, with D in the forward direction's lag 0
+        (D u is a lag-0 term)."""
+        k0, w, p, kept = self.ssm.scan_parameters(rate)
+        d = self.ssm.d.to(k0.dtype)
+        return k0 + torch.stack([d, torch.zeros_like(d)]), w, p, kept
 
     def forward(self, h: torch.Tensor, plan: _Plan, kernels: dict[float, int]) -> torch.Tensor:
         """`h` [S, width] in the plan's sample order; `kernels`: the kernel length per rate."""
-        width = h.shape[-1]
+        to_channels: Any = _fn(_to_channels, self.compiled)
+        normed: Any = _fn(_normed, self.compiled)
+        activated: Any = _fn(_activated, self.compiled)
+        from_channels: Any = _fn(_from_channels, self.compiled)
+        glu_residual: Any = _fn(_glu_residual, self.compiled)
+        # the input of the linear map: in the autocast dtype under autocast (as autocast casts)
+        dtype = (torch.get_autocast_dtype(h.device.type) if torch.is_autocast_enabled(h.device.type)
+                 else torch.promote_types(h.dtype, torch.float32))  # fmt: skip
         with torch.autocast(h.device.type, enabled=False):  # the SSM in float32
-            u = self.norm(h.to(torch.promote_types(h.dtype, torch.float32)))
-            kernel = {r: self.ssm.kernel(r, n) for r, n in kernels.items()}
             parts = []
-            for b in plan.buckets:
-                rows = u[b.start : b.start + b.channels * b.length]
-                z = rows.view(b.channels, b.length, width).transpose(1, 2).contiguous()
+            scan = self.ssm.spec.convolution == "scan"
+            if scan:  # Triton, on the GPU: imported only where it runs
+                from biosignal_model.ssm_scan import ScanConv  # noqa: PLC0415
+            kernel = {} if scan else {r: self.ssm.kernel(r, n) for r, n in kernels.items()}
+            modes = {r: self._scan_parameters(r) for r in kernels} if scan else {}
+            for b, rows in zip(plan.buckets, _split(h, plan), strict=True):
+                if scan:
+                    u = normed(rows, self.norm.weight)  # [B x L, H] float32
+                    y = cast(torch.Tensor, ScanConv.apply(
+                        u.view(b.channels, b.length, -1), *modes[b.rate]
+                    ))  # fmt: skip
+                    parts.append(activated(y.view(-1, y.shape[-1]), dtype))
+                    continue
+                z = to_channels(rows, self.norm.weight, b.channels, b.length)
                 used = min(b.length, kernels[b.rate])
-                size = fast_size(b.length + used - 1)
-                y = F.gelu(self.ssm(z, size, kernel[b.rate][..., :used]))
-                parts.append(y.transpose(1, 2).reshape(-1, width))
+                y = self.ssm(z, fast_size(b.length + used - 1), kernel[b.rate][..., :used])
+                parts.append(from_channels(y, z, self.ssm.d, dtype))
             y = torch.cat(parts) if len(parts) > 1 else parts[0]
-        y = F.glu(self.out(y), dim=-1)
-        h = h + F.dropout(y, self.dropout, self.training)
+        h = glu_residual(h, self.out(y), self.dropout, self.training)
         if self.mixing is not None:
             h = self.mixing(h, plan)
         return h
@@ -400,55 +559,69 @@ MIXING_KERNELS = [SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]
 class ChannelMixing(nn.Module):
     """Attention across co-located channels at each sample time (pre-norm, residual)."""
 
-    def __init__(self, width: int, heads: int, dropout: float) -> None:
+    def __init__(self, width: int, heads: int, dropout: float, compiled: bool) -> None:
         super().__init__()
         if width % heads:
             raise ValueError("width / mixing_heads must be whole")
-        self.heads, self.dropout = heads, dropout
+        self.heads, self.dropout, self.compiled = heads, dropout, compiled
         self.norm = nn.RMSNorm(width)
         self.qkv = nn.Linear(width, 3 * width, bias=False)
         self.out = nn.Linear(width, width, bias=False)
 
     def attend(self, x: torch.Tensor, keep: torch.Tensor | None) -> torch.Tensor:
-        """`x` [P, m, width] (P sample times, m channels) -> [P, m, width]; `keep` [P, m]:
-        the channels that exist (None: all)."""
-        p, m, width = x.shape
-        q, k, v = self.qkv(self.norm(x)).view(p, m, 3, self.heads, -1).permute(2, 0, 3, 1, 4)
+        """`x` [P, m, width] normed (P sample times, m channels) -> [P, m, width]; `keep`
+        [P, m]: the channels that exist (None: all)."""
+        _, m, width = x.shape
+        # chunks split off before the maps (the backward of a split is one cat; slices of one
+        # q, k, v would each get a zero-filled gradient of the whole and be added up)
+        chunks = torch.split(x, MIXING_CHUNK)
+        masks = (None,) * len(chunks) if keep is None else torch.split(keep, MIXING_CHUNK)
         outs = []
-        for at in range(0, p, MIXING_CHUNK):
-            part = slice(at, at + MIXING_CHUNK)
-            mask = None if keep is None else keep[part, None, None, :]
+        for part, mask in zip(chunks, masks, strict=True):
+            p = part.shape[0]
+            q, k, v = self.qkv(part).view(p, m, 3, self.heads, -1).permute(2, 0, 3, 1, 4)
             with sdpa_kernel(MIXING_KERNELS):
-                outs.append(
-                    F.scaled_dot_product_attention(q[part], k[part], v[part], attn_mask=mask)
+                a = F.scaled_dot_product_attention(
+                    q, k, v, attn_mask=None if mask is None else mask[:, None, None, :]
                 )
-        a = torch.cat(outs) if len(outs) > 1 else outs[0]
-        out: torch.Tensor = self.out(a.transpose(1, 2).reshape(p, m, width))
+            outs.append(self.out(a.transpose(1, 2).reshape(p, m, width)))
+        out: torch.Tensor = torch.cat(outs) if len(outs) > 1 else outs[0]
         return out
 
     def forward(self, h: torch.Tensor, plan: _Plan) -> torch.Tensor:
-        width = h.shape[-1]
-        parts, at = [], 0  # the update, in sample order: mixed runs and zeros between them
+        mix_in: Any = _fn(_mix_in, self.compiled)
+        mix_out: Any = _fn(_mix_out, self.compiled)
+        # the rows in order: (start, stop, run or None for rows mixed only by gathering)
+        spans: list[tuple[int, int, tuple[_Bucket, int, int] | None]] = []
+        at = 0
         for b in plan.buckets:
             for first, count, size in b.runs:
                 start = b.start + first * b.length
                 if start > at:
-                    parts.append(h.new_zeros(start - at, width))
-                block = h[start : start + count * size * b.length]
-                x = block.view(count, size, b.length, width).transpose(1, 2)  # [G, L, m, H]
-                a = self.attend(x.reshape(count * b.length, size, width), None)
-                a = a.view(count, b.length, size, width).transpose(1, 2).reshape(-1, width)
-                parts.append(a.to(h.dtype))
+                    spans.append((at, start, None))
                 at = start + count * size * b.length
-        if not parts and not plan.gathered:
+                spans.append((start, at, (b, count, size)))
+        if not spans and not plan.gathered:
             return h
         if at < h.shape[0]:
-            parts.append(h.new_zeros(h.shape[0] - at, width))
-        update = torch.cat(parts) if len(parts) > 1 else parts[0]
+            spans.append((at, h.shape[0], None))
+        sizes = [stop - start for start, stop, _ in spans]
+        blocks = tuple(torch.split(h, sizes)) if len(spans) > 1 else (h,)
+        pieces = []
+        for block, (_, _, run) in zip(blocks, spans, strict=True):
+            if run is None:
+                pieces.append(block)
+                continue
+            b, count, size = run
+            a = self.attend(mix_in(block, self.norm.weight, count, size, b.length), None)
+            pieces.append(mix_out(block, a, count, size, b.length, self.dropout, self.training))
+        out = torch.cat(pieces) if len(pieces) > 1 else pieces[0]
         for g in plan.gathered:
-            a = self.attend(h[g.index], g.valid)
-            update = update.index_put((g.index[g.valid],), a[g.valid].to(h.dtype))
-        return h + F.dropout(update, self.dropout, self.training)
+            a = self.attend(self.norm(h[g.index]), g.valid)
+            rows = g.index[g.valid]
+            mixed = h[rows] + _dropout(a[g.valid].to(h.dtype), self.dropout, self.training)
+            out = out.index_put((rows,), mixed)
+        return out
 
 
 class S4DLocalStage(LocalStage):
@@ -470,6 +643,8 @@ class S4DLocalStage(LocalStage):
         """Per layer, the kernel length per rate: one host sync a forward."""
         if not plan.rates:
             return [{} for _ in self.layers]
+        if self.spec.convolution == "scan":  # no cap: every lag of the longest channel
+            return [dict(plan.longest) for _ in self.layers]
         ssms = [cast(_Layer, layer).ssm for layer in self.layers]
         slowest = torch.stack([ssm.slowest(plan.rates) for ssm in ssms]).tolist()
         return [
