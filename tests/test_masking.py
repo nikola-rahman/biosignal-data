@@ -179,6 +179,8 @@ def test_changing_hidden_samples_changes_nothing_the_model_reads() -> None:
     b = _packer(SPANS).pack([_example(changed, RATES, starts)])[0].inputs
     assert torch.equal(a.values, b.values) and torch.equal(a.observed, b.observed)
     assert torch.equal(a.hidden, b.hidden) and torch.equal(a.tokens.hidden, b.tokens.hidden)
+    for name in ("level", "log_scale", "slot", "signal_type", "rate_hz", "start_s", "length"):
+        assert torch.equal(getattr(a.channels, name), getattr(b.channels, name)), name
 
 
 def test_a_sample_in_a_hidden_time_is_hidden_on_every_channel() -> None:
@@ -239,3 +241,32 @@ def test_linear_interpolation_across_a_hidden_span_fails_on_qrs_like_signals() -
         errors.append(np.mean((guess - x[hidden]) ** 2))
         variances.append(np.var(x[hidden]))
     assert np.mean(errors) / np.mean(variances) > 0.8
+
+
+# --- the value transform --------------------------------------------------------------------
+
+
+def test_the_level_and_scale_come_from_the_visible_samples_only() -> None:
+    """m and s of a channel are those of its visible valid samples: x' = asinh((x - m) / s);
+    the level asinh(m) and log(s) are the model's inputs; a constant channel gets s = 1."""
+    rates = [100.0, 250.0]
+    values = [np.full(1000, 3.0, dtype=np.float32), _signals(4.0, 5, [250.0])[0] * 7 + 2]
+    batch = _packer(SPANS).pack([_example(values, rates, [0.0, 0.0])])[0]
+    x, c = batch.inputs, batch.inputs.channels
+    k = 1
+    o, n = int(c.offset[k]), int(c.length[k])
+    visible = ~x.hidden[o : o + n].numpy()
+    seen = values[k][visible].astype(np.float64)
+    assert float(c.level[k]) == pytest.approx(np.arcsinh(seen.mean()), rel=1e-5)
+    assert float(c.log_scale[k]) == pytest.approx(np.log(seen.std()), rel=1e-5)
+    expected = np.arcsinh((values[k] - seen.mean()) / seen.std()).astype(np.float32)
+    np.testing.assert_allclose(batch.targets.normalized[o : o + n].numpy(), expected, atol=1e-5)
+    assert float(c.log_scale[0]) == 0.0 and float(c.level[0]) == pytest.approx(np.arcsinh(3.0))
+    assert (batch.targets.normalized[: int(c.length[0])] == 0).all()
+
+
+def test_slots_are_distinct_within_an_example() -> None:
+    examples = [_example(_signals(2.0, s), RATES, [0.0] * len(RATES)) for s in range(20)]
+    for e in examples:
+        slots = _packer(SPANS, seed=3).pack([e])[0].inputs.channels.slot.tolist()
+        assert len(set(slots)) == len(RATES) and all(0 <= k < 8 for k in slots)

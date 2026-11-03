@@ -55,6 +55,7 @@ from biosignal_model.batch import (
 )
 from biosignal_model.channel_batch import ChannelBatch, ChannelPacker, ChannelTokens
 from biosignal_model.model import Encoder, ModelConfig, masked_loss
+from biosignal_model.v4 import Data2Vec, V4Spec
 
 log = logging.getLogger(__name__)
 
@@ -188,7 +189,9 @@ Tokens = Annotated[TokenSection | ChannelTokens, Field(discriminator="format")]
 class TrainConfig(_Section):
     data: DataSection
     tokens: Tokens
-    model: ModelSection
+    # ModelSection: v0-v3 (biosignal_model.model); V4Spec (format v4): the v4 model and its
+    # latent objective on the channel batch (biosignal_model.v4)
+    model: ModelSection | V4Spec
     optim: OptimSection
     run: RunSection
 
@@ -216,11 +219,9 @@ class TrainConfig(_Section):
                                    token_s=t.token_s)  # fmt: skip
 
     def model_settings(self) -> ModelConfig:
-        if not isinstance(self.tokens, TokenSection):
-            raise NotImplementedError(
-                "the v4 model on the channel batch (global model, MAE) is a later step "
-                "(docs/architecture.md section 11)"
-            )
+        """The v0-v3 model's config (the v4 model's is `model` itself)."""
+        if not isinstance(self.tokens, TokenSection) or not isinstance(self.model, ModelSection):
+            raise ValueError("model_settings is the v0-v3 model's; a v4 run's is its model")
         return ModelConfig(
             samples_per_token=self.tokens.samples_per_token,
             max_channels=self.tokens.max_channels,
@@ -275,6 +276,8 @@ class BatchStream(IterableDataset[Batch]):
         seed = ((self.config.run.seed * 1_000_003 + self.epoch) * 1_009 + part) * 101 + self.piece
         packer: Packer | ChannelPacker
         if isinstance(t, TokenSection):
+            if not isinstance(self.config.model, ModelSection):
+                raise ValueError("tokens.format tokens goes with a v0-v3 model section")
             packer = Packer(
                 datasets=self.datasets, max_tokens=t.max_tokens,
                 samples_per_token=t.samples_per_token, max_channels=t.max_channels,
@@ -393,7 +396,11 @@ class _Window:
         self.samples = self.examples = self.wait = 0.0
         self.start = time.perf_counter()
 
-    def add(self, batch: Batch, loss: float, per_token: torch.Tensor, waited: float) -> None:
+    def add(
+        self, batch: Batch | ChannelBatch, loss: float, per_token: StepOutput, waited: float
+    ) -> None:
+        if isinstance(batch, ChannelBatch) or not isinstance(per_token, torch.Tensor):
+            raise TypeError("the v0-v3 window takes token batches and per-token errors")
         real = batch.inputs.document >= 0
         self.steps += 1
         self.loss += loss
@@ -431,9 +438,13 @@ class _Window:
         } | self.totals.report("train")
 
 
-def _optimizer(model: Encoder, o: OptimSection, device: torch.device) -> torch.optim.AdamW:
-    decay = [p for p in model.parameters() if p.ndim >= 2]
-    no_decay = [p for p in model.parameters() if p.ndim < 2]
+def _optimizer(
+    model: Encoder | Data2Vec, o: OptimSection, device: torch.device
+) -> torch.optim.AdamW:
+    """AdamW over the trained weights (not the v4 teacher, an EMA); no decay on vectors."""
+    trained = [p for p in model.parameters() if p.requires_grad]
+    decay = [p for p in trained if p.ndim >= 2]
+    no_decay = [p for p in trained if p.ndim < 2]
     return torch.optim.AdamW(
         [{"params": decay, "weight_decay": o.weight_decay},
          {"params": no_decay, "weight_decay": 0.0}],
@@ -445,7 +456,7 @@ def _wandb_run(
     run_cfg: RunSection,
     described: dict[str, Any],
     wandb_id: str | None,
-    model: Encoder,
+    model: torch.nn.Module,
     index_manifest: bytes,
     train_stream: BatchStream,
     validation_stream: BatchStream,
@@ -471,7 +482,6 @@ def _wandb_run(
 def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[str, float]:
     """Run the pretraining; returns the last logged metrics."""
     run_cfg, o = config.run, config.optim
-    settings = config.model_settings()  # the v4 channel batch has no model to train yet
     rank, ranks, device = _process_group(run_cfg.device, config.tokens.rows)
     first = rank == 0
     torch.manual_seed(run_cfg.seed)
@@ -480,7 +490,10 @@ def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[
     if index_manifest is None:
         raise FileNotFoundError(f"index {config.data.index} has no manifest")
     train_stream, validation_stream, validation_batches = _data(config, factory, rank, ranks)
-    model = Encoder(settings).to(device)
+    model: Encoder | Data2Vec = (
+        Data2Vec(config.model) if isinstance(config.model, V4Spec)
+        else Encoder(config.model_settings())
+    ).to(device)  # fmt: skip
     optimizer = _optimizer(model, o, device)
     described = config.model_dump(mode="json") | {"code_commit": code_commit, "gpus": ranks}
     start, wandb_id = _resume(store, run_cfg, model, optimizer, described, write=first)
@@ -495,7 +508,7 @@ def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[
     autocast = torch.autocast(
         device.type, dtype=torch.bfloat16, enabled=run_cfg.precision == "bf16"
     )
-    window = _Window(train_stream.datasets, device)
+    window = _new_window(model, train_stream.datasets, device)
     last: dict[str, float] = {}
     # A resumed run numbers its epochs from its first step: the data in a new order.
     batches = _steps(
@@ -512,11 +525,9 @@ def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[
     for step in range(start + 1, o.steps + 1):
         before = time.perf_counter()
         batch = next(batches)
-        x = batch.inputs.to(device)
-        waited = time.perf_counter() - before
         rate = learning_rate(step - 1, o)
-        loss, per_token, grad_norm = _forward_backward(
-            trained, optimizer, x, autocast, rate, o, ranks
+        loss, extra, grad_norm, waited = _train_step(
+            trained, optimizer, batch, device, autocast, rate, o, ranks, before
         )
         # The same decision on every rank: the loss is the step's, the gradients are shared.
         if not (torch.isfinite(loss) and torch.isfinite(grad_norm)):
@@ -527,14 +538,16 @@ def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[
             continue
         bad_in_a_row = 0
         optimizer.step()
-        window.add(batch, loss.item(), per_token, waited)
+        if isinstance(model, Data2Vec):
+            model.update_teacher(step)
+        window.add(batch, loss.item(), extra, waited)
         if step % run_cfg.log_every == 0 or step == o.steps:
             last = window.report(ranks) | {"train/grad_norm": float(grad_norm),
                                       "train/learning_rate": rate} | _memory(device)  # fmt: skip
             run.log(last, step=step)
-            window = _Window(train_stream.datasets, device)
+            window = _new_window(model, train_stream.datasets, device)
         if first and (step % run_cfg.validate_every == 0 or step == o.steps):
-            validation = _validate(
+            validation = _validation(
                 model, validation_batches, validation_stream.datasets, device, autocast
             )
             run.log(validation, step=step)
@@ -588,7 +601,7 @@ def _process_group(device: str, rows: int) -> tuple[int, int, torch.device]:
     return dist.get_rank(), ranks, torch.device(device)
 
 
-def _parallel(model: Encoder, device: torch.device, ranks: int) -> torch.nn.Module:
+def _parallel(model: torch.nn.Module, device: torch.device, ranks: int) -> torch.nn.Module:
     """The model as trained: wrapped in DDP (gradients averaged over the ranks) when there
     are several ranks; the model itself otherwise."""
     if ranks == 1:
@@ -641,6 +654,153 @@ def _forward_backward(
         loss = step[0] / everywhere
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), o.grad_clip)
     return loss, per_token, grad_norm
+
+
+StepOutput = torch.Tensor | dict[str, torch.Tensor]  # per-token errors (v0-v3) or monitors (v4)
+
+
+def _train_step(
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    batch: Batch | ChannelBatch,
+    device: torch.device,
+    autocast: Any,
+    rate: float,
+    o: OptimSection,
+    ranks: int,
+    before: float,
+) -> tuple[torch.Tensor, StepOutput, torch.Tensor, float]:
+    """One step's loss, its per-token errors or monitors, the gradient norm, and the seconds
+    since `before` spent waiting for the batch (until it is on the device)."""
+    if isinstance(batch, ChannelBatch):
+        on_device = batch.to(device)
+        waited = time.perf_counter() - before
+        loss, stats, norm = _forward_backward_v4(model, optimizer, on_device, autocast, rate, o,
+                                                 ranks)  # fmt: skip
+        return loss, stats, norm, waited
+    x = batch.inputs.to(device)
+    waited = time.perf_counter() - before
+    loss, per_token, norm = _forward_backward(model, optimizer, x, autocast, rate, o, ranks)
+    return loss, per_token, norm, waited
+
+
+def _validation(
+    model: torch.nn.Module,
+    batches: list[Batch],
+    datasets: list[str],
+    device: torch.device,
+    autocast: Any,
+) -> dict[str, float]:
+    if isinstance(model, Data2Vec):
+        return _validate_v4(model, batches, device, autocast)
+    if not isinstance(model, Encoder):
+        raise TypeError(f"no validation for {type(model).__name__}")
+    return _validate(model, batches, datasets, device, autocast)
+
+
+def _forward_backward_v4(
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    batch: ChannelBatch,
+    autocast: Any,
+    rate: float,
+    o: OptimSection,
+    ranks: int,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor], torch.Tensor]:
+    """The latent objective's loss, its monitors and the gradient norm (before clipping) of
+    one step. With several ranks the loss is the step's mean over all ranks' hidden tokens."""
+    for group in optimizer.param_groups:
+        group["lr"] = rate
+    with autocast:
+        loss, stats = model(batch)
+    optimizer.zero_grad(set_to_none=True)
+    if ranks == 1:
+        loss.backward()
+    else:
+        count = stats["hidden_tokens"].to(loss.device)
+        step = torch.stack([loss.detach() * count, count])
+        dist.all_reduce(step)
+        everywhere = step[1].clamp(min=1)
+        (loss * count / everywhere * ranks).backward()  # DDP averages: x ranks is the sum
+        loss = step[0] / everywhere
+    trained = [p for p in model.parameters() if p.requires_grad]
+    grad_norm = torch.nn.utils.clip_grad_norm_(trained, o.grad_clip)
+    return loss, stats, grad_norm
+
+
+class _V4Window:
+    """What happened since the last log line, for the latent objective."""
+
+    def __init__(self) -> None:
+        self.steps = 0
+        self.loss = self.tokens = self.hidden = self.samples = self.examples = 0.0
+        self.wait = self.target_std = self.prediction_std = 0.0
+        self.start = time.perf_counter()
+
+    def add(self, batch: Batch | ChannelBatch, loss: float, stats: StepOutput,
+            waited: float) -> None:  # fmt: skip
+        if not isinstance(batch, ChannelBatch) or not isinstance(stats, dict):
+            raise TypeError("the v4 window takes channel batches and the objective's monitors")
+        self.steps += 1
+        self.loss += loss
+        self.tokens += batch.inputs.tokens.channel.numel()
+        self.hidden += float(stats["hidden_tokens"])
+        self.samples += batch.samples
+        self.examples += batch.examples
+        self.wait += waited
+        self.target_std += float(stats["target_std"])
+        self.prediction_std += float(stats["prediction_std"])
+
+    def report(self, ranks: int) -> dict[str, float]:
+        seconds = time.perf_counter() - self.start
+        sums = [self.tokens, self.hidden, self.samples, self.examples, self.wait / ranks]
+        if ranks > 1:
+            shared = torch.tensor(sums, dtype=torch.float64, device=f"cuda:{dist.get_rank()}"
+                                  if torch.cuda.is_available() else "cpu")  # fmt: skip
+            dist.all_reduce(shared)
+            sums = shared.tolist()
+        tokens, hidden, samples, examples, wait = sums
+        return {
+            "train/loss": self.loss / self.steps,
+            "train/target_std": self.target_std / self.steps,  # collapse: towards 0
+            "train/prediction_std": self.prediction_std / self.steps,
+            "speed/tokens_per_s": tokens / seconds,
+            "speed/examples_per_s": examples / seconds,
+            "speed/samples_per_s": samples / seconds,
+            "speed/data_wait_fraction": wait / seconds,
+            "batch/hidden_fraction": hidden / max(1.0, tokens),
+            "batch/examples": examples / self.steps,
+        }
+
+
+def _new_window(
+    model: torch.nn.Module, datasets: list[str], device: torch.device
+) -> _Window | _V4Window:
+    return _V4Window() if isinstance(model, Data2Vec) else _Window(datasets, device)
+
+
+@torch.no_grad()
+def _validate_v4(
+    model: Data2Vec, batches: list[Batch], device: torch.device, autocast: Any
+) -> dict[str, float]:
+    """The latent objective on the validation batches: the loss over all their hidden tokens
+    and the monitors."""
+    model.eval()
+    error = count = target_std = prediction_std = 0.0
+    for batch in batches:
+        if not isinstance(batch, ChannelBatch):
+            raise TypeError("the v4 model validates on channel batches")
+        with autocast:
+            loss, stats = model.loss(batch.to(device))
+        n = float(stats["hidden_tokens"])
+        error += float(loss) * n
+        count += n
+        target_std += float(stats["target_std"])
+        prediction_std += float(stats["prediction_std"])
+    model.train()
+    k = max(1, len(batches))
+    return {"validation/loss": error / max(1.0, count), "validation/target_std": target_std / k,
+            "validation/prediction_std": prediction_std / k}  # fmt: skip
 
 
 def _memory(device: torch.device) -> dict[str, float]:
@@ -747,7 +907,7 @@ def _checkpoint(
     store: Store,
     prefix: str,
     step: int,
-    model: Encoder,
+    model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     config: TrainConfig,
     wandb_id: str,
@@ -778,7 +938,7 @@ def _newest_checkpoint(store: Store, prefix: str) -> dict[str, Any] | None:
 def _resume(
     store: Store,
     run_cfg: RunSection,
-    model: Encoder,
+    model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     described: dict[str, Any],
     *,

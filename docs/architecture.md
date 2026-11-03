@@ -6,6 +6,13 @@ revision takes their consensus and the user's decisions. Each change names its r
 "Ladder" = the scaling ladder in section 9. The code is built in the order of section 11; what
 is built is marked **(built)**.
 
+**The first v4 runs (user decision 2026-11-03: "elegant and simple, without over-engineering and
+guessing").** Only the three problems measured in v0-v2 change: the tokens (the local stage at
+every sample, 40 ms global tokens), the mask leak (time spans over all channels, in whole grid
+cells) and the objective (latent targets, data2vec 2.0 type). Everything else stays as in v0-v2:
+the value transform per window (section 2), the signal type as the only descriptor (section 5),
+random channel slots. The other parts of this design wait until the ladder shows they are needed.
+
 User decisions (2026-10-29):
 
 - the model uses channel metadata when it exists and works without it;
@@ -31,6 +38,16 @@ User decisions (2026-10-29):
   test subjects held out (exists for PTB-XL; check for every new task).
 
 ## 2. Input values
+
+**Built for the first runs (as v0-v2):** per channel of an example, x' = asinh((x - m) / s) with m
+and s the mean and standard deviation of its **visible** valid samples (s = 1 if constant);
+asinh(m) and log(s) are inputs of the model (the channel embedding), so the amplitude is kept.
+The teacher reads the same transform of every valid sample. The corpus scale table below is not
+built: 2025-26 practice has no shared cross-modality scheme (PhysioOmni: one fixed constant;
+EEG models: fixed constants; ECG/PPG and time-series models: per-window normalization), so the
+simpler, already tested transform stays until the ladder shows a need.
+
+The earlier plan (not built):
 
 - Per channel: x' = (a / s) * asinh((x - c) / a). The scale s is **computed from the corpus per
   (type, unit)**; the knee is one **global knee factor** times s (a = k * s), the same for every
@@ -129,6 +146,10 @@ User decisions (2026-10-29):
 
 ## 5. Channel descriptors (metadata when present, nothing when absent)
 
+**First runs:** the signal type only (one embedding), with the random slot and the level and
+scale. The fields below need index columns and come after the first runs; remote-sensing models
+(DOFA, Panopticon) condition the input embedding on such metadata, a candidate then.
+
 A descriptor is a **set of optional (field, value) pairs**; each present field adds one embedding,
 an absent field adds nothing. No "unknown" special case is needed.
 
@@ -164,8 +185,16 @@ an absent field adds nothing. No "unknown" special case is needed.
 
 ## 7. Pretraining objective (fixed while the architecture is selected)
 
-MAE type, asymmetric: the global model sees only visible tokens; a narrow decoder (1/4 width,
-4 blocks) gets the mask tokens.
+**Built (biosignal_model.v4):** data2vec 2.0 type. The student sees only the visible tokens; an
+EMA teacher reads the unmasked input; the target of a hidden token is the mean of the teacher's
+top-K block outputs, each layer-normalized; a narrow decoder predicts it (MSE). Masks: **time
+spans over all channels only**, hidden in whole grid cells. Single-token and random channel-group
+masks leak again (ECG: II = I + III, so a hidden lead follows from the visible ones), so they stay
+off until channel groups come from descriptors (which channels share electrodes). Tests:
+tests/test_masking.py, tests/test_v4_model.py.
+
+The earlier plan: MAE type, asymmetric: the global model sees only visible tokens; a narrow
+decoder (1/4 width, 4 blocks) gets the mask tokens.
 
 - Masks, a set total ratio of the global tokens (start: 75 %), three kinds, their shares a setting
   (start: 50 / 30 / 20 %) **(built, on samples)**:

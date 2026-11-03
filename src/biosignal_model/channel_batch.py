@@ -32,12 +32,20 @@ loss only.
 Packing: examples are put whole, in order, into rows of at most `max_tokens` global tokens and
 `max_samples` samples (the two limits of the loader's spans); `rows` rows make a batch.
 
-The values are the loader's (physical values, NaN where invalid -> 0 and not observed); the
-value transform of section 2 is a later step.
+Values (as v0-v2): per channel of an example, x' = asinh((x - m) / s) with m and s the mean
+and standard deviation of the channel's VISIBLE valid samples (s = 1 if they are constant), so
+nothing about a hidden sample enters the input through them; asinh(m) and log(s) go to the model
+as the channel's level and scale, so the amplitude is not lost. NaN (invalid) -> 0 and not
+observed. The teacher of the latent objective reads the same transform of every valid sample
+(`ChannelBatch.teacher_inputs`: nothing hidden).
+
+Each channel of an example gets a random slot in [0, max_channels), distinct within the
+example (as v0-v2): it tells the channels of one example apart, and says nothing else.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import random
 from collections.abc import Iterable, Iterator
@@ -93,6 +101,9 @@ class ChannelTable:
     offset: torch.Tensor  # int64: the first sample in the flat buffer
     length: torch.Tensor  # int64: samples
     signal_type: torch.Tensor  # int64: index in SIGNAL_TYPES (a descriptor field)
+    slot: torch.Tensor  # int64: a random slot, distinct within the example
+    level: torch.Tensor  # float32: asinh of the mean of the visible valid samples
+    log_scale: torch.Tensor  # float32: log of their standard deviation (0 if constant)
     # Optional descriptor fields (section 5): name -> values [C, ...] and present [C] (bool).
     # Empty until the index has them; an absent field adds nothing.
     descriptors: dict[str, torch.Tensor] = field(default_factory=dict)
@@ -140,10 +151,11 @@ class ChannelInputs:
 
 @dataclass
 class ChannelTargets:
-    """For the loss only; never an input of the model."""
+    """For the loss and the teacher only; never an input of the student."""
 
     values: torch.Tensor  # float32 [S]: the samples before masking; 0 where not observed
     observed: torch.Tensor  # bool [S]: observed in the source
+    normalized: torch.Tensor  # float32 [S]: the transformed values of every valid sample
 
 
 @dataclass
@@ -160,6 +172,27 @@ class ChannelBatch:
     analysis: ChannelAnalysis
     examples: int
     samples: int  # observed samples in the batch
+
+    def to(self, device: torch.device) -> ChannelBatch:
+        t = self.targets
+        targets = ChannelTargets(
+            values=t.values.to(device, non_blocking=True),
+            observed=t.observed.to(device, non_blocking=True),
+            normalized=t.normalized.to(device, non_blocking=True),
+        )
+        analysis = ChannelAnalysis(self.analysis.dataset.to(device, non_blocking=True))
+        return ChannelBatch(self.inputs.to(device), targets, analysis, self.examples, self.samples)
+
+    def teacher_inputs(self) -> ChannelInputs:
+        """The input of the latent objective's teacher: every valid sample, nothing hidden
+        (the tables, levels and scales are the student's)."""
+        x = self.inputs
+        return ChannelInputs(
+            values=self.targets.normalized, observed=self.targets.observed,
+            hidden=torch.zeros_like(x.hidden), channels=x.channels,
+            tokens=dataclasses.replace(x.tokens, hidden=torch.zeros_like(x.tokens.hidden)),
+            rows=x.rows, max_tokens=x.max_tokens,
+        )  # fmt: skip
 
 
 def _moved(table: _Table, device: torch.device) -> _Table:
@@ -187,6 +220,19 @@ def apply_sample_mask(
     return torch.where(observed, values, torch.zeros_like(values)), observed
 
 
+def normalize(values: np.ndarray, visible: np.ndarray) -> tuple[np.ndarray, float, float]:
+    """asinh((x - m) / s) of a channel's samples (0 where not finite), with m and s the mean
+    and standard deviation of the `visible` finite samples (s = 1 when they are constant or
+    there are none); and the channel's level asinh(m) and log(s)."""
+    finite = np.isfinite(values)
+    seen = values[visible & finite].astype(np.float64)
+    mean = float(seen.mean()) if seen.size else 0.0
+    std = float(seen.std()) if seen.size else 0.0
+    scale = std if std > 0 else 1.0
+    z = np.where(finite, np.arcsinh((values - mean) / scale), 0.0).astype(np.float32)
+    return z, math.asinh(mean), math.log(scale)
+
+
 def token_cells(start_s: float, rate: float, length: int, token_s: float) -> np.ndarray:
     """The grid cell of each sample of a channel: floor(time / token_s), the time from the
     example's start in float64 (rounded to 1e-9 of a cell, so a sample on a boundary is in
@@ -207,6 +253,7 @@ class _Example:
     cells: list[np.ndarray]  # per channel: the cell of each token (sorted, unique)
     sample_token: list[np.ndarray]  # per channel: the token (index in its cells) of each sample
     hidden: list[np.ndarray]  # per channel: hidden flag of each token
+    slots: list[int]  # per channel: its random slot
 
     @property
     def tokens(self) -> int:
@@ -267,13 +314,14 @@ class ChannelPacker:
         if self.mask is not None:
             rng = np.random.default_rng(self._rng.getrandbits(64))
             hidden = hide(cells, self.token_s, self.mask, rng, groups=None)
+        slots = self._rng.sample(range(self.max_channels), len(example.signals))
         return _Example(
             values=[s.values for s in example.signals],
             rates=[s.sampling_rate for s in example.signals],
             starts=[s.start_s for s in example.signals],
             types=[SIGNAL_TYPES.index(c.signal_type) for c in example.origin.channels],
             dataset=self._dataset_index[example.origin.dataset_id],
-            cells=cells, sample_token=sample_token, hidden=hidden,
+            cells=cells, sample_token=sample_token, hidden=hidden, slots=slots,
         )  # fmt: skip
 
     def _fits(self, e: _Example) -> None:
@@ -322,9 +370,10 @@ class ChannelPacker:
     def _batch(self, rows: list[list[_Example]], count: int) -> ChannelBatch:
         ch: dict[str, list[float | int]] = {
             k: [] for k in ("row", "document", "rate", "start", "offset", "length", "type",
-                            "dataset")
+                            "dataset", "slot", "level", "log_scale")
         }  # fmt: skip
         values: list[np.ndarray] = []
+        normalized: list[np.ndarray] = []
         tok: dict[str, list[np.ndarray]] = {
             k: [] for k in ("channel", "cell", "hidden", "row", "position")
         }
@@ -334,10 +383,14 @@ class ChannelPacker:
             position = 0
             for d, e in enumerate(row):
                 for k, v in enumerate(e.values):
+                    visible_hidden = e.hidden[k][e.sample_token[k]]
+                    z, level, log_scale = normalize(v, ~visible_hidden)
+                    normalized.append(z)
                     for name, value in (("row", r), ("document", d), ("rate", e.rates[k]),
                                         ("start", e.starts[k]), ("offset", offset),
                                         ("length", v.size), ("type", e.types[k]),
-                                        ("dataset", e.dataset)):  # fmt: skip
+                                        ("dataset", e.dataset), ("slot", e.slots[k]),
+                                        ("level", level), ("log_scale", log_scale)):  # fmt: skip
                         ch[name].append(value)
                     n = e.cells[k].size
                     tok["channel"].append(np.full(n, channel, dtype=np.int64))
@@ -346,7 +399,7 @@ class ChannelPacker:
                     tok["row"].append(np.full(n, r, dtype=np.int64))
                     tok["position"].append(position + np.arange(n, dtype=np.int64))
                     sample_token.append(token + e.sample_token[k])
-                    sample_hidden.append(e.hidden[k][e.sample_token[k]])
+                    sample_hidden.append(visible_hidden)
                     values.append(v)
                     offset += v.size
                     channel += 1
@@ -355,8 +408,9 @@ class ChannelPacker:
         raw = np.concatenate(values).astype(np.float32) if values else np.zeros(0, np.float32)
         valid = torch.from_numpy(np.isfinite(raw))
         raw_t = torch.from_numpy(np.where(np.isfinite(raw), raw, 0.0).astype(np.float32))
+        normalized_t = torch.from_numpy(_cat(normalized, np.float32))
         hidden = torch.from_numpy(_cat(sample_hidden, bool))
-        inputs_values, observed = apply_sample_mask(raw_t, valid, hidden)
+        inputs_values, observed = apply_sample_mask(normalized_t, valid, hidden)
         cell = _cat(tok["cell"], np.int64)
         t0 = cell.astype(np.float64) * self.token_s
 
@@ -368,6 +422,8 @@ class ChannelPacker:
             rate_hz=torch.tensor(ch["rate"], dtype=torch.float64),
             start_s=torch.tensor(ch["start"], dtype=torch.float64),
             offset=i64("offset"), length=i64("length"), signal_type=i64("type"),
+            slot=i64("slot"), level=torch.tensor(ch["level"], dtype=torch.float32),
+            log_scale=torch.tensor(ch["log_scale"], dtype=torch.float32),
         )  # fmt: skip
         tokens = TokenTable(
             channel=torch.from_numpy(_cat(tok["channel"], np.int64)),
@@ -383,7 +439,8 @@ class ChannelPacker:
             tokens=tokens, rows=len(rows), max_tokens=self.max_tokens,
         )  # fmt: skip
         return ChannelBatch(
-            inputs=inputs, targets=ChannelTargets(values=raw_t, observed=valid),
+            inputs=inputs,
+            targets=ChannelTargets(values=raw_t, observed=valid, normalized=normalized_t),
             analysis=ChannelAnalysis(dataset=i64("dataset")), examples=count,
             samples=int(valid.sum()),
         )  # fmt: skip
@@ -409,10 +466,12 @@ def concat(batches: list[ChannelBatch]) -> ChannelBatch:
             add(name, getattr(x, name))
         add("target_values", b.targets.values)
         add("target_observed", b.targets.observed)
+        add("target_normalized", b.targets.normalized)
         add("dataset", b.analysis.dataset)
         add("c.row", c.row + rows)
         add("c.offset", c.offset + offset)
-        for name in ("document", "rate_hz", "start_s", "length", "signal_type"):
+        for name in ("document", "rate_hz", "start_s", "length", "signal_type", "slot", "level",
+                     "log_scale"):  # fmt: skip
             add(f"c.{name}", getattr(c, name))
         add("t.channel", t.channel + channels)
         add("t.row", t.row + rows)
@@ -434,7 +493,9 @@ def concat(batches: list[ChannelBatch]) -> ChannelBatch:
     )  # fmt: skip
     return ChannelBatch(
         inputs=inputs,
-        targets=ChannelTargets(joined["target_values"], joined["target_observed"]),
+        targets=ChannelTargets(
+            joined["target_values"], joined["target_observed"], joined["target_normalized"]
+        ),
         analysis=ChannelAnalysis(joined["dataset"]),
         examples=sum(b.examples for b in batches), samples=sum(b.samples for b in batches),
     )  # fmt: skip

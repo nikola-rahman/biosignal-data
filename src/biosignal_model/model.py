@@ -106,7 +106,11 @@ class Encoder(nn.Module):
         self.context = nn.Linear(3, d)
         self.slot = nn.Embedding(config.max_channels, d)
         self.hidden = nn.Parameter(torch.zeros(d))
-        self.blocks = nn.ModuleList(Block(config) for _ in range(config.layers))
+        self.blocks = nn.ModuleList(
+            Block(config.width, config.heads, config.feed_forward, config.dropout,
+                  config.drop_path)
+            for _ in range(config.layers)
+        )  # fmt: skip
         self.norm = nn.RMSNorm(d)
         if isinstance(t, SamplesTokenizer):
             self.head = nn.Linear(d, p)
@@ -368,17 +372,21 @@ class AttentionPool(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, config: ModelConfig) -> None:
+    """A pre-norm transformer block: attention with rotary angles, a SwiGLU feed-forward."""
+
+    def __init__(
+        self, width: int, heads: int, feed_forward: int, dropout: float, drop_path: float
+    ) -> None:
         super().__init__()
-        d = config.width
-        self.heads = config.heads
-        self.dropout, self.drop_path = config.dropout, config.drop_path
+        d = width
+        self.heads = heads
+        self.dropout, self.drop_path = dropout, drop_path
         self.norm1 = nn.RMSNorm(d)
         self.qkv = nn.Linear(d, 3 * d, bias=False)
         self.out = nn.Linear(d, d, bias=False)
         self.norm2 = nn.RMSNorm(d)
-        self.up = nn.Linear(d, 2 * config.feed_forward, bias=False)
-        self.down = nn.Linear(config.feed_forward, d, bias=False)
+        self.up = nn.Linear(d, 2 * feed_forward, bias=False)
+        self.down = nn.Linear(feed_forward, d, bias=False)
 
     def forward(
         self,

@@ -1,7 +1,7 @@
 """Command-line interface: `biosignal-model --help`.
 
     train      masked-token pretraining, with every setting from one YAML file
-    scales     the scale table of the value transform, from an index's training split
+    tokens     the tokens of one pass over a run's training split (its mixture budget)
     benchmark  score a checkpoint on a benchmark (apnea), with its official protocol
 
 S3 settings come from biosignal-data.yaml (`s3` section); keys from the
@@ -55,23 +55,23 @@ def train_(
     )
 
 
-@app.command("scales")
-def scales(
-    settings_file: Annotated[Path, typer.Argument(help="The table's settings (YAML).")],
-    out: Annotated[Path, typer.Argument(help="Where the table goes (YAML, in the repo).")],
+@app.command("tokens")
+def tokens(
+    config: Annotated[Path, typer.Argument(help="The run's settings (YAML).")],
     settings: Annotated[
         Path | None, typer.Option(help="biosignal-data.yaml, for the S3 settings.")
     ] = None,
 ) -> None:
-    """The scale table of the value transform, from windows of an index's training split
-    (docs/architecture.md section 2; biosignal_model.scales)."""
-    import yaml  # noqa: PLC0415
+    """The tokens of one pass over the run's training split, per dataset and in total, in the
+    unit of its batch format and with its subject cap: the `mixture.budget_tokens` of one
+    pass (biosignal_data.training.mixture.dataset_tokens)."""
+    from biosignal_data.training.loader import Selection  # noqa: PLC0415
+    from biosignal_data.training.mixture import dataset_tokens  # noqa: PLC0415
 
-    from biosignal_model.scales import ScaleSettings, build, write  # noqa: PLC0415
-
-    chosen = ScaleSettings.model_validate(yaml.safe_load(settings_file.read_text()))
+    run = TrainConfig.load(config)
+    d = run.data
     s3 = None
-    if chosen.store.startswith("s3://"):
+    if d.store.startswith("s3://"):
         try:
             loaded, path = load_config(settings)
             section = need(loaded.s3, "s3", path)
@@ -79,10 +79,15 @@ def scales(
             typer.echo(str(exc), err=True)
             raise typer.Exit(2) from exc
         s3 = (section.endpoint, section.region, section.addressing)
-    table = build(chosen, StoreFactory(chosen.store, s3), _commit())
-    write(table, out)
-    for key, scale in table.scales.items():
-        typer.echo(f"{key}: {scale.scale:.4g} ({scale.windows} windows, {scale.flat_windows} flat)")
+    selection = Selection.load(
+        StoreFactory(d.store, s3)(), d.index, split=d.train_split,
+        signal_types=set(d.signal_types) if d.signal_types is not None else None,
+        datasets=set(d.datasets) if d.datasets is not None else None,
+    )  # fmt: skip
+    counts = dataset_tokens(selection, run.span_limit(), d.subject_hours_per_epoch)
+    for dataset, n in sorted(counts.items(), key=lambda kv: -kv[1]):
+        typer.echo(f"{dataset}: {n:.4g}")
+    typer.echo(f"total: {sum(counts.values()):.0f}")
 
 
 @app.command("benchmark")

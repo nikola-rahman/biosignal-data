@@ -25,6 +25,7 @@ from biosignal_model.batch import (  # noqa: E402
 from biosignal_model.benchmarks import BenchmarkRun, apnea, dalia, isruc, ptbxl  # noqa: E402
 from biosignal_model.model import Encoder, LayerGroups, ModelConfig  # noqa: E402
 from biosignal_model.train import TrainConfig  # noqa: E402
+from biosignal_model.v4 import Data2Vec, V4Spec  # noqa: E402
 
 D1 = DurationTokenizer(
     kind="duration", token_s=0.08, hop_s=0.04, stem_windows=4, stem_channels=8,
@@ -147,6 +148,10 @@ def test_every_run_file_is_valid() -> None:
             dalia.DaliaSettings.model_validate(BenchmarkRun.load(f).settings)
             kinds["dalia"] += 1
         else:
-            TrainConfig.load(f).model_settings()
+            run = TrainConfig.load(f)
+            if isinstance(run.model, V4Spec):
+                Data2Vec(run.model)  # a v4 run: its model can be made
+            else:
+                run.model_settings()
             kinds["train"] += 1
     assert all(kinds.values()), kinds

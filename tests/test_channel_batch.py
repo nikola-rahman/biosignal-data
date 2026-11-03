@@ -95,8 +95,13 @@ def test_the_mask_hides_its_ratio_on_the_samples_and_keeps_the_values_for_the_lo
     assert torch.equal(x.hidden, t.hidden[t.sample_token])  # the samples of hidden tokens
     assert (x.values[x.hidden] == 0).all() and not x.observed[x.hidden].any()
     valid = batch.targets.observed
-    assert torch.equal(x.values[~x.hidden], batch.targets.values[~x.hidden])
+    assert torch.equal(x.values[~x.hidden], batch.targets.normalized[~x.hidden])
     assert (batch.targets.values[x.hidden & valid] != 0).all()  # kept apart for the loss
+    assert (batch.targets.normalized[x.hidden & valid] != 0).all()  # and for the teacher
+    teacher = batch.teacher_inputs()
+    assert not teacher.hidden.any() and not teacher.tokens.hidden.any()
+    assert torch.equal(teacher.values, batch.targets.normalized)
+    assert torch.equal(teacher.observed, valid)
     assert c.descriptors == {} and c.present == {}  # the placeholder: no fields yet
 
 
@@ -185,7 +190,7 @@ def test_the_train_config_takes_the_channel_format() -> None:
     }  # fmt: skip
     parsed = TrainConfig.model_validate(config)
     assert parsed.span_limit() == SampleAndTokenLimit(400_000, 8192, 0.04)
-    with pytest.raises(NotImplementedError, match="later step"):
+    with pytest.raises(ValueError, match="v0-v3"):  # a v4 run's model is its model section
         parsed.model_settings()
     bad = config | {"tokens": config["tokens"] | {"mask": MASK.model_dump() | {"extra": 1}}}
     with pytest.raises(ValueError, match="extra"):
