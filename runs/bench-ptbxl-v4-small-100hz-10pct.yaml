@@ -2,7 +2,7 @@
 # the seed, whole patients, the same for both methods): pretraining should help most when
 # labels are few, so a gain shows here first.
 store: s3://biosignal-data
-checkpoint: models/v4-small/step-00010000.pt
+checkpoint: models/v4-small-b/step-00010000.pt
 device: cuda
 settings:
   rate: 100

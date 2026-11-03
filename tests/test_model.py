@@ -35,6 +35,7 @@ from biosignal_model.train import (
     _forward_backward,
     _stream,
     _validation_batches,
+    resume_mismatch,
     train,
 )
 from tests.test_training_loader import _index
@@ -293,6 +294,24 @@ def test_a_run_resumes_from_its_newest_checkpoint(store: LocalStore, tmp_path: P
     train(config, StoreFactory(str(store.root), None), "abc")  # steps 6 to 10 only
     resumed = torch.load(store._path("models/t/step-00000010.pt"), weights_only=True)
     assert resumed["step"] == 10 and "wandb_id" in resumed
+
+
+def test_a_resume_refuses_a_checkpoint_of_other_settings(store: LocalStore, tmp_path: Path) -> None:
+    """A run whose model, batch or optimizer settings differ from the checkpoint's does not
+    continue from it (v4-small's second version resumed the collapsed first one); only where it
+    runs and how long may change."""
+    config = _short_config(store, tmp_path, resume="newest")
+    short = config.model_copy(update={"optim": config.optim.model_copy(update={"steps": 5})})
+    train(short, StoreFactory(str(store.root), None), "abc")
+    other = config.model_copy(
+        update={"optim": config.optim.model_copy(update={"learning_rate": 3e-4})}
+    )
+    with pytest.raises(ValueError, match=r"optim\.learning_rate"):
+        train(other, StoreFactory(str(store.root), None), "abc")
+    moved = config.model_copy(update={"data": config.data.model_copy(update={"workers": 0})})
+    assert resume_mismatch(config, moved) == []
+    wider = config.model_copy(update={"model": config.model.model_copy(update={"width": 64})})
+    assert resume_mismatch(config, wider) == ["model.width"]
 
 
 def test_selection_without_recordings_is_refused(store: LocalStore) -> None:

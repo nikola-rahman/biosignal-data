@@ -500,7 +500,7 @@ def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[
     ).to(device)  # fmt: skip
     optimizer = _optimizer(model, o, device)
     described = config.model_dump(mode="json") | {"code_commit": code_commit, "gpus": ranks}
-    start, wandb_id = _resume(store, run_cfg, model, optimizer, described, write=first)
+    start, wandb_id = _resume(store, config, model, optimizer, described, write=first)
     trained = _parallel(model, device, ranks)
     run = (
         _wandb_run(
@@ -968,9 +968,31 @@ def _newest_checkpoint(store: Store, prefix: str) -> dict[str, Any] | None:
     return found
 
 
+# What may differ between a run and the checkpoint it resumes from: where and how it runs, and
+# its length (a WSD run continued with more steps); not what decides what the model learns.
+RESUMABLE_CHANGES = {
+    "data": {"store", "cache_directory", "cache_bytes", "shuffle_buffer", "reads_in_flight",
+             "workers", "pieces_per_epoch"},
+    "optim": {"steps", "decay_steps", "decay_shape", "schedule"},
+}  # fmt: skip
+
+
+def resume_mismatch(stored: TrainConfig, current: TrainConfig) -> list[str]:
+    """The settings in which `current` differs from the checkpoint's `stored` config, beyond
+    RESUMABLE_CHANGES and the run section (names, logging, devices)."""
+    out = []
+    for section in ("data", "tokens", "model", "optim"):
+        a = getattr(stored, section).model_dump(mode="json")
+        b = getattr(current, section).model_dump(mode="json")
+        allowed = RESUMABLE_CHANGES.get(section, set())
+        out += [f"{section}.{k}" for k in sorted(set(a) | set(b))
+                if k not in allowed and a.get(k) != b.get(k)]  # fmt: skip
+    return out
+
+
 def _resume(
     store: Store,
-    run_cfg: RunSection,
+    config: TrainConfig,
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     described: dict[str, Any],
@@ -979,7 +1001,10 @@ def _resume(
 ) -> tuple[int, str | None]:
     """The step to continue after and the W&B run id: from the newest checkpoint when the
     run resumes and there is one; else (0, None), and the run's config is written (by the
-    first process: `write`)."""
+    first process: `write`). A checkpoint made with other data, batch, model or optimizer
+    settings is refused (a run with new settings needs its own checkpoint_prefix): v4-small's
+    second version resumed the collapsed first one's step 2000."""
+    run_cfg = config.run
     resumed = (
         _newest_checkpoint(store, run_cfg.checkpoint_prefix) if run_cfg.resume == "newest" else None
     )
@@ -990,6 +1015,12 @@ def _resume(
                 json.dumps(described, indent=2).encode(),
             )
         return 0, None
+    changed = resume_mismatch(TrainConfig.from_checkpoint(resumed["config"]), config)
+    if changed:
+        raise ValueError(
+            f"{run_cfg.checkpoint_prefix} holds a checkpoint of other settings "
+            f"({', '.join(changed)}); give the run its own checkpoint_prefix, or resume: never"
+        )
     model.load_state_dict(resumed["model"])
     optimizer.load_state_dict(resumed["optimizer"])
     log.warning("resuming from step %d of W&B run %s", resumed["step"], resumed["wandb_id"])

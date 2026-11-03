@@ -121,7 +121,7 @@ optim:
   decay_shape: 1-sqrt
 
 run:
-  name: v4-small
+  name: v4-small-b            # the second version: its own checkpoints
   seed: 0
   device: cuda
   precision: bf16
@@ -129,7 +129,7 @@ run:
   validate_every: 500
   validation_batches: 20
   checkpoint_every: 1000
-  checkpoint_prefix: models/v4-small
+  checkpoint_prefix: models/v4-small-b
   wandb_project: biosignal-fm
   wandb_entity: schnyox-s
   wandb_mode: online

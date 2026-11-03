@@ -6,7 +6,7 @@
 # help this model (v2: no). At most 25 epochs after the best fold-9 epoch (as the v1/v2 task
 # configs), not always 100.
 store: s3://biosignal-data
-checkpoint: models/v4-small/step-00010000.pt
+checkpoint: models/v4-small-b/step-00010000.pt
 device: cuda
 settings:
   rate: 100
