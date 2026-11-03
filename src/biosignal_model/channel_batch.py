@@ -464,13 +464,16 @@ def hide(
     groups: list[object | None] | None,
 ) -> list[np.ndarray]:
     """Hidden flags of the tokens of one example (`cells`: per channel, the grid cell of each
-    token). round(ratio x tokens) tokens are hidden (at least one stays visible), in the
+    token). About round(ratio x tokens) tokens are hidden (at least one stays visible), in the
     kinds' shares: time spans over all channels, channel groups over a time window, single
     tokens. A span or window of length L starts uniformly in [-L, end), so every time is
-    covered alike; a token is in it when its centre is; the window that would pass a kind's
-    share is cut at it (its tokens in time order). `groups`: per channel a group label (a
-    descriptor field's value) or None; channels without a label, or `groups` None, are
-    grouped at random (a random subset of 1..C-1 channels; the only channel if C = 1)."""
+    covered alike; a token is in it when its centre is. A span or window is hidden in whole
+    grid cells: at a cell, all its channels (a time span: every channel of the example; a
+    group window: every channel of the group) or none, so no hidden time is visible on another
+    channel of the span. The window that reaches a kind's share ends at the cell that reaches
+    it (a kind can pass its share by the channels of one cell). `groups`: per channel a group
+    label (a descriptor field's value) or None; channels without a label, or `groups` None,
+    are grouped at random (a random subset of 1..C-1 channels; the only channel if C = 1)."""
     total = sum(c.size for c in cells)
     hidden = [np.zeros(c.size, dtype=bool) for c in cells]
     if total < 2 or mask.ratio == 0.0:
@@ -497,9 +500,14 @@ def hide(
             found = np.flatnonzero(inside)
             if found.size == 0:
                 continue
-            found = found[np.argsort(centre[found], kind="stable")][: budget - done]
-            flat[found] = True
-            done += found.size
+            found = found[np.argsort(centre[found], kind="stable")]
+            # whole cells in time order, until the share is reached; one token stays visible
+            cuts = np.flatnonzero(np.diff(centre[found])) + 1
+            for part in np.split(found, cuts):
+                if done >= budget or int(flat.sum()) + part.size > total - 1:
+                    return
+                flat[part] = True
+                done += part.size
 
     windows(budgets[0], mask.time_span_s, None)
 
@@ -515,9 +523,9 @@ def hide(
         return rng.choice(np.array(free), size, replace=False)
 
     windows(budgets[1], mask.group_span_s, group)
-    left = goal - int(flat.sum())
-    if left > 0:
-        flat[rng.choice(np.flatnonzero(~flat), left, replace=False)] = True
+    singles = min(goal - budgets[0] - budgets[1], total - 1 - int(flat.sum()))
+    if singles > 0 and mask.single_tokens > 0:
+        flat[rng.choice(np.flatnonzero(~flat), singles, replace=False)] = True
     at = 0
     for k, c in enumerate(cells):
         hidden[k] = flat[at : at + c.size].copy()

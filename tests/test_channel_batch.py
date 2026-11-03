@@ -87,10 +87,11 @@ def test_the_mask_hides_its_ratio_on_the_samples_and_keeps_the_values_for_the_lo
     batch, _ = packer.pack(examples)
     x, t = batch.inputs, batch.inputs.tokens
     c = x.channels
-    for r in range(4):  # one example a row: the ratio of each example
+    for r in range(4):  # one example a row: the ratio of each example, to whole cells
         mine = t.row == r
         n = int(mine.sum())
-        assert int(t.hidden[mine].sum()) == min(n - 1, round(0.75 * n))
+        goal = min(n - 1, round(0.75 * n))
+        assert goal <= int(t.hidden[mine].sum()) <= goal + 2 * 2  # two kinds by cells of 3
     assert torch.equal(x.hidden, t.hidden[t.sample_token])  # the samples of hidden tokens
     assert (x.values[x.hidden] == 0).all() and not x.observed[x.hidden].any()
     valid = batch.targets.observed
@@ -111,13 +112,12 @@ def test_time_spans_hide_all_channels_together_and_groups_hide_some() -> None:
                                      "single_tokens": 0.0})  # fmt: skip
     for seed in range(5):
         hidden = np.stack(_hidden_cells(spans, 4, seed))  # [channels, cells]
-        assert hidden.sum() == round(0.75 * 1000)
-        partly = (hidden.any(0) & ~hidden.all(0)).sum()
-        assert partly <= 1  # only the last span is cut, at one time
+        assert 750 <= hidden.sum() <= 753  # whole cells of 4 tokens
+        assert not (hidden.any(0) & ~hidden.all(0)).any()  # no time partly hidden
         runs = np.flatnonzero(np.diff(hidden[0].astype(int)) == 1).size
         assert runs >= 1
         grouped = np.stack(_hidden_cells(groups, 4, seed))
-        assert grouped.sum() == round(0.75 * 1000)
+        assert 750 <= grouped.sum() <= 753
         assert (grouped.any(0) & ~grouped.all(0)).sum() > 10  # subsets of the channels
 
 
