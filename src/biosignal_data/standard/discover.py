@@ -7,7 +7,9 @@ any `<record>.<extension>` that is not a known kind of file is tried as an annot
 and reported if it does not read as one.
 
 EDF and BDF: every `.edf` / `.bdf` file is a recording, unless `RECORDS` lists the records
-(then only those listed). VitalDB: every `.vital` file is a recording.
+(then only those listed); a dataset rule (standard.yaml) can name other suffixes of EDF files
+(ISRUC-Sleep: `.rec`). VitalDB: every `.vital` file is a recording. Pickles: only where a
+dataset rule names their reader and pattern (PPG-DaLiA), each matching file is a recording.
 
 A `RECORDS` line that names no files but is exactly one pair of existing records written
 without a line break between them is read as those two, and reported as a problem.
@@ -43,7 +45,7 @@ NOT_ANNOTATIONS = frozenset(
         "h5", "hdf5", "nwb", "xls", "xlsx", "doc", "docx", "ppt", "pptx", "wav", "mp3", "mp4",
         "avi", "m", "py", "c", "h", "sh", "r", "ipynb", "log", "ini", "cfg", "yaml", "yml",
         "sha256", "md5", "sig", "asc", "dcm", "fif", "set", "fdt", "vhdr", "vmrk", "eeg",
-        "cnt", "gdf", "xdf", "xws", "vital",
+        "cnt", "gdf", "xdf", "xws", "vital", "pkl",
     }
 )  # fmt: skip
 _EXTENSION = re.compile(r"^[A-Za-z0-9_]{1,16}$")
@@ -54,7 +56,7 @@ class Unit:
     """One recording to convert."""
 
     id: str  # the record name or file path without its extension
-    format: Literal["wfdb", "edf", "vital"]
+    format: Literal["wfdb", "edf", "vital", "ppg-dalia"]
     path: str  # WFDB: the record name (header without .hea); EDF: the file
     annotations: tuple[str, ...]  # WFDB annotation files of the record
     listed_annotators: bool  # annotators from ANNOTATORS: a file that does not read fails
@@ -80,12 +82,17 @@ def discover(
     read_text: Callable[[str], str],
     read_texts: Callable[[list[str]], dict[str, str]],
     edf_annotation_files: EdfAnnotationFiles | None = None,
+    edf_suffixes: tuple[str, ...] = (),
+    pickles: tuple[Literal["ppg-dalia"], str] | None = None,
 ) -> Discovery:
     """`paths`: every file of the raw version. `read_text`: the text of one of them;
     `read_texts`: the texts of many (the WFDB headers), read at the same time.
     `edf_annotation_files`: the dataset's rule (standard.yaml) for EDF+ files that hold
-    only the annotations of an EDF recording."""
+    only the annotations of an EDF recording. `edf_suffixes`: other suffixes of the
+    dataset's EDF files (its rule). `pickles`: (reader, regex on the path) of the dataset's
+    pickled recordings (its rule)."""
     paths = set(paths)
+    edf = EDF_SUFFIXES + tuple(suffix.lower() for suffix in edf_suffixes)
     lists = sorted(p for p in paths if posixpath.basename(p) in LISTS)
     # All at the same time: icentia11k 1.0 has a RECORDS list in each of 11,000 folders.
     texts = read_texts(lists) if lists else {}
@@ -106,7 +113,7 @@ def discover(
                 entry = line.strip()
                 if entry and not entry.startswith("#") and not entry.endswith("/"):
                     name = posixpath.normpath(posixpath.join(folder, entry))
-                    joined = None if _has_files(name, paths) else _joined(entry, folder, paths)
+                    joined = None if _has_files(name, paths, edf) else _joined(entry, folder, paths)
                     if joined:
                         problems.append(
                             f"{name}: two RECORDS entries without a line break between them; "
@@ -115,13 +122,13 @@ def discover(
                     names += joined or [name]
     else:
         names = [p[: -len(".hea")] for p in paths if p.endswith(".hea")]
-        names += [p for p in paths if p.lower().endswith(EDF_SUFFIXES)]
+        names += [p for p in paths if p.lower().endswith(edf)]
 
     names += [p for p in paths if p.lower().endswith(VITAL_SUFFIX)]  # never in RECORDS
     by_stem = _files_by_stem(paths)
     units: dict[str, Unit] = {}
     for name in sorted(set(names)):
-        unit = _unit(name, paths, bool(annotators))
+        unit = _unit(name, paths, bool(annotators), edf)
         if unit is None:
             problems.append(f"{name}: listed in RECORDS, but no such header or EDF file")
             continue
@@ -131,6 +138,13 @@ def discover(
         if unit.id in units:
             raise ValueError(f"two recordings would get the id {unit.id!r}: rename one source")
         units[unit.id] = unit
+    if pickles is not None:
+        reader, pattern = pickles
+        for path in sorted(p for p in paths if re.search(pattern, p)):
+            unit = Unit(posixpath.splitext(path)[0], reader, path, (), False)
+            if unit.id in units:
+                raise ValueError(f"two recordings would get the id {unit.id!r}: rename one source")
+            units[unit.id] = unit
     files, headers = _signal_files(units, read_texts)
     is_annotator = annotators.__contains__ if annotators else may_be_annotations
     units, segmented = _segments_as_recordings(
@@ -144,19 +158,21 @@ def discover(
     return Discovery(kept, lists, frozenset(annotators), problems, views, segmented)
 
 
-def _unit(name: str, paths: set[str], listed_annotators: bool) -> Unit | None:
+def _unit(
+    name: str, paths: set[str], listed_annotators: bool, edf: tuple[str, ...] = EDF_SUFFIXES
+) -> Unit | None:
     """The recording `name` (a WFDB record name, an EDF or a .vital file), if it is there."""
     if name + ".hea" in paths:
         return Unit(name, "wfdb", name, (), listed_annotators)
-    if name in paths and name.lower().endswith(EDF_SUFFIXES):
+    if name in paths and name.lower().endswith(edf):
         return Unit(posixpath.splitext(name)[0], "edf", name, (), listed_annotators)
     if name in paths and name.lower().endswith(VITAL_SUFFIX):
         return Unit(posixpath.splitext(name)[0], "vital", name, (), listed_annotators)
     return None
 
 
-def _has_files(name: str, paths: set[str]) -> bool:
-    return name + ".hea" in paths or (name.lower().endswith(EDF_SUFFIXES) and name in paths)
+def _has_files(name: str, paths: set[str], edf: tuple[str, ...] = EDF_SUFFIXES) -> bool:
+    return name + ".hea" in paths or (name.lower().endswith(edf) and name in paths)
 
 
 def _joined(entry: str, folder: str, paths: set[str]) -> list[str] | None:

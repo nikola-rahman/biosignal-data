@@ -40,3 +40,33 @@ datasets:
       notes: >-
         Checked on 2026-10-21 against version 1.1: 151 recordings, 151 _sleepscoring.edf
         files, each pair one to one by the first 5 characters.
+
+  - id: isr-uc/isruc-sleep
+    edf_suffixes:
+      suffixes: [.rec]
+      source: https://web.archive.org/web/20220630040455/https://sleeptight.isr.uc.pt/?page_id=48
+      evidence: >-
+        Each Zipfile contains 1-Raw Data in *.Rec format, Hypnmograms and events files.
+      notes: >-
+        The quote is from the site's "Data" page as archived in 2022; the page of 2026 links
+        a MEGA folder per cohort instead and no longer names the format. It names the format
+        only as ".Rec"; the files are EDF: checked on 2026-10-29
+        on cohort I (subgroup I, the MEGA folder of the "Download Dataset" page), every
+        <n>/<n>.rec has an EDF header and reads with edfio. The cohort is published as one
+        folder per subject: <n>.rec, the hypnograms <n>_1.txt and <n>_2.txt (the two
+        experts) and their .xlsx tables; the hypnograms are kept with the version.
+
+  - id: uci/ppg-dalia
+    pickle_recordings:
+      reader: ppg-dalia
+      pattern: ^PPG_FieldStudy/S\d+/S\d+\.pkl$
+      source: https://archive.ics.uci.edu/dataset/495/ppg+dalia
+      evidence: >-
+        In each subject's folder, only the file SX.pkl is required, which includes
+        synchronised and labelled data. [...] The file SX.pkl includes all the above
+        described data, synchronised, and including labels as well.
+      notes: >-
+        Quoted from PPG_FieldStudy_readme.pdf of the UCI download. The raw device files
+        (SX_E4.zip, SX_RespiBAN.h5) are not synchronised ("the RespiBAN and the Empatica
+        E4 data need to be manually synchronised") and are kept as published, not
+        converted; the benchmark's labels refer to the pickle's signals.

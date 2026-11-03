@@ -4294,6 +4294,7 @@ datasets:
 - id: uci/ppg-dalia
   source:
     type: manual
+    url: https://archive.ics.uci.edu/static/public/495/ppg+dalia.zip
 - id: uci/wesad
   source:
     type: manual

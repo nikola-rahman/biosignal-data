@@ -51,6 +51,7 @@ from biosignal_data.standard.layout import DONE, TABLES, StandardLocation
 from biosignal_data.standard.manifest import NotConverted, StandardManifest
 from biosignal_data.standard.rules import StandardRules
 from biosignal_data.standard.sources import (
+    DaliaSource,
     EdfSource,
     Event,
     Fetch,
@@ -167,7 +168,12 @@ def plan_standard(
 
     mine = (rules or StandardRules.load()).get(dataset_id)
     edf_rule = mine.edf_annotation_files if mine is not None else None
-    discovery = discover((f.path for f in raw.files), read_text, read_texts, edf_rule)
+    suffixes = tuple(mine.edf_suffixes.suffixes) if mine and mine.edf_suffixes else ()
+    pickles = mine.pickle_recordings if mine is not None else None
+    discovery = discover(
+        (f.path for f in raw.files), read_text, read_texts, edf_rule, suffixes,
+        (pickles.reader, pickles.pattern) if pickles is not None else None,
+    )  # fmt: skip
     reading.finish()
     done = set() if complete else set(_done_parts(store, location))
     plan = StandardPlan(
@@ -396,6 +402,8 @@ def convert_unit(raw: RawFiles, store: Store | None, unit: Unit, work_dir: Path)
                 return WfdbSource(unit.path, fetch, raw.has, unit.start_time)
             if unit.format == "vital":
                 return VitalSource(unit.path, fetch)
+            if unit.format == "ppg-dalia":
+                return DaliaSource(unit.path, fetch)
             return EdfSource(unit.path, fetch)
 
         try:

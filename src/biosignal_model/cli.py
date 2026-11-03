@@ -72,10 +72,11 @@ def benchmark(
     import torch  # noqa: PLC0415
     import wandb  # noqa: PLC0415
 
-    from biosignal_model.benchmarks import BenchmarkRun, apnea, ptbxl  # noqa: PLC0415
+    from biosignal_model.benchmarks import BenchmarkRun, apnea, dalia, isruc, ptbxl  # noqa: PLC0415
 
     modules: dict[str, Any] = {
         "apnea": (apnea, apnea.ApneaSettings), "ptbxl": (ptbxl, ptbxl.PtbxlSettings),
+        "isruc": (isruc, isruc.IsrucSettings), "dalia": (dalia, dalia.DaliaSettings),
     }  # fmt: skip
     if name not in modules:
         raise typer.BadParameter(f"unknown benchmark {name!r}; known: {', '.join(modules)}")
