@@ -6,6 +6,12 @@
 # the clusters of v2. What it must show: the loss falls, the targets do not collapse
 # (train/target_std stays away from 0), the speed and memory per GPU; then PTB-XL fine-tuning
 # from its checkpoint against from scratch.
+# Second version (2026-11-03 18:20): the first (learning rate 1e-3 after 500 warmup steps, EMA from
+# 0.999, spans 0.2-2 s) collapsed by step 2000 (target spread 0.54 -> 0.35, prediction spread 0.03).
+# Two 2000-step diagnoses (runs/v4-diag-*.yaml): the data2vec stability settings (3e-4, warmup 1000,
+# EMA from 0.9995) learned steadily (loss 0.81 -> 0.70 of the target variance, steps 1000-1750);
+# shorter spans alone (0.1-0.5 s) learned faster at first (0.62) and slid again after step 1000. So
+# both here: the stability settings and the shorter spans.
 data:
   store: s3://biosignal-data
   index: '2026-11-03'           # with the data fixes (hd-semg in mV, envelopes, placeholders)
@@ -59,7 +65,7 @@ tokens:
     time_spans: 1.0             # time spans over all channels only (no cross-channel leak)
     channel_groups: 0.0
     single_tokens: 0.0
-    time_span_s: [0.2, 2.0]     # log-uniform; a hidden QRS cannot be interpolated
+    time_span_s: [0.1, 0.5]     # log-uniform; a hidden QRS still cannot be interpolated (tests)
     group_span_s: [0.2, 2.0]    # unused (channel_groups 0)
 
 model:
@@ -97,14 +103,14 @@ model:
     decoder_layers: 2
     decoder_heads: 4
     decoder_feed_forward: 512
-    ema_start: 0.999
+    ema_start: 0.9995
     ema_end: 0.9999
     ema_steps: 10000
 
 optim:
-  learning_rate: 1.0e-3
+  learning_rate: 3.0e-4
   min_learning_rate: 1.0e-5
-  warmup_steps: 500
+  warmup_steps: 1000
   steps: 10000
   weight_decay: 0.05
   beta1: 0.9

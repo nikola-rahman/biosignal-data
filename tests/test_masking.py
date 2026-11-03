@@ -225,17 +225,21 @@ def _ecg_like(seconds: float, rate: float, rng: np.random.Generator) -> np.ndarr
     return x.astype(np.float32)
 
 
-def test_linear_interpolation_across_a_hidden_span_fails_on_qrs_like_signals() -> None:
+@pytest.mark.parametrize("bounds", [(0.2, 2.0), (0.1, 0.5)])  # v4-small's first and second
+def test_linear_interpolation_across_a_hidden_span_fails_on_qrs_like_signals(
+    bounds: tuple[float, float],
+) -> None:
     """The trivial solver of a time span is interpolation from the visible samples at its two
     ends (no other channel is visible there). With the spans' bounds it must miss the beats:
     its error on the hidden samples is most of their variance."""
+    spans = SPANS.model_copy(update={"time_span_s": bounds})
     rng = np.random.default_rng(0)
     errors, variances = [], []
     for seed in range(20):
         x = _ecg_like(20.0, 100.0, rng)
         cells = token_cells(0.0, 100.0, x.size, TOKEN_S)
         unique, inverse = np.unique(cells, return_inverse=True)
-        hidden = hide([unique], TOKEN_S, SPANS, np.random.default_rng(seed), None)[0][inverse]
+        hidden = hide([unique], TOKEN_S, spans, np.random.default_rng(seed), None)[0][inverse]
         index = np.arange(x.size)
         guess = np.interp(index[hidden], index[~hidden], x[~hidden])
         errors.append(np.mean((guess - x[hidden]) ** 2))
