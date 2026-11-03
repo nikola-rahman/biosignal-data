@@ -146,12 +146,14 @@ def test_a_request_refused_for_a_short_time_is_sent_again(monkeypatch: pytest.Mo
     requests = [0]
 
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802 - the http.server name
+        def do_GET(self) -> None:
             requests[0] += 1
             if refusals[0] > 0:
                 refusals[0] -= 1
-                body = (b"<?xml version='1.0'?><Error><Code>InvalidAccessKeyId</Code>"
-                        b"<Message>no such key</Message></Error>")
+                body = (
+                    b"<?xml version='1.0'?><Error><Code>InvalidAccessKeyId</Code>"
+                    b"<Message>no such key</Message></Error>"
+                )
                 self.send_response(403)
             else:
                 body = b"block"

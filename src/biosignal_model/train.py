@@ -630,14 +630,14 @@ def _forward_backward(
     loss, per_token = masked_loss(predicted, x)
     optimizer.zero_grad(set_to_none=True)
     if ranks == 1:
-        loss.backward()  # type: ignore[no-untyped-call]
+        loss.backward()
     else:
         count = per_token[..., 1].sum().clamp(min=1)
         step = torch.stack([loss.detach() * count, per_token[..., 1].sum()])
         dist.all_reduce(step)
         everywhere = step[1].clamp(min=1)
         # DDP averages the gradients over the ranks: times `ranks` gives their sum.
-        (loss * count / everywhere * ranks).backward()  # type: ignore[no-untyped-call]
+        (loss * count / everywhere * ranks).backward()
         loss = step[0] / everywhere
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), o.grad_clip)
     return loss, per_token, grad_norm

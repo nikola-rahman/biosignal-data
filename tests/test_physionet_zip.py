@@ -240,7 +240,8 @@ def test_a_version_not_on_the_aws_copy_comes_from_physionet_org(
         )
     assert sorted(f.path for f in staged.manifest.files) == ["RECORDS", "r1.dat", "r1.hea"]
     assert all(f.source_checksum for f in staged.manifest.files)  # each against SHA256SUMS
-    assert staged.manifest.files[0].source_url.startswith(
+    url = staged.manifest.files[0].source_url
+    assert url is not None and url.startswith(
         "https://physionet.org/content/mitdb/get-zip/1.0.0/#"
     )  # the canonical URL of the version's ZIP
     assert len(website.ranges) == -(-len(website.body) // 100) + 2  # every range, two retried

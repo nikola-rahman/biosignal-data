@@ -41,11 +41,12 @@ from __future__ import annotations
 import math
 import random
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as F  # noqa: N812 - the usual name
 from torch import nn
 
 from biosignal_model.benchmarks.supervised import (
@@ -140,6 +141,14 @@ class NPLRKernel(nn.Module):
     """SSKernelNPLR of dl_models/s4.py for rank 1, rate 1 and a fixed length L: A (as w, P, Q),
     B and dt are buffers, C (`channels` x H x N/2, complex) the only parameter."""
 
+    log_dt: torch.Tensor  # the buffers, as real views of the complex values
+    B: torch.Tensor
+    P: torch.Tensor
+    w: torch.Tensor
+    Q: torch.Tensor
+    omega: torch.Tensor
+    z: torch.Tensor
+
     def __init__(
         self, h: int, n: int, length: int, channels: int, dt_min: float, dt_max: float,
         dt_scale: float,
@@ -175,9 +184,10 @@ class NPLRKernel(nn.Module):
         linear step of the DPLR form (_setup_linear, _step_state_linear, _setup_state)."""
         w, b, p, q, dt = self._parts()
         d = (2.0 / dt.unsqueeze(-1) - w).reciprocal()  # (H, N)
-        r = torch.eye(1, dtype=w.dtype, device=w.device) + 2 * torch.einsum(
-            "rhn,hn,shn->hrs", q, d, p
-        ).real
+        r = (
+            torch.eye(1, dtype=w.dtype, device=w.device)
+            + 2 * torch.einsum("rhn,hn,shn->hrs", q, d, p).real
+        )
         q_d = (q * d).permute(1, 0, 2)  # (H, r, N)
         r = torch.linalg.solve(r.to(q_d), q_d).permute(1, 0, 2)  # (r, H, N)
         e = 2.0 / dt.unsqueeze(-1) + w
@@ -194,9 +204,10 @@ class NPLRKernel(nn.Module):
                 dd, ee, rr, pp, qq, bb = d, e, r, p, q, b
 
                 def contract(x: torch.Tensor, y: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
-                    return torch.einsum(
-                        "rhn,rhm,...hm->...hn", _conj(x), _conj(y), _conj(s)
-                    )[..., : self.N]
+                    return torch.einsum("rhn,rhm,...hm->...hn", _conj(x), _conj(y), _conj(s))[
+                        ..., : self.N
+                    ]
+
             new = ee * state - contract(pp, qq, state)
             new = new + 2.0 * bb * u.unsqueeze(-1)
             return dd * (new - contract(pp, rr, new))
@@ -233,7 +244,7 @@ class NPLRKernel(nn.Module):
         r = r * dt[None, None, :, None]
         k_f = r[:-1, :-1] - r[:-1, -1:] * r[-1:, :-1] / (1 + r[-1:, -1:])  # Woodbury, rank 1
         k_f = k_f * 2 / (1 + omega)
-        k = torch.fft.irfft(k_f)[..., : self.L]
+        k: torch.Tensor = torch.fft.irfft(k_f)[..., : self.L]
         return k[-1]  # (channels, H, L)
 
 
@@ -344,6 +355,129 @@ class S4ChannelModel(nn.Module):
         return out
 
 
+@dataclass
+class _Recipe:
+    """The state of one training run of the recipe: the model (and its EMA copy, if any), the
+    optimizer, the schedule, the loss, the crops and the teacher (distillation)."""
+
+    s: S4Settings
+    data: torch.Tensor  # [records, leads, samples]
+    target: torch.Tensor  # [records, labels]
+    size: int  # samples a crop
+    starts: list[int]  # the evaluation crops' first samples
+    model: nn.Module
+    optimizer: torch.optim.Optimizer
+    scheduler: torch.optim.lr_scheduler.LambdaLR | None
+    criterion: nn.Module | None
+    ema: Ema | None
+    augment: Augmentation | None
+    generator: torch.Generator
+    teacher: nn.Module | None
+    device: torch.device
+
+    @property
+    def scored(self) -> nn.Module:
+        """The weights validated and tested: the EMA copy, if any."""
+        return self.ema.model if self.ema is not None else self.model
+
+    def batch(self, ids: np.ndarray) -> tuple[torch.Tensor, torch.Tensor]:
+        """The training crops of records `ids` and their targets."""
+        length = self.data.shape[2]
+        if self.augment is None:  # the published crops
+            first = [
+                0 if length == self.size else random.randint(0, length - self.size - 1)  # noqa: S311 - not secret
+                for _ in ids
+            ]
+            batch = torch.stack(
+                [self.data[i, :, a : a + self.size] for i, a in zip(ids, first, strict=True)]
+            )
+        else:
+            records = self.data[torch.from_numpy(ids).to(self.device)]
+            batch = self.augment.crops(records, self.size, self.generator)
+        goal = self.target[ids]
+        if self.teacher is not None and self.s.distillation is not None:
+            with torch.no_grad():
+                soft = torch.sigmoid(self.teacher(batch))
+            a = self.s.distillation.teacher_fraction
+            goal = (1 - a) * goal + a * soft
+        return batch, goal
+
+    def train_epoch(self, order: np.ndarray, per_epoch: int) -> float:
+        """`per_epoch` steps over `order` (the last partial batch dropped): the mean loss."""
+        self.model.train()
+        losses = []
+        for k in range(per_epoch):
+            batch, goal = self.batch(order[k * self.s.batch_size : (k + 1) * self.s.batch_size])
+            logits = self.model(batch)
+            loss = (
+                F.binary_cross_entropy_with_logits(logits, goal)
+                if self.criterion is None
+                else self.criterion(logits, goal)
+            )
+            self.optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            self.optimizer.step()
+            if self.scheduler is not None:
+                self.scheduler.step()
+            if self.ema is not None:
+                self.ema.update(self.model)
+            losses.append(loss.item())
+        return float(np.mean(losses))
+
+    def predict(self, net: nn.Module, ids: np.ndarray, on: str) -> np.ndarray:
+        """The mean over the evaluation crops of each record: probabilities or logits (`on`)."""
+        net.eval()
+        out = []
+        with torch.no_grad():
+            for k in range(0, len(ids), self.s.batch_size):
+                batch = self.data[torch.from_numpy(ids[k : k + self.s.batch_size]).to(self.device)]
+                crops = torch.stack([batch[:, :, a : a + self.size] for a in self.starts], 1)
+                p = net(crops.flatten(0, 1)).view(len(batch), len(self.starts), -1)
+                out.append((torch.sigmoid(p) if on == "probabilities" else p).mean(1).cpu().numpy())
+        return np.concatenate(out)
+
+
+def _recipe(
+    x: np.ndarray, y: np.ndarray, tr: np.ndarray, rate: float, s: S4Settings, seed: int,
+    device: torch.device, log: Callable[[dict[str, float]], None], prefix: str,
+) -> _Recipe:  # fmt: skip
+    """The run's model, optimizer, schedule, loss, EMA, crops and teacher, made in the
+    recipe's order (the random state each takes is that of the published code)."""
+    data = torch.from_numpy(x.astype(np.float32)).to(device)  # normalize False: as recorded
+    target = torch.from_numpy(y.astype(np.float32)).to(device)
+    size = round(s.input_size_s * rate)
+
+    def build() -> nn.Module:
+        return (
+            S4ChannelModel(s, x.shape[1], y.shape[1], size, rate)
+            if isinstance(s, S4ChannelsSettings)
+            else S4Model(s, x.shape[1], y.shape[1], size)
+        ).to(device)
+
+    model = build()
+    log({f"{prefix}/parameters": float(sum(p.numel() for p in model.parameters()))})
+    optimizer = torch.optim.AdamW(model.parameters(), lr=s.learning_rate, betas=s.betas,
+                                  eps=s.eps, weight_decay=s.weight_decay)  # fmt: skip
+    per_epoch = len(tr) // s.batch_size  # drop_last
+    scheduler = None
+    if s.schedule == "warmup_cosine":
+        decay = warmup_cosine(round(s.warmup_epochs * per_epoch), s.epochs * per_epoch)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, decay)
+    criterion = loss_function(s, y[tr], device)
+    ema = Ema(model, s.ema_decay) if s.ema_decay is not None else None
+    augment = Augmentation(s.augmentation, rate) if s.augmentation is not None else None
+    generator = torch.Generator(device=device)
+    generator.manual_seed(seed)
+    teacher = None
+    if s.distillation is not None:
+        teacher = build().eval()
+        teacher.load_state_dict(torch.load(s.distillation.teacher_weights, map_location=device,
+                                           weights_only=True))  # fmt: skip
+    starts = crop_starts(x.shape[2], size, round(size * s.valid_stride_fraction))
+    return _Recipe(s, data, target, size, starts, model, optimizer, scheduler, criterion, ema,
+                   augment, generator, teacher, device)  # fmt: skip
+
+
 def train_and_score(
     x: np.ndarray, y: np.ndarray, folds: np.ndarray, train: tuple[int, ...],
     validation: tuple[int, ...], test: tuple[int, ...], rate: float, s: S4Settings,
@@ -358,107 +492,30 @@ def train_and_score(
     random.seed(seed)
     torch.manual_seed(seed)
     tr, va, te = (np.flatnonzero(np.isin(folds, f)) for f in (train, validation, test))
-    data = torch.from_numpy(x.astype(np.float32)).to(device)  # normalize False: as recorded
-    target = torch.from_numpy(y.astype(np.float32)).to(device)
-    size = int(round(s.input_size_s * rate))
-
-    def build() -> nn.Module:
-        return (
-            S4ChannelModel(s, x.shape[1], y.shape[1], size, rate)
-            if isinstance(s, S4ChannelsSettings)
-            else S4Model(s, x.shape[1], y.shape[1], size)
-        ).to(device)
-
-    model = build()
-    log({f"{prefix}/parameters": float(sum(p.numel() for p in model.parameters()))})
-    optimizer = torch.optim.AdamW(model.parameters(), lr=s.learning_rate, betas=s.betas,
-                                  eps=s.eps, weight_decay=s.weight_decay)  # fmt: skip
+    run = _recipe(x, y, tr, rate, s, seed, device, log, prefix)
     per_epoch = len(tr) // s.batch_size  # drop_last
-    scheduler = (
-        torch.optim.lr_scheduler.LambdaLR(
-            optimizer, warmup_cosine(int(round(s.warmup_epochs * per_epoch)), s.epochs * per_epoch)
-        )
-        if s.schedule == "warmup_cosine"
-        else None
-    )
-    criterion = loss_function(s, y[tr], device)
-    ema = Ema(model, s.ema_decay) if s.ema_decay is not None else None
-    scored = ema.model if ema is not None else model  # the weights validated and tested
-    augment = Augmentation(s.augmentation, rate) if s.augmentation is not None else None
-    generator = torch.Generator(device=device)
-    generator.manual_seed(seed)
-    teacher = None
-    if s.distillation is not None:
-        teacher = build().eval()
-        teacher.load_state_dict(torch.load(s.distillation.teacher_weights, map_location=device,
-                                           weights_only=True))  # fmt: skip
-    length = x.shape[2]
-    starts = crop_starts(length, size, int(round(size * s.valid_stride_fraction)))
-
-    def predict(net: nn.Module, ids: np.ndarray, on: str) -> np.ndarray:
-        net.eval()
-        out = []
-        with torch.no_grad():
-            for k in range(0, len(ids), s.batch_size):
-                batch = data[torch.from_numpy(ids[k : k + s.batch_size]).to(device)]
-                crops = torch.stack([batch[:, :, a : a + size] for a in starts], 1)
-                p = net(crops.flatten(0, 1)).view(len(batch), len(starts), -1)
-                out.append((torch.sigmoid(p) if on == "probabilities" else p).mean(1).cpu().numpy())
-        return np.concatenate(out)
-
     best_val, best_test, best_epoch, labels_n = -1.0, 0.0, 0, 0
     best_p_val, best_p_test = np.zeros((0, y.shape[1])), np.zeros((0, y.shape[1]))
     for epoch in range(1, s.epochs + 1):
-        model.train()
-        order = tr[torch.randperm(len(tr)).numpy()]
-        losses = []
-        for k in range(per_epoch):
-            ids = order[k * s.batch_size : (k + 1) * s.batch_size]
-            if augment is None:  # the published crops
-                first = [0 if length == size else random.randint(0, length - size - 1) for _ in ids]  # noqa: S311
-                batch = torch.stack(
-                    [data[i, :, a : a + size] for i, a in zip(ids, first, strict=True)]
-                )
-            else:
-                batch = augment.crops(data[torch.from_numpy(ids).to(device)], size, generator)
-            goal = target[ids]
-            if teacher is not None and s.distillation is not None:
-                with torch.no_grad():
-                    soft = torch.sigmoid(teacher(batch))
-                a = s.distillation.teacher_fraction
-                goal = (1 - a) * goal + a * soft
-            logits = model(batch)
-            loss = (
-                F.binary_cross_entropy_with_logits(logits, goal)
-                if criterion is None
-                else criterion(logits, goal)
-            )
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()  # type: ignore[no-untyped-call]
-            optimizer.step()
-            if scheduler is not None:
-                scheduler.step()
-            if ema is not None:
-                ema.update(model)
-            losses.append(loss.item())
-        p_val = predict(scored, va, s.validation_on)
+        train_loss = run.train_epoch(tr[torch.randperm(len(tr)).numpy()], per_epoch)
+        p_val = run.predict(run.scored, va, s.validation_on)
         auc_val, _ = macro_auc(y[va], p_val)
         record = {f"{prefix}/epoch": float(epoch),
-                  f"{prefix}/epoch_train_loss": float(np.mean(losses)),
+                  f"{prefix}/epoch_train_loss": train_loss,
                   f"{prefix}/epoch_validation_macro_auc": auc_val}  # fmt: skip
-        if scheduler is not None:
-            record[f"{prefix}/learning_rate"] = float(scheduler.get_last_lr()[0])
-        if ema is not None:  # the trained weights themselves, for comparison only
-            raw, _ = macro_auc(y[va], predict(model, va, s.validation_on))
+        if run.scheduler is not None:
+            record[f"{prefix}/learning_rate"] = float(run.scheduler.get_last_lr()[0])
+        if run.ema is not None:  # the trained weights themselves, for comparison only
+            raw, _ = macro_auc(y[va], run.predict(run.model, va, s.validation_on))
             record[f"{prefix}/epoch_validation_macro_auc_raw"] = raw
         if auc_val > best_val:  # ModelCheckpoint(monitor="val/val_macro_agg", mode="max")
             best_val, best_epoch = auc_val, epoch
-            best_p_val, best_p_test = p_val, predict(scored, te, s.test_on)
+            best_p_val, best_p_test = p_val, run.predict(run.scored, te, s.test_on)
             best_test, labels_n = macro_auc(y[te], best_p_test)
             record[f"{prefix}/chosen_epoch"] = float(epoch)
             record[f"{prefix}/chosen_test_macro_auc"] = best_test
             if s.save_chosen_to is not None:
-                torch.save(scored.state_dict(), s.save_chosen_to)
+                torch.save(run.scored.state_dict(), s.save_chosen_to)
         log(record)
         if s.patience_epochs is not None and epoch - best_epoch >= s.patience_epochs:
             log({f"{prefix}/stopped_epoch": float(epoch)})

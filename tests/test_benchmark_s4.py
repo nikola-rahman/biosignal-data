@@ -133,8 +133,10 @@ def test_the_channel_set_time_steps_follow_the_rate() -> None:
     at_100 = s4.S4ChannelModel(CHANNELS, leads=2, classes=3, length=50, rate_hz=100.0)
     torch.manual_seed(0)
     at_500 = s4.S4ChannelModel(CHANNELS, leads=2, classes=3, length=50, rate_hz=500.0)
-    dt_100 = at_100.layers[0].kernel._parts()[-1]
-    dt_500 = at_500.layers[0].kernel._parts()[-1]
+    first_100, first_500 = at_100.layers[0], at_500.layers[0]
+    assert isinstance(first_100, s4.S4Layer) and isinstance(first_500, s4.S4Layer)
+    dt_100 = first_100.kernel._parts()[-1]
+    dt_500 = first_500.kernel._parts()[-1]
     torch.testing.assert_close(dt_500 * 5, dt_100)  # the same steps in seconds
 
 

@@ -9,6 +9,7 @@ import boto3
 import pytest
 import responses
 from moto import mock_aws
+from requests.adapters import HTTPAdapter
 
 from biosignal_data.fetchers import (
     AccessRestrictedError,
@@ -346,8 +347,10 @@ def test_physionet_org_connections_are_limited_across_sessions() -> None:
     first = limit_host(http_session(), "https://physionet.org/", 2)
     second = limit_host(http_session(("u", "p")), "https://physionet.org/", 2)
     adapter = first.get_adapter(url)
+    assert isinstance(adapter, HTTPAdapter)
     assert adapter is second.get_adapter(url)  # one pool for the whole run
-    assert adapter._pool_maxsize == 2 and adapter._pool_block  # waits instead of opening more
+    pool = adapter.poolmanager.connection_pool_kw
+    assert pool["maxsize"] == 2 and pool["block"]  # waits instead of opening more
     assert first.get_adapter("https://example.org/") is not adapter
 
 
@@ -355,5 +358,7 @@ def test_physionet_without_a_connection_limit_says_which_setting_is_missing() ->
     dataset = make_dataset(
         id="physionet/mitdb", source={"type": "physionet", "slug": "mitdb", "version": "1.0.0"}
     )
+    fetcher = fetcher_for(dataset)
+    assert isinstance(fetcher, PhysioNetFetcher)
     with pytest.raises(FetchError, match="physionet_website_connections"):
-        fetcher_for(dataset)._session()
+        fetcher._session()

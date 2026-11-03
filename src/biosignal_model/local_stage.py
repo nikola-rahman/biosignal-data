@@ -350,8 +350,10 @@ def _kernel_piece(weight: torch.Tensor, power: torch.Tensor, start: int, stop: i
     phase power.imag * l in float64 (in float32 it is off by ~1e-3 rad at l = 1e4)."""
     lags = torch.arange(start, stop, device=power.device, dtype=torch.float64)
     phase = torch.remainder(power.imag.double()[..., None] * lags, 2 * math.pi)
-    magnitude = (power.real[..., None] * lags.to(power.real.dtype)).exp()
-    vandermonde = torch.polar(magnitude, phase.to(magnitude.dtype))  # [2, H, N, l]
+    # exp of the complex exponent, not polar(exp(real), phase): a fast mode's magnitude
+    # underflows to 0 at long lags, and the backward of polar then gives 0 / 0 = NaN
+    real = power.real[..., None] * lags.to(power.real.dtype)
+    vandermonde = torch.complex(real, phase.to(real.dtype)).exp()  # [2, H, N, l]
     return 2 * torch.einsum("dhn,dhnl->dhl", weight, vandermonde).real
 
 

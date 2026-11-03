@@ -72,11 +72,12 @@ def test_frames_have_a_fixed_duration_at_every_rate() -> None:
         assert x.time_s[0, :3].tolist() == pytest.approx([0.02, 0.06, 0.10])  # core centres
         # the first frame starts (n - h) / 2 samples before the channel: not observed there
         assert x.observed[0, 0, 0].tolist() == [False] * (n // 4) + [True] * (n - n // 4)
-        assert x.rate_hz[0, real].unique().tolist() == [rate]
+        assert x.rate_hz is not None and x.rate_hz[0, real].unique().tolist() == [rate]
     batch, _ = _packer(D2).pack([_example([100.0, 500.0], 2.5, 0)], trim=True)
     x = batch.inputs
     real = x.document[0] >= 0
     assert int(real.sum()) == 22 and x.values.shape[2:] == (12, 20)  # 2 x ceil(125 / 12)
+    assert x.channel_index is not None and x.position is not None
     assert x.channel_index[0, real].tolist() == [0] * 11 + [1] * 11
     assert x.position[0, real].tolist() == list(range(11)) * 2
     assert not x.observed[0, :11, :, 4:].any()  # 100 Hz frames hold 4 samples

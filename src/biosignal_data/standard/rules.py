@@ -64,6 +64,8 @@ class PickleRecordings(_Model):
     source: HttpUrl
     evidence: str  # an exact quote from the source
     notes: str | None = None
+
+
 class UnitCorrection(_Model):
     """The physical unit of channels whose header names another one: the dataset's own
     documentation or its values show that the written unit is wrong. Only the `unit` of the

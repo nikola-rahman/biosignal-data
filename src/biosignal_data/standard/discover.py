@@ -105,22 +105,9 @@ def discover(
         if line.strip() and not line.startswith("#")
     }
     records = [p for p in lists if p.endswith("RECORDS")]
-    problems = []
+    problems: list[str] = []
     if records:
-        names = []
-        for list_path in records:
-            folder = posixpath.dirname(list_path)
-            for line in texts[list_path].splitlines():
-                entry = line.strip()
-                if entry and not entry.startswith("#") and not entry.endswith("/"):
-                    name = posixpath.normpath(posixpath.join(folder, entry))
-                    joined = None if _has_files(name, paths, edf) else _joined(entry, folder, paths)
-                    if joined:
-                        problems.append(
-                            f"{name}: two RECORDS entries without a line break between them; "
-                            f"read as {joined[0]} and {joined[1]}"
-                        )
-                    names += joined or [name]
+        names = _listed_names(records, texts, paths, edf, problems)
     else:
         names = [p[: -len(".hea")] for p in paths if p.endswith(".hea")]
         names += [p for p in paths if p.lower().endswith(edf)]
@@ -140,12 +127,7 @@ def discover(
             raise ValueError(f"two recordings would get the id {unit.id!r}: rename one source")
         units[unit.id] = unit
     if pickles is not None:
-        reader, pattern = pickles
-        for path in sorted(p for p in paths if re.search(pattern, p)):
-            unit = Unit(posixpath.splitext(path)[0], reader, path, (), False)
-            if unit.id in units:
-                raise ValueError(f"two recordings would get the id {unit.id!r}: rename one source")
-            units[unit.id] = unit
+        _add_pickled(units, paths, *pickles)
     files, headers = _signal_files(units, read_texts)
     is_annotator = annotators.__contains__ if annotators else may_be_annotations
     units, segmented = _segments_as_recordings(
@@ -157,6 +139,40 @@ def discover(
     views = _views(units, files)
     kept = [u for u in units.values() if u.id not in views]
     return Discovery(kept, lists, frozenset(annotators), problems, views, segmented)
+
+
+def _listed_names(
+    records: list[str], texts: dict[str, str], paths: set[str], edf: tuple[str, ...],
+    problems: list[str],
+) -> list[str]:  # fmt: skip
+    """The recording names of the RECORDS lists `records` (each entry relative to its list's
+    folder). Two entries joined on one line are read as both, with a problem."""
+    names = []
+    for list_path in records:
+        folder = posixpath.dirname(list_path)
+        for line in texts[list_path].splitlines():
+            entry = line.strip()
+            if entry and not entry.startswith("#") and not entry.endswith("/"):
+                name = posixpath.normpath(posixpath.join(folder, entry))
+                joined = None if _has_files(name, paths, edf) else _joined(entry, folder, paths)
+                if joined:
+                    problems.append(
+                        f"{name}: two RECORDS entries without a line break between them; "
+                        f"read as {joined[0]} and {joined[1]}"
+                    )
+                names += joined or [name]
+    return names
+
+
+def _add_pickled(
+    units: dict[str, Unit], paths: set[str], reader: Literal["ppg-dalia"], pattern: str
+) -> None:
+    """A recording for each path that matches `pattern` (the dataset's pickled recordings)."""
+    for path in sorted(p for p in paths if re.search(pattern, p)):
+        unit = Unit(posixpath.splitext(path)[0], reader, path, (), False)
+        if unit.id in units:
+            raise ValueError(f"two recordings would get the id {unit.id!r}: rename one source")
+        units[unit.id] = unit
 
 
 def _unit(

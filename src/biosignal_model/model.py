@@ -280,10 +280,8 @@ class Stem(nn.Module):
             half = span / k  # each window's half-width
             centres = -span / 2 + (torch.arange(k, device=x.values.device) + 0.5) * span / k
             tau = _offsets(n, rate, x.values.device)[None, :] - centres[:, None]  # [K, n]
-            window = torch.where(
-                tau.abs() < half, 0.5 + 0.5 * torch.cos(math.pi * tau / half), 0.0
-            )
-            weight = (self.basis(tau, rate) * (window / (rate * half))[..., None])  # [K, n, B]
+            window = torch.where(tau.abs() < half, 0.5 + 0.5 * torch.cos(math.pi * tau / half), 0.0)
+            weight = self.basis(tau, rate) * (window / (rate * half))[..., None]  # [K, n, B]
             u = x.values[at][..., :n] * x.observed[at][..., :n]  # [N, F, n]
             m = x.observed[at][..., :n].to(u.dtype)
             z[at] = torch.einsum("tfn,knb->tfkb", u, weight) @ self.values.weight.T + (
@@ -326,7 +324,7 @@ class S4DBlock(nn.Module):
         return 2 * torch.einsum("dhn,dhnl->dhl", c, vandermonde).real
 
     def forward(self, u: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        b, length, width = u.shape
+        length = u.shape[1]
         keep = mask[..., None].to(u.dtype)
         z = (self.norm(u) * keep).float().transpose(1, 2)  # [B, H, T]
         k = self.kernel(length)
@@ -467,10 +465,13 @@ def _block_mask(document: torch.Tensor) -> BlockMask:
         parts.append(create_block_mask(same_in_row, 1, None, length, length, row.device))
     full = [(p.full_kv_num_blocks, p.full_kv_indices) for p in parts]  # separate full blocks
     return BlockMask.from_kv_blocks(
-        torch.cat([p.kv_num_blocks for p in parts]), torch.cat([p.kv_indices for p in parts]),
+        torch.cat([p.kv_num_blocks for p in parts]),
+        torch.cat([p.kv_indices for p in parts]),
         torch.cat([n for n, _ in full if n is not None]),
         torch.cat([i for _, i in full if i is not None]),
-        BLOCK_SIZE=parts[0].BLOCK_SIZE, mask_mod=same, seq_lengths=(length, length),
+        BLOCK_SIZE=parts[0].BLOCK_SIZE,
+        mask_mod=same,
+        seq_lengths=(length, length),
     )
 
 

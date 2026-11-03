@@ -156,7 +156,8 @@ def load(store: Store, s: DaliaSettings, log: Log) -> list[Subject]:
 def _packer(model: ModelConfig, max_tokens: int, rows: int) -> Packer:
     return Packer(
         datasets=[DATASET], max_tokens=max_tokens, samples_per_token=model.samples_per_token,
-        max_channels=model.max_channels, rows=rows, mask_ratio=0.0, seed=0,
+        max_channels=model.max_channels, rows=rows, mask_ratio=0.0, seed=0, slots=None,
+        tokenizer=model.tokenizer,
     )  # fmt: skip
 
 
@@ -183,7 +184,11 @@ class _Windows(torch.utils.data.Dataset[tuple[Batch, list[tuple[int, int]]]]):
         seed: str,
     ) -> None:  # fmt: skip
         self.subjects, self.groups, self.packer, self.inputs, self.seed = (
-            subjects, groups, packer, inputs, seed
+            subjects,
+            groups,
+            packer,
+            inputs,
+            seed,
         )
 
     def __len__(self) -> int:
@@ -223,6 +228,55 @@ def mae_by_subject(
     return {name: float(np.mean(e)) for name, e in errors.items()}
 
 
+@dataclass
+class _FineTuning:
+    """The state of one fold's training run: the encoder, its head and optimizer, and the
+    targets' scale (z-scored on the training subjects)."""
+
+    model: Encoder
+    head: torch.nn.Linear
+    optimizer: torch.optim.Optimizer
+    subjects: list[Subject]
+    packer: Packer
+    s: DaliaSettings
+    device: torch.device
+    mean: float
+    std: float
+    log: Log
+    prefix: str
+    step: int = 0
+
+    def train_epoch(self, train: list[Item], per_batch: int, epoch: int) -> float:
+        """One epoch over `train` in its order: the mean training loss."""
+        self.model.train()
+        losses: list[float] = []
+        window: list[float] = []
+        steps = [train[k : k + per_batch] for k in range(0, len(train), per_batch)]
+        batches = _loader(self.subjects, steps, self.packer, self.s, f"{self.s.seed}/{epoch}")
+        for ids, (batch, where) in zip(steps, batches, strict=True):
+            scaled = (_targets(self.subjects, ids) - self.mean) / self.std
+            target = torch.from_numpy(scaled).float().to(self.device)
+            out = self.head(_mean_features(self.model, batch, where, self.device)).squeeze(-1)
+            loss = torch.nn.functional.l1_loss(out, target)
+            self.optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            self.optimizer.step()
+            self.step += 1
+            window.append(loss.item())
+            if self.step % LOG_EVERY_STEPS == 0:
+                self.log({f"{self.prefix}/train_loss": float(np.mean(window)),
+                          f"{self.prefix}/step": float(self.step)})  # fmt: skip
+                losses += window
+                window = []
+        return float(np.mean(losses + window))
+
+    def predict(self, items: list[Item], per_batch: int) -> np.ndarray:
+        """The heart rate of each window, in bpm."""
+        scaled = _predict(self.model, self.head, self.subjects, items, self.packer, per_batch,
+                          self.s, self.device)  # fmt: skip
+        return scaled * self.std + self.mean
+
+
 def end_to_end(
     config: ModelConfig, subjects: list[Subject], fold: DaliaFold, max_tokens: int,
     s: DaliaSettings, device: torch.device, start: dict[str, torch.Tensor] | None, log: Log,
@@ -237,54 +291,35 @@ def end_to_end(
         model.load_state_dict(start)
     head = torch.nn.Linear(config.width, 1).to(device)
     factor = s.fine_tuning_discriminative_factor if start is not None else 1.0
+    # random slots (as pretraining), so the slot embedding trains with the input part
     groups = parameter_groups(model, head, s.fine_tuning_learning_rate, factor,
-                              s.fine_tuning_lower_blocks_fraction)  # fmt: skip
+                              s.fine_tuning_lower_blocks_fraction, "lower")  # fmt: skip
     optimizer = torch.optim.AdamW(groups, weight_decay=s.fine_tuning_weight_decay)
     packer = _packer(config, max_tokens, s.rows)
     held = set(fold.test) | set(fold.validation)
     train = _items(subjects, [n for n in SUBJECTS if n not in held])
     val, test = _items(subjects, fold.validation), _items(subjects, fold.test)
     y_train = _targets(subjects, train)
-    mean, std = float(y_train.mean()), float(y_train.std())
+    run = _FineTuning(model, head, optimizer, subjects, packer, s, device,
+                      float(y_train.mean()), float(y_train.std()), log, prefix)  # fmt: skip
     per_batch_eval = _per_batch(subjects, packer, s)
     per_batch = min(per_batch_eval, s.fine_tuning_examples_per_step)
     rng = random.Random(s.seed)  # noqa: S311 - not secret
-
-    def predict(items: list[Item]) -> np.ndarray:  # in bpm
-        scaled = _predict(model, head, subjects, items, packer, per_batch_eval, s, device)
-        return scaled * std + mean
-
     best: dict[str, float] = {"validation_mae": math.inf}
-    best_epoch, step = 0, 0
+    best_epoch = 0
     for epoch in range(1, s.fine_tuning_epochs + 1):
-        model.train()
         rng.shuffle(train)
-        started, losses, window = time.monotonic(), [], []
-        steps = [train[k : k + per_batch] for k in range(0, len(train), per_batch)]
-        batches = _loader(subjects, steps, packer, s, f"{s.seed}/{epoch}")
-        for ids, (batch, where) in zip(steps, batches, strict=True):
-            target = torch.from_numpy((_targets(subjects, ids) - mean) / std).float().to(device)
-            out = head(_mean_features(model, batch, where, device)).squeeze(-1)
-            loss = torch.nn.functional.l1_loss(out, target)
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()  # type: ignore[no-untyped-call]
-            optimizer.step()
-            step += 1
-            window.append(loss.item())
-            if step % LOG_EVERY_STEPS == 0:
-                log({f"{prefix}/train_loss": float(np.mean(window)), f"{prefix}/step": float(step)})
-                losses += window
-                window = []
-        losses += window
-        val_mae = float(np.mean(np.abs(predict(val) - _targets(subjects, val))))
+        started = time.monotonic()
+        train_loss = run.train_epoch(train, per_batch, epoch)
+        val_mae = float(np.mean(np.abs(run.predict(val, per_batch_eval) - _targets(subjects, val))))
         record = {
-            f"{prefix}/epoch": float(epoch), f"{prefix}/epoch_train_loss": float(np.mean(losses)),
+            f"{prefix}/epoch": float(epoch), f"{prefix}/epoch_train_loss": train_loss,
             f"{prefix}/epoch_validation_mae": val_mae,
             f"{prefix}/epoch_seconds": time.monotonic() - started,
         }  # fmt: skip
         if val_mae < best["validation_mae"]:  # the test subjects for the chosen epoch
             best_epoch = epoch
-            by_subject = mae_by_subject(subjects, test, predict(test))
+            by_subject = mae_by_subject(subjects, test, run.predict(test, per_batch_eval))
             best = {"validation_mae": val_mae} | {f"mae/{k}": v for k, v in by_subject.items()}
             record |= {f"{prefix}/chosen_epoch": float(epoch)}
             record |= {f"{prefix}/chosen_test_mae/{k}": v for k, v in by_subject.items()}

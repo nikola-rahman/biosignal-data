@@ -209,7 +209,8 @@ def load(store: Store, s: IsrucSettings, log: Log) -> list[Night]:
 def _packer(model: ModelConfig, max_tokens: int, rows: int) -> Packer:
     return Packer(
         datasets=[DATASET], max_tokens=max_tokens, samples_per_token=model.samples_per_token,
-        max_channels=model.max_channels, rows=rows, mask_ratio=0.0, seed=0,
+        max_channels=model.max_channels, rows=rows, mask_ratio=0.0, seed=0, slots=None,
+        tokenizer=model.tokenizer,
     )  # fmt: skip
 
 
@@ -240,7 +241,11 @@ class _Sequences(torch.utils.data.Dataset[tuple[Batch, list[tuple[int, int]], to
         length: int, seed: str,
     ) -> None:  # fmt: skip
         self.nights, self.groups, self.packer, self.length, self.seed = (
-            nights, groups, packer, length, seed
+            nights,
+            groups,
+            packer,
+            length,
+            seed,
         )
 
     def __len__(self) -> int:
@@ -314,6 +319,84 @@ def scores(truth: np.ndarray, predicted: np.ndarray) -> dict[str, float]:
     }
 
 
+def _passes(
+    train: list[tuple[int, int]], n: int, per_pass: int, sequence_epochs: int
+) -> tuple[list[list[tuple[int, int]]], list[tuple[bool, int]]]:
+    """A step: `n` sequences of `train`, in passes of at most `per_pass`. The passes, and
+    for each whether it ends its step and the step's number of epochs (the loss divisor)."""
+    passes, last = [], []
+    for k in range(0, len(train), n):
+        step_items = train[k : k + n]
+        for a in range(0, len(step_items), per_pass):
+            passes.append(step_items[a : a + per_pass])
+            ends = a + per_pass >= len(step_items)
+            last.append((ends, len(step_items) * sequence_epochs))
+    return passes, last
+
+
+@dataclass
+class _FineTuning:
+    """The state of one training run: the encoder, the sequence head, the optimizer and its
+    cosine schedule."""
+
+    model: Encoder
+    head: SequenceHead
+    used: list[torch.nn.Parameter]  # the encoder's weights that the task trains
+    optimizer: torch.optim.Optimizer
+    schedule: torch.optim.lr_scheduler.LRScheduler
+    nights: list[Night]
+    packer: Packer
+    per_pass: int
+    s: IsrucSettings
+    device: torch.device
+    log: Log
+    prefix: str
+    step: int = 0
+
+    def train_epoch(self, train: list[tuple[int, int]], epoch: int) -> float:
+        """One epoch over `train` in its order: the mean training loss of its steps. One data
+        loader for the epoch's passes; the gradients summed over a step's passes."""
+        s = self.s
+        self.model.train()
+        self.head.train()
+        losses: list[float] = []
+        window: list[float] = []
+        passes, last = _passes(train, s.fine_tuning_sequences_per_step, self.per_pass,
+                               s.sequence_epochs)  # fmt: skip
+        self.optimizer.zero_grad(set_to_none=True)
+        loss_sum = 0.0
+        batches = _loader(self.nights, passes, self.packer, s, f"{s.seed}/{epoch}")
+        for (batch, where, y), (ends, total) in zip(batches, last, strict=True):
+            features = _mean_features(self.model, batch, where, self.device)
+            logits = self.head(features.view(len(y), s.sequence_epochs, -1))
+            loss = F.cross_entropy(
+                logits.reshape(-1, len(STAGE_NAMES)), y.to(self.device).reshape(-1),
+                label_smoothing=s.fine_tuning_label_smoothing, reduction="sum",
+            ) / total  # fmt: skip
+            loss.backward()
+            loss_sum += loss.item()
+            if not ends:
+                continue
+            trained = self.used + list(self.head.parameters())
+            torch.nn.utils.clip_grad_norm_(trained, s.fine_tuning_grad_clip)
+            self.optimizer.step()
+            self.schedule.step()
+            self.optimizer.zero_grad(set_to_none=True)
+            self.step += 1
+            window.append(loss_sum)
+            loss_sum = 0.0
+            if self.step % LOG_EVERY_STEPS == 0:
+                self.log({f"{self.prefix}/train_loss": float(np.mean(window)),
+                          f"{self.prefix}/step": float(self.step)})  # fmt: skip
+                losses += window
+                window = []
+        return float(np.mean(losses + window))
+
+    def scores_on(self, subjects: Iterable[int]) -> dict[str, float]:
+        return scores(*_predict(self.model, self.head, self.nights, subjects, self.packer,
+                                self.per_pass, self.s, self.device))  # fmt: skip
+
+
 def end_to_end(
     config: ModelConfig, nights: list[Night], max_tokens: int, s: IsrucSettings,
     device: torch.device, start: dict[str, torch.Tensor] | None, log: Log, prefix: str,
@@ -326,9 +409,9 @@ def end_to_end(
     if start is not None:
         model.load_state_dict(start)
     head = SequenceHead(config.width, s).to(device)
-    encoder_lr = s.fine_tuning_encoder_learning_rate if start is not None else (
-        s.fine_tuning_head_learning_rate
-    )
+    encoder_lr = s.fine_tuning_head_learning_rate
+    if start is not None:
+        encoder_lr = s.fine_tuning_encoder_learning_rate
     used = [p for n, p in model.named_parameters() if not n.startswith("head.")]
     optimizer = torch.optim.AdamW(
         [{"params": used, "lr": encoder_lr},
@@ -336,67 +419,31 @@ def end_to_end(
         weight_decay=s.fine_tuning_weight_decay,
     )  # fmt: skip
     packer = _packer(config, max_tokens, s.rows)
-    per_pass = _per_pass(nights, packer, s)
     train = _items(nights, TRAIN)
     steps_per_epoch = math.ceil(len(train) / s.fine_tuning_sequences_per_step)
     schedule = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=s.fine_tuning_epochs * steps_per_epoch,
         eta_min=s.fine_tuning_min_learning_rate,
-    )
+    )  # fmt: skip
+    run = _FineTuning(model, head, used, optimizer, schedule, nights, packer,
+                      _per_pass(nights, packer, s), s, device, log, prefix)  # fmt: skip
     rng = random.Random(s.seed)  # noqa: S311 - not secret
     best: dict[str, float] = {"validation_kappa": -2.0}
-    best_epoch, step = 0, 0
+    best_epoch = 0
     for epoch in range(1, s.fine_tuning_epochs + 1):
-        model.train()
-        head.train()
         rng.shuffle(train)
-        started, losses, window = time.monotonic(), [], []
-        # A step: fine_tuning_sequences_per_step sequences, in passes of `per_pass`; one
-        # data loader for the epoch's passes, the gradients summed over a step's passes.
-        n = s.fine_tuning_sequences_per_step
-        passes, last = [], []  # last: whether a pass ends its step, and the step's epochs
-        for k in range(0, len(train), n):
-            step_items = train[k : k + n]
-            for a in range(0, len(step_items), per_pass):
-                passes.append(step_items[a : a + per_pass])
-                ends = a + per_pass >= len(step_items)
-                last.append((ends, len(step_items) * s.sequence_epochs))
-        optimizer.zero_grad(set_to_none=True)
-        loss_sum = 0.0
-        batches = _loader(nights, passes, packer, s, f"{s.seed}/{epoch}")
-        for (batch, where, y), (ends, total) in zip(batches, last, strict=True):
-            features = _mean_features(model, batch, where, device)
-            logits = head(features.view(len(y), s.sequence_epochs, -1))
-            loss = F.cross_entropy(
-                logits.reshape(-1, len(STAGE_NAMES)), y.to(device).reshape(-1),
-                label_smoothing=s.fine_tuning_label_smoothing, reduction="sum",
-            ) / total  # fmt: skip
-            loss.backward()  # type: ignore[no-untyped-call]
-            loss_sum += loss.item()
-            if not ends:
-                continue
-            torch.nn.utils.clip_grad_norm_(used + list(head.parameters()), s.fine_tuning_grad_clip)
-            optimizer.step()
-            schedule.step()
-            optimizer.zero_grad(set_to_none=True)
-            step += 1
-            window.append(loss_sum)
-            loss_sum = 0.0
-            if step % LOG_EVERY_STEPS == 0:
-                log({f"{prefix}/train_loss": float(np.mean(window)), f"{prefix}/step": float(step)})
-                losses += window
-                window = []
-        losses += window
+        started = time.monotonic()
+        train_loss = run.train_epoch(train, epoch)
         seconds = time.monotonic() - started
-        val = scores(*_predict(model, head, nights, VALIDATION, packer, per_pass, s, device))
+        val = run.scores_on(VALIDATION)
         record = {
-            f"{prefix}/epoch": float(epoch), f"{prefix}/epoch_train_loss": float(np.mean(losses)),
+            f"{prefix}/epoch": float(epoch), f"{prefix}/epoch_train_loss": train_loss,
             f"{prefix}/epoch_seconds": seconds,
         }  # fmt: skip
         record |= {f"{prefix}/epoch_validation_{k}": v for k, v in val.items()}
         if val["kappa"] > best["validation_kappa"]:  # the test subjects for the chosen epoch
             best_epoch = epoch
-            test = scores(*_predict(model, head, nights, TEST, packer, per_pass, s, device))
+            test = run.scores_on(TEST)
             best = {f"validation_{k}": v for k, v in val.items()} | test
             record |= {f"{prefix}/chosen_epoch": float(epoch)}
             record |= {f"{prefix}/chosen_test_{k}": v for k, v in test.items()}
@@ -454,10 +501,10 @@ def _fit(x: torch.Tensor, y: torch.Tensor, l2: float, steps: int) -> torch.Tenso
     def closure() -> torch.Tensor:
         optimizer.zero_grad()
         loss = F.cross_entropy(x @ w[:-1] + w[-1], y) + l2 * (w[:-1] ** 2).sum()
-        loss.backward()  # type: ignore[no-untyped-call]
+        loss.backward()
         return loss
 
-    optimizer.step(closure)  # type: ignore[no-untyped-call]
+    optimizer.step(closure)
     return w.detach()
 
 

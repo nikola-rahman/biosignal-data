@@ -3,14 +3,19 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel
 
 pytest.importorskip("torch")
 
-from biosignal_model.benchmarks import BenchmarkRun, apnea, dalia, isruc, ptbxl  # noqa: E402
+from biosignal_model.benchmarks import BenchmarkRun, apnea, dalia, isruc, ptbxl
 
 RUNS = Path(__file__).resolve().parents[1] / "runs"
-SETTINGS = {"apnea": apnea.ApneaSettings, "ptbxl": ptbxl.PtbxlSettings,
-            "isruc": isruc.IsrucSettings, "dalia": dalia.DaliaSettings}  # fmt: skip
+SETTINGS: dict[str, type[BaseModel]] = {
+    "apnea": apnea.ApneaSettings,
+    "ptbxl": ptbxl.PtbxlSettings,
+    "isruc": isruc.IsrucSettings,
+    "dalia": dalia.DaliaSettings,
+}
 
 
 @pytest.mark.parametrize("path", sorted(RUNS.glob("bench-*.yaml")), ids=lambda p: p.name)

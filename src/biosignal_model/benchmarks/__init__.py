@@ -25,7 +25,7 @@ class Log(Protocol):
     """Records metrics while a benchmark runs (Weights & Biases and the console), with keys
     such as `<task>/<method>/train_loss`."""
 
-    def __call__(self, metrics: dict[str, float]) -> None: ...
+    def __call__(self, metrics: dict[str, float], /) -> None: ...
 
 
 class TaskModel(Protocol):

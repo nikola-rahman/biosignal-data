@@ -10,12 +10,12 @@ import hashlib
 import os
 import shutil
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, BinaryIO, ClassVar, Literal, Protocol
+from typing import TYPE_CHECKING, Any, BinaryIO, ClassVar, Literal, Protocol, cast
 from urllib.parse import urlparse
 
 import boto3
@@ -134,7 +134,10 @@ class S3Settings:
             ),
         )
         # After botocore's own retry handler: it answers None (no retry) for these codes.
-        client.meta.events.register("needs-retry.s3", _retry_refused)
+        # botocore uses a needs-retry handler's answer as the wait before the retry; the
+        # botocore-stubs type every handler as returning None, so the cast.
+        handler = cast("Callable[..., None]", _retry_refused)
+        client.meta.events.register("needs-retry.s3", handler)
         return client
 
 

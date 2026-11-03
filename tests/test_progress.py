@@ -12,7 +12,7 @@ def test_a_long_phase_logs_its_progress_with_rate_and_eta(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     clock = [0.0]
-    monkeypatch.setattr(progress.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr("biosignal_data.progress.time.monotonic", lambda: clock[0])
     caplog.set_level(logging.INFO, logger="biosignal_data.progress")
     ticker = progress.Ticker("x: reading headers", 1000)
 
@@ -41,7 +41,7 @@ def test_a_short_phase_or_an_unknown_total_stays_short(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     clock = [0.0]
-    monkeypatch.setattr(progress.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr("biosignal_data.progress.time.monotonic", lambda: clock[0])
     caplog.set_level(logging.INFO, logger="biosignal_data.progress")
     progress.Ticker("quick", 3).finish()
     assert not caplog.messages  # under EVERY seconds: no line at all

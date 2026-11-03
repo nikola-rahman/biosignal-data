@@ -85,6 +85,8 @@ strict = true
 warn_unused_ignores = true
 plugins = ["pydantic.mypy"]
 mypy_path = "src"
+# torch leaves some Tensor methods unannotated (backward, unique): calls to them are allowed
+untyped_calls_exclude = ["torch"]
 
 [[tool.mypy.overrides]]
 module = ["nemar.*", "dandi.*", "huggingface_hub.*", "kaggle.*", "kagglesdk.*", "mne.*", "mne_bids.*", "wfdb.*", "pynwb.*", "h5py.*", "scipy.*", "pandas.*", "moto.*", "pyarrow.*", "pyedflib.*", "edfio.*", "numcodecs.*", "vitaldb.*"]

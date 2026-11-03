@@ -178,13 +178,13 @@ def test_conversion_processes_get_a_file_index_not_the_plan(
 
     plan = plan_standard(store, "physionet/mitdb", "1.0.0")
     index = file_index.write(tmp_path, plan.raw.files)
-    raw = file_index.IndexedRaw(store, plan.raw.location, index)
+    indexed = file_index.IndexedRaw(store, plan.raw.location, index)
     for f in plan.raw.files:
-        assert raw.has(f.path) and raw.entry(f.path) == file_index.Entry(f.size, f.sha256)
-    assert not raw.has("nope.dat")
+        assert indexed.has(f.path) and indexed.entry(f.path) == file_index.Entry(f.size, f.sha256)
+    assert not indexed.has("nope.dat")
     with pytest.raises(FileNotFoundError):
-        raw.entry("nope.dat")
-    got = raw.fetch_to("r1.hea", tmp_path / "unit")
+        indexed.entry("nope.dat")
+    got = indexed.fetch_to("r1.hea", tmp_path / "unit")
     assert got.read_bytes() == plan.raw.fetch_to("r1.hea", tmp_path / "direct").read_bytes()
     sent = pickle.dumps((plan.raw.store, plan.raw.location, index))
     assert len(sent) < 2000  # the store, the location and a path: no file list
@@ -277,20 +277,18 @@ def test_a_failed_recording_keeps_the_others_and_runs_again(
 ) -> None:
     from biosignal_data.standard import convert as convert_module  # noqa: PLC0415
 
-    original = convert_module.EdfSource
-
     def broken(*args: object) -> None:
         raise OSError("simulated read failure")
 
-    monkeypatch.setattr(convert_module, "EdfSource", broken)
-    report = convert(
-        plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2, part_bytes=1,
-        work_dir=tmp_path / "work",
-    )  # fmt: skip
+    with monkeypatch.context() as patched:
+        patched.setattr(convert_module, "EdfSource", broken)
+        report = convert(
+            plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2, part_bytes=1,
+            work_dir=tmp_path / "work",
+        )  # fmt: skip
     assert not report.complete and list(report.failed) == ["sub/s1"]
     assert not store.exists("standard-blocks/physionet/mitdb/1.0.0/_SUCCESS")
 
-    monkeypatch.setattr(convert_module, "EdfSource", original)
     plan = plan_standard(store, "physionet/mitdb", "1.0.0")
     assert [u.id for u in plan.to_convert] == ["sub/s1"]
     report = convert(plan, store, workers=2, part_bytes=1, work_dir=tmp_path / "work")
@@ -772,21 +770,17 @@ def test_a_view_is_listed_with_its_records_not_stored_twice(
 
 
 def test_small_recordings_share_one_part_and_a_stopped_run_continues(
-    store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
+    store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from biosignal_data.standard import convert as convert_module  # noqa: PLC0415
-
-    original = convert_module.EdfSource
 
     def broken(*args: object) -> None:
         raise OSError("simulated read failure")
 
-    convert_module.EdfSource = broken  # type: ignore[assignment,misc]
-    try:  # the EDF recording fails; the WFDB ones are done
+    with monkeypatch.context() as patched:  # the EDF recording fails; the WFDB ones are done
+        patched.setattr(convert_module, "EdfSource", broken)
         first = convert(plan_standard(store, "physionet/mitdb", "1.0.0"), store, workers=2,
                         part_bytes=10**9, work_dir=tmp_path / "work")  # fmt: skip
-    finally:
-        convert_module.EdfSource = original  # type: ignore[misc]
     assert not first.complete and list(first.failed) == ["sub/s1"]
 
     plan = plan_standard(store, "physionet/mitdb", "1.0.0")
@@ -1055,7 +1049,7 @@ def test_a_pickle_that_would_run_code_is_refused(tmp_path: Path) -> None:
 
     path = tmp_path / "evil.pkl"
     path.write_bytes(pickle.dumps({"x": Evil()}))
-    with pytest.raises(pickle.UnpicklingError, match="refused: builtins.print"):
+    with pytest.raises(pickle.UnpicklingError, match=r"refused: builtins\.print"):
         load_pickle(path)
     path.write_bytes(pickle.dumps({"x": np.arange(3.0)}, protocol=2))
     np.testing.assert_array_equal(load_pickle(path)["x"], np.arange(3.0))

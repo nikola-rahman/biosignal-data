@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           enable-cache: true
-      - run: uv sync --locked
+      - run: uv sync --locked --extra train  # torch: mypy and the model tests need it
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src tests

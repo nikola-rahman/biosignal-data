@@ -75,7 +75,7 @@ import queue
 import random
 import threading
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from http.client import HTTPException
@@ -465,7 +465,7 @@ class ExampleSource:
 
     def examples(
         self, epoch: int, part: int, parts: int, piece: int = 0, pieces: int = 1
-    ) -> Iterator[Example]:
+    ) -> Generator[Example, None, None]:
         """The examples of `blocks_of(epoch, part, parts)`, shuffled; with `pieces` > 1
         only piece `piece` of them (every pieces-th block: the pieces of an epoch together
         read each block once). Which examples come is fixed by `seed` and `epoch`; their

@@ -548,7 +548,7 @@ def load_pickle(path: Path) -> Any:
             return super().find_class(module, name)
 
     with path.open("rb") as f:
-        return _Restricted(f, encoding="latin1").load()  # noqa: S301 - restricted above
+        return _Restricted(f, encoding="latin1").load()
 
 
 # PPG-DaLiA's signals in S<n>.pkl (its readme, section III): name -> (rate, channel names, unit).
@@ -586,7 +586,7 @@ class DaliaSource:
         data = load_pickle(fetch(path))
         self.files = [path]
         self.problems: list[str] = []
-        self.start_time = None
+        self.start_time: datetime | None = None
         signals = data["signal"]
         by_rate: dict[float, list[tuple[str, np.ndarray, str]]] = {}
         for (device, key), (rate, names, unit) in _DALIA_SIGNALS.items():
@@ -612,7 +612,7 @@ class DaliaSource:
             )  # fmt: skip
             self.groups.append(Group(rate, array.dtype, array.shape[1], channels))
             self._arrays.append(array)
-        self.duration_s = max(g.length / g.rate for g in self.groups)
+        self.duration_s: float | None = max(g.length / g.rate for g in self.groups)
         self.frame_rate = max(g.rate for g in self.groups)
         hr = np.asarray(data["label"], dtype=np.float64).ravel()
         self.events = [

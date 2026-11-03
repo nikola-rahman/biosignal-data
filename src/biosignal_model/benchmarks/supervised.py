@@ -101,7 +101,7 @@ class RecipeSettings(BaseModel):
 def class_balanced_weights(positives: np.ndarray, beta: float) -> np.ndarray:
     """Cui et al. 2019: 1 / E_n per class, E_n = (1 - beta^n) / (1 - beta), summing to C."""
     n = np.maximum(positives.astype(np.float64), 1.0)
-    w = (1.0 - beta) / (1.0 - np.power(beta, n))
+    w: np.ndarray = (1.0 - beta) / (1.0 - np.power(beta, n))
     return w * len(w) / w.sum()
 
 
@@ -168,8 +168,8 @@ class Ema:
     def update(self, model: nn.Module) -> None:
         for e, p in zip(self.model.parameters(), model.parameters(), strict=True):
             e.lerp_(p.detach(), 1.0 - self.decay)
-        for e, b in zip(self.model.buffers(), model.buffers(), strict=True):
-            e.copy_(b)
+        for kept, live in zip(self.model.buffers(), model.buffers(), strict=True):
+            kept.copy_(live)
 
 
 def warmup_cosine(warmup_steps: int, total_steps: int) -> Callable[[int], float]:

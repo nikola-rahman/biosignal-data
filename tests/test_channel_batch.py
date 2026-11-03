@@ -164,6 +164,7 @@ def test_the_train_config_takes_the_channel_format() -> None:
                  "cache_directory": "/c", "cache_bytes": 1, "block_s": 1800.0,
                  "shuffle_buffer": 1, "reads_in_flight": 1, "workers": 0,
                  "pieces_per_epoch": 1, "spans": "per_group", "subject_hours_per_epoch": 4.0,
+                 "flat_runs": None,
                  "mixture": {"rule": "unimax", "unit": "global_tokens", "budget_tokens": 1e9,
                              "max_epochs": 4, "clusters": {"all": ["d/x"]}}},
         "tokens": {"format": "channels", "token_s": 0.04, "max_tokens": 8192,

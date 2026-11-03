@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import random
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pytest
@@ -202,7 +204,7 @@ def test_the_schedule_warms_up_then_decays_to_zero() -> None:
     assert ptbxl._schedule(_settings_for_schedule("constant"), 10)(99) == 1.0
 
 
-def _settings_for_schedule(schedule: str) -> ptbxl.PtbxlSettings:
+def _settings_for_schedule(schedule: Literal["constant", "cosine"]) -> ptbxl.PtbxlSettings:
     return ptbxl.PtbxlSettings(
         rate=100, tasks=["all"], rows=2, read_threads=1, workers=0, linear_probing=False,
         fixed_slots=False, methods=["fine_tuning"], reference=None, reference_s4=None,
@@ -213,7 +215,7 @@ def _settings_for_schedule(schedule: str) -> ptbxl.PtbxlSettings:
         fine_tuning_discriminative_factor=0.1, fine_tuning_lower_blocks_fraction=0.25,
         fine_tuning_crop_s=2.5, evaluation_stride_fraction=0.5, evaluation_aggregate="max",
         fine_tuning_slot_group="head", fine_tuning_betas=(0.9, 0.95),
-        fine_tuning_warmup_epochs=2.0, fine_tuning_schedule=schedule,  # type: ignore[arg-type]
+        fine_tuning_warmup_epochs=2.0, fine_tuning_schedule=schedule,
         fine_tuning_grad_clip=1.0, fine_tuning_head="reference",
         from_scratch_samples_per_token=None, from_scratch_tokenizer=None, from_scratch_model=None,
         fine_tuning_rungs=None,
@@ -276,20 +278,19 @@ def test_a_trimmed_batch_gives_each_example_the_same_features() -> None:
     torch.testing.assert_close(a, loop, rtol=1e-5, atol=1e-5)
 
 
-def test_batches_made_in_workers_are_the_same_as_in_the_main_process() -> None:
-    import random  # noqa: PLC0415
+def _crop(example: Example, rng: random.Random) -> Example:
+    """At module level, so that workers started by spawn or forkserver can import it."""
+    return ptbxl._random_crop(example, 2.5, rng)
 
+
+def test_batches_made_in_workers_are_the_same_as_in_the_main_process() -> None:
     config = _small()
     examples = _records([["NORM"]] * 12, [1] * 12).examples
     groups = [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]]
-
-    def crop(example: Example, rng: random.Random) -> Example:
-        return ptbxl._random_crop(example, 2.5, rng)
-
     made = {}
     for workers in (0, 2):
         packer = ptbxl._packer(config, 256, 2, None)
-        made[workers] = list(ptbxl._packed(examples, groups, crop, packer, "s/1", workers))
+        made[workers] = list(ptbxl._packed(examples, groups, _crop, packer, "s/1", workers))
     assert len(made[0]) == len(made[2]) == 3
     for (a, wa), (b, wb) in zip(made[0], made[2], strict=True):
         assert wa == wb
@@ -305,7 +306,9 @@ def test_the_reference_xresnet1d101_has_the_papers_shape_schedule_and_crops() ->
     convs = [m for m in model.modules() if isinstance(m, torch.nn.Conv1d)]
     # the stem, 3 per block, and one projection (the first block: 64 -> 256 channels)
     assert len(convs) == 3 + 3 * 33 + 1
-    head = list(model[-1])
+    last = model[-1]
+    assert isinstance(last, torch.nn.Sequential)
+    head = list(last)
     assert [type(m).__name__ for m in head] == [
         "_ConcatPool", "BatchNorm1d", "Dropout", "Linear", "ReLU", "BatchNorm1d", "Dropout",
         "Linear",
@@ -324,8 +327,19 @@ def test_the_reference_xresnet1d101_has_the_papers_shape_schedule_and_crops() ->
     x = rng.normal(size=(12, 12, 1000)).astype(np.float32) + y[:, :1, None] * 3.0
     logged: list[dict[str, float]] = []
     scores, (p_val, p_test) = xresnet1d.train_and_score(
-        x, y, np.array([1] * 8 + [9] * 2 + [10] * 2), (1,), (9,), (10,), 100.0, s, 0,
-        torch.device("cpu"), logged.append, "r", ptbxl.macro_auc,
+        x,
+        y,
+        np.array([1] * 8 + [9] * 2 + [10] * 2),
+        (1,),
+        (9,),
+        (10,),
+        100.0,
+        s,
+        0,
+        torch.device("cpu"),
+        logged.append,
+        "r",
+        ptbxl.macro_auc,
     )
     assert 0.0 <= scores["macro_auc"] <= 1.0 and scores["epoch"] == 1.0
     assert p_val.shape == p_test.shape == (2, 2)
@@ -344,7 +358,9 @@ def test_label_groups_are_scored_on_their_own_and_fold_9_still_chooses() -> None
     y, classes, _ = ptbxl.labels(records, STATEMENTS, "all")
     groups = ptbxl.label_groups(classes, STATEMENTS)
     assert {g: [c for c, k in zip(classes, m, strict=True) if k] for g, m in groups.items()} == {
-        "diagnostic": ["IMI", "NORM"], "form": ["LVOLT"], "rhythm": ["SR"]
+        "diagnostic": ["IMI", "NORM"],
+        "form": ["LVOLT"],
+        "rhythm": ["SR"],
     }
     settings = ptbxl.PtbxlSettings(
         rate=100, tasks=["all"], rows=2, read_threads=1, workers=0,
@@ -364,7 +380,15 @@ def test_label_groups_are_scored_on_their_own_and_fold_9_still_chooses() -> None
     )  # fmt: skip
     logged: list[dict[str, float]] = []
     scores, (p_val, p_test) = ptbxl.end_to_end(
-        config, records, y, 256, settings, torch.device("cpu"), None, logged.append, "f",
+        config,
+        records,
+        y,
+        256,
+        settings,
+        torch.device("cpu"),
+        None,
+        logged.append,
+        "f",
         scored_groups=groups,
     )
     # the chosen epoch's probabilities: fold 9 and fold 10, records in order
@@ -421,7 +445,9 @@ def test_cooldown_branches_score_each_rung_and_leave_the_main_run_as_it_was() ->
     assert trained == [r["f/train_loss"] for r in logged["last"] if "f/train_loss" in r]
     rung_logs = [r for r in logged["three"] if "f/rung_epoch" in r]
     assert [(r["f/rung_epoch"], r["f/rung_cooldown_epochs"]) for r in rung_logs] == [
-        (1.0, 1.0), (2.0, 1.0), (4.0, 2.0)
+        (1.0, 1.0),
+        (2.0, 1.0),
+        (4.0, 2.0),
     ]
     # the last rung is the same branch in both runs
     last = [r for r in logged["last"] if "f/rung_epoch" in r]

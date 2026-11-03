@@ -6,12 +6,14 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from biosignal_data.training.loader import Channel  # noqa: E402
+from biosignal_model.batch import SamplesTokenizer  # noqa: E402
 from biosignal_model.benchmarks import dalia  # noqa: E402
 from biosignal_model.model import Encoder, ModelConfig  # noqa: E402
 
 CONFIG = ModelConfig(
     samples_per_token=32, max_channels=4, width=32, layers=1, heads=4, feed_forward=64,
     min_wavelength_s=0.01, max_wavelength_s=1000.0, attention="dense",
+    tokenizer=SamplesTokenizer(kind="samples"), dropout=0.0, drop_path=0.0,
 )  # fmt: skip
 CHANNELS = (
     Channel("64Hz", 0, 64.0, 1.0, 0.0, None, "BVP", "ppg", ""),
@@ -21,14 +23,24 @@ CHANNELS = (
 
 
 def _settings(**changes: object) -> dalia.DaliaSettings:
-    base = dict(
-        inputs="ppg+acc", folds=[{"test": ["S1"], "validation": ["S2"]}], rows=2,
-        read_threads=1, workers=0, linear_probing=True, linear_probing_l2=[1e-3, 10.0],
-        methods=["fine_tuning", "from_scratch"], fine_tuning_epochs=2, fine_tuning_patience=1,
-        fine_tuning_learning_rate=1e-3, fine_tuning_weight_decay=1e-3,
-        fine_tuning_examples_per_step=8, fine_tuning_discriminative_factor=0.1,
-        fine_tuning_lower_blocks_fraction=0.25, seed=0,
-    )  # fmt: skip
+    base: dict[str, object] = {
+        "inputs": "ppg+acc",
+        "folds": [{"test": ["S1"], "validation": ["S2"]}],
+        "rows": 2,
+        "read_threads": 1,
+        "workers": 0,
+        "linear_probing": True,
+        "linear_probing_l2": [1e-3, 10.0],
+        "methods": ["fine_tuning", "from_scratch"],
+        "fine_tuning_epochs": 2,
+        "fine_tuning_patience": 1,
+        "fine_tuning_learning_rate": 1e-3,
+        "fine_tuning_weight_decay": 1e-3,
+        "fine_tuning_examples_per_step": 8,
+        "fine_tuning_discriminative_factor": 0.1,
+        "fine_tuning_lower_blocks_fraction": 0.25,
+        "seed": 0,
+    }
     return dalia.DaliaSettings.model_validate(base | changes)
 
 
@@ -64,7 +76,7 @@ def test_fine_tuning_and_linear_probing_run_on_a_small_model() -> None:
     for start in (None, Encoder(CONFIG).state_dict()):
         scored = dalia.end_to_end(CONFIG, subjects, fold, 256, s, torch.device("cpu"), start,
                                   logged.append, "f")  # fmt: skip
-        assert set(k for k in scored if k.startswith("mae/")) == {"mae/S1"}
+        assert {k for k in scored if k.startswith("mae/")} == {"mae/S1"}
         assert scored["epoch"] >= 1.0 and scored["mae/S1"] >= 0.0
     packer = dalia._packer(CONFIG, 256, s.rows)
     items, features = dalia.embed(Encoder(CONFIG), subjects, packer, s, torch.device("cpu"),

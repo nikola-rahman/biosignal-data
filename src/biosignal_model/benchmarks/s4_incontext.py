@@ -202,6 +202,75 @@ def build_memory(
     )  # fmt: skip
 
 
+@dataclass
+class _InContextRun:
+    """The state of one training run: the model, its optimizer and the training records'
+    memory (the context it retrieves from), refreshed after each epoch."""
+
+    s: S4InContextSettings
+    model: S4InContextModel
+    optimizer: torch.optim.Optimizer
+    data: torch.Tensor  # [records, leads, samples]
+    target: torch.Tensor  # [records, labels]
+    patient: torch.Tensor  # [records]: the patient code
+    tr: np.ndarray  # the training records: the memory
+    size: int  # samples a crop
+    starts: list[int]  # the evaluation crops' first samples
+    device: torch.device
+
+    def refresh(self) -> tuple[Memory, float]:
+        """The memory from the current weights, and the seconds it took."""
+        started = time.monotonic()
+        memory = build_memory(self.model.encoder, self.data, self.tr, self.target, self.patient,
+                              self.starts, self.size, self.s.batch_size)  # fmt: skip
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        return memory, time.monotonic() - started
+
+    def train_epoch(self, memory: Memory, order: np.ndarray, per_epoch: int) -> float:
+        """`per_epoch` steps over `order` (the last partial batch dropped), with the published
+        random crops: the mean loss (in-context plus aux_weight x auxiliary)."""
+        s, length = self.s, self.data.shape[2]
+        self.model.train()
+        losses = []
+        for k in range(per_epoch):
+            ids = order[k * s.batch_size : (k + 1) * s.batch_size]
+            first = [
+                0 if length == self.size else random.randint(0, length - self.size - 1)  # noqa: S311 - not secret
+                for _ in ids
+            ]
+            batch = torch.stack(
+                [self.data[i, :, a : a + self.size] for i, a in zip(ids, first, strict=True)]
+            )
+            index = torch.from_numpy(ids).to(self.device)
+            goal = self.target[index]
+            icl, aux = self.model(batch, self.patient[index], memory)
+            loss = F.binary_cross_entropy_with_logits(icl, goal)
+            loss = loss + s.aux_weight * F.binary_cross_entropy_with_logits(aux, goal)
+            self.optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            self.optimizer.step()
+            losses.append(loss.item())
+        return float(np.mean(losses))
+
+    def predict(self, memory: Memory, ids: np.ndarray, on: str) -> tuple[np.ndarray, np.ndarray]:
+        """(in-context, auxiliary) predictions per record, over its crops."""
+        self.model.eval()
+        icl_out: list[torch.Tensor] = []
+        aux_out: list[torch.Tensor] = []
+        with torch.no_grad():
+            for k in range(0, len(ids), self.s.batch_size):
+                index = torch.from_numpy(ids[k : k + self.s.batch_size]).to(self.device)
+                batch = self.data[index]
+                crops = torch.stack([batch[:, :, a : a + self.size] for a in self.starts], 1)
+                who = self.patient[index].repeat_interleave(len(self.starts))  # record order
+                icl, aux = self.model(crops.flatten(0, 1), who, memory)
+                for flat, out in ((icl, icl_out), (aux, aux_out)):
+                    p = flat.view(len(batch), len(self.starts), -1)
+                    out.append((torch.sigmoid(p) if on == "probabilities" else p).mean(1))
+        return torch.cat(icl_out).cpu().numpy(), torch.cat(aux_out).cpu().numpy()
+
+
 def train_and_score(
     x: np.ndarray, y: np.ndarray, folds: np.ndarray, patients: np.ndarray,
     train: tuple[int, ...], validation: tuple[int, ...], test: tuple[int, ...], rate: float,
@@ -220,75 +289,36 @@ def train_and_score(
     _, counts = np.unique(patients[tr], return_counts=True)
     if s.context_k > len(tr) - int(np.max(counts)):
         raise ValueError(f"context_k {s.context_k} is more than the records of other patients")
-    data = torch.from_numpy(x.astype(np.float32)).to(device)  # normalize False: as recorded
-    target = torch.from_numpy(y.astype(np.float32)).to(device)
-    patient = torch.from_numpy(patients.astype(np.int64)).to(device)
     size = round(s.input_size_s * rate)
     model = S4InContextModel(s, x.shape[1], y.shape[1], size).to(device)
     log({f"{prefix}/parameters": float(sum(p.numel() for p in model.parameters())),
          f"{prefix}/memory_records": float(len(tr))})  # fmt: skip
     optimizer = torch.optim.AdamW(model.parameters(), lr=s.learning_rate, betas=s.betas,
                                   eps=s.eps, weight_decay=s.weight_decay)  # fmt: skip
+    run = _InContextRun(
+        s, model, optimizer,
+        torch.from_numpy(x.astype(np.float32)).to(device),  # normalize False: as recorded
+        torch.from_numpy(y.astype(np.float32)).to(device),
+        torch.from_numpy(patients.astype(np.int64)).to(device),
+        tr, size, crop_starts(x.shape[2], size, round(size * s.valid_stride_fraction)), device,
+    )  # fmt: skip
     per_epoch = len(tr) // s.batch_size  # drop_last
-    length = x.shape[2]
-    starts = crop_starts(length, size, round(size * s.valid_stride_fraction))
-
-    def refresh() -> tuple[Memory, float]:
-        started = time.monotonic()
-        memory = build_memory(model.encoder, data, tr, target, patient, starts, size,
-                              s.batch_size)  # fmt: skip
-        if device.type == "cuda":
-            torch.cuda.synchronize(device)
-        return memory, time.monotonic() - started
-
-    def predict(memory: Memory, ids: np.ndarray, on: str) -> tuple[np.ndarray, np.ndarray]:
-        """(in-context, auxiliary) predictions per record, over its crops."""
-        model.eval()
-        icl_out: list[torch.Tensor] = []
-        aux_out: list[torch.Tensor] = []
-        with torch.no_grad():
-            for k in range(0, len(ids), s.batch_size):
-                index = torch.from_numpy(ids[k : k + s.batch_size]).to(device)
-                batch = data[index]
-                crops = torch.stack([batch[:, :, a : a + size] for a in starts], 1)
-                who = patient[index].repeat_interleave(len(starts))  # crops in record order
-                icl, aux = model(crops.flatten(0, 1), who, memory)
-                for flat, out in ((icl, icl_out), (aux, aux_out)):
-                    p = flat.view(len(batch), len(starts), -1)
-                    out.append((torch.sigmoid(p) if on == "probabilities" else p).mean(1))
-        return torch.cat(icl_out).cpu().numpy(), torch.cat(aux_out).cpu().numpy()
-
-    memory, _ = refresh()  # from the initial weights
+    memory, _ = run.refresh()  # from the initial weights
     best_val, best_test, best_epoch, labels_n = -1.0, 0.0, 0, 0
     best_p_val, best_p_test = np.zeros((0, y.shape[1])), np.zeros((0, y.shape[1]))
     for epoch in range(1, s.epochs + 1):
-        model.train()
-        order = tr[torch.randperm(len(tr)).numpy()]
-        losses = []
-        for k in range(per_epoch):
-            ids = order[k * s.batch_size : (k + 1) * s.batch_size]
-            first = [0 if length == size else random.randint(0, length - size - 1) for _ in ids]  # noqa: S311
-            batch = torch.stack([data[i, :, a : a + size] for i, a in zip(ids, first, strict=True)])
-            index = torch.from_numpy(ids).to(device)
-            goal = target[index]
-            icl, aux = model(batch, patient[index], memory)
-            loss = F.binary_cross_entropy_with_logits(icl, goal)
-            loss = loss + s.aux_weight * F.binary_cross_entropy_with_logits(aux, goal)
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()  # type: ignore[no-untyped-call]
-            optimizer.step()
-            losses.append(loss.item())
-        memory, refresh_s = refresh()
-        p_val, p_val_aux = predict(memory, va, s.validation_on)
+        train_loss = run.train_epoch(memory, tr[torch.randperm(len(tr)).numpy()], per_epoch)
+        memory, refresh_s = run.refresh()
+        p_val, p_val_aux = run.predict(memory, va, s.validation_on)
         auc_val, _ = macro_auc(y[va], p_val)
         record = {f"{prefix}/epoch": float(epoch),
-                  f"{prefix}/epoch_train_loss": float(np.mean(losses)),
+                  f"{prefix}/epoch_train_loss": train_loss,
                   f"{prefix}/epoch_validation_macro_auc": auc_val,
                   f"{prefix}/epoch_validation_macro_auc_aux": macro_auc(y[va], p_val_aux)[0],
                   f"{prefix}/memory_refresh_s": refresh_s}  # fmt: skip
         if auc_val > best_val:  # as reference_s4: the best fold-9 macro-AUC
             best_val, best_epoch = auc_val, epoch
-            best_p_val, best_p_test = p_val, predict(memory, te, s.test_on)[0]
+            best_p_val, best_p_test = p_val, run.predict(memory, te, s.test_on)[0]
             best_test, labels_n = macro_auc(y[te], best_p_test)
             record[f"{prefix}/chosen_epoch"] = float(epoch)
             record[f"{prefix}/chosen_test_macro_auc"] = best_test

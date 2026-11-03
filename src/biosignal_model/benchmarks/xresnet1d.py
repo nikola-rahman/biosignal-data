@@ -29,7 +29,7 @@ from collections.abc import Callable
 
 import numpy as np
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as F  # noqa: N812 - the usual name
 from pydantic import BaseModel, ConfigDict
 from torch import nn
 
@@ -208,7 +208,10 @@ def train_and_score(
         losses = []
         for k in range(per_epoch):
             ids = order[k * s.batch_size : (k + 1) * s.batch_size]
-            starts = [0 if length == size else random.randint(0, length - size - 1) for _ in ids]
+            starts = [
+                0 if length == size else random.randint(0, length - size - 1)  # noqa: S311 - not secret
+                for _ in ids
+            ]
             batch = torch.stack(
                 [data[i, :, a : a + size] for i, a in zip(ids, starts, strict=True)]
             )
@@ -217,7 +220,7 @@ def train_and_score(
                 group["lr"], group["betas"] = lr, (beta1, s.beta2)
             loss = F.binary_cross_entropy_with_logits(model(batch), target[ids])
             optimizer.zero_grad(set_to_none=True)
-            loss.backward()  # type: ignore[no-untyped-call]
+            loss.backward()
             optimizer.step()
             step += 1
             losses.append(loss.item())

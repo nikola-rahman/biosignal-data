@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import dataclasses
 import json
 import math
@@ -10,12 +11,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-torch = pytest.importorskip("torch")
+pytest.importorskip("torch")
 
-from biosignal_data.storage.stores import LocalStore, StoreFactory  # noqa: E402
-from biosignal_data.training import Selection  # noqa: E402
-from biosignal_data.training.loader import Channel, Example, Origin, Signal  # noqa: E402
-from biosignal_model.batch import (  # noqa: E402
+import torch
+from torch.multiprocessing.spawn import spawn
+
+from biosignal_data.storage.stores import LocalStore, StoreFactory
+from biosignal_data.training import Selection
+from biosignal_data.training.loader import Channel, Example, Origin, Signal
+from biosignal_model.batch import (
     SIGNAL_TYPES,
     Batch,
     Inputs,
@@ -23,8 +27,8 @@ from biosignal_model.batch import (  # noqa: E402
     SamplesTokenizer,
     concat,
 )
-from biosignal_model.model import Encoder, ModelConfig, masked_loss  # noqa: E402
-from biosignal_model.train import (  # noqa: E402
+from biosignal_model.model import Encoder, ModelConfig, masked_loss
+from biosignal_model.train import (
     ADDED_LATER,
     OptimSection,
     TrainConfig,
@@ -33,7 +37,7 @@ from biosignal_model.train import (  # noqa: E402
     _validation_batches,
     train,
 )
-from tests.test_training_loader import _index  # noqa: E402
+from tests.test_training_loader import _index
 
 
 def _example(lengths: list[int], rates: list[float], dataset: str = "d/x") -> Example:
@@ -63,9 +67,9 @@ def test_tokens_keep_every_value_and_its_time() -> None:
     first = slice(0, 3)
     mean, log_scale = np.sinh(tokens.channel_scale[0, 0]), tokens.channel_scale[0, 1]
     restored = np.sinh(tokens.values[first]) * np.exp(log_scale) + mean
-    original = np.full(24, np.nan, dtype=np.float32)
-    original[:20] = example.signals[0].values
-    original = original.reshape(3, 8)
+    padded = np.full(24, np.nan, dtype=np.float32)
+    padded[:20] = example.signals[0].values
+    original = padded.reshape(3, 8)
     observed = tokens.observed[first]
     # The encoding is float32, like the model's input: a value next to the channel mean
     # (cancellation in x - mean) comes back to float32 precision of the channel's scale.
@@ -256,12 +260,12 @@ def test_a_non_finite_step_is_not_applied_and_too_many_stop_the_run(
     store: LocalStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import biosignal_model.train as module  # noqa: PLC0415
+    from biosignal_model.model import masked_loss as real  # noqa: PLC0415
 
-    real = module.masked_loss
     calls = {"n": 0}
 
-    def sometimes_nan(predicted: torch.Tensor, x: object) -> tuple[torch.Tensor, torch.Tensor]:
-        loss, per_token = real(predicted, x)  # type: ignore[arg-type]
+    def sometimes_nan(predicted: torch.Tensor, x: Inputs) -> tuple[torch.Tensor, torch.Tensor]:
+        loss, per_token = real(predicted, x)
         calls["n"] += 1
         return (loss * float("nan") if calls["n"] == 2 else loss), per_token
 
@@ -339,7 +343,12 @@ def _two_row_batch() -> Batch:
 
 
 def _rows(x: Inputs, rows: slice) -> Inputs:
-    return Inputs(**{k: None if v is None else v[rows] for k, v in vars(x).items()})
+    part = copy.copy(x)
+    for f in dataclasses.fields(x):
+        value = getattr(x, f.name)
+        if value is not None:
+            setattr(part, f.name, value[rows])
+    return part
 
 
 _NO_CLIP = OptimSection(
@@ -369,7 +378,7 @@ def _step_on_one_row(rank: int, port: int, out: str) -> None:
 
 def test_two_processes_with_one_row_each_step_as_one_process_with_both(tmp_path: Path) -> None:
     out = str(tmp_path / "two.pt")
-    torch.multiprocessing.spawn(_step_on_one_row, args=(_free_port(), out), nprocs=2)
+    spawn(_step_on_one_row, args=(_free_port(), out), nprocs=2)
     torch.manual_seed(0)
     model = Encoder(_config())
     loss, _, _ = _forward_backward(
@@ -379,7 +388,7 @@ def test_two_processes_with_one_row_each_step_as_one_process_with_both(tmp_path:
     two = torch.load(out, weights_only=True)
     assert torch.allclose(two["loss"], loss, rtol=1e-5)
     for mine, theirs in zip([p.grad for p in model.parameters()], two["grads"], strict=True):
-        assert torch.allclose(mine, theirs, rtol=1e-4, atol=1e-7)
+        assert mine is not None and torch.allclose(mine, theirs, rtol=1e-4, atol=1e-7)
 
 
 def _train_as_rank(rank: int, port: int, config_json: str, root: str) -> None:
@@ -391,18 +400,14 @@ def test_a_run_on_two_processes_writes_one_checkpoint_from_the_first(
     store: LocalStore, tmp_path: Path
 ) -> None:
     config = _short_config(store, tmp_path)  # rows 2: one a process
-    torch.multiprocessing.spawn(
-        _train_as_rank, args=(_free_port(), config.model_dump_json(), str(store.root)), nprocs=2
-    )
+    spawn(_train_as_rank, args=(_free_port(), config.model_dump_json(), str(store.root)), nprocs=2)
     saved = torch.load(store._path("models/t/step-00000010.pt"), weights_only=True)
     assert saved["step"] == 10
     assert all(torch.isfinite(t).all() for t in saved["model"].values())
     assert json.loads(store.get_bytes("models/t/config.json") or b"{}")["gpus"] == 2
     odd = config.model_copy(update={"tokens": config.tokens.model_copy(update={"rows": 3})})
     with pytest.raises(Exception, match="cannot be split over 2 GPUs"):
-        torch.multiprocessing.spawn(
-            _train_as_rank, args=(_free_port(), odd.model_dump_json(), str(store.root)), nprocs=2
-        )
+        spawn(_train_as_rank, args=(_free_port(), odd.model_dump_json(), str(store.root)), nprocs=2)
 
 
 def test_single_rows_joined_are_the_rows_packed_together() -> None:

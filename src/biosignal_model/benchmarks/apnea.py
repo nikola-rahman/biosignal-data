@@ -195,10 +195,10 @@ def _fit_logistic(x: torch.Tensor, y: torch.Tensor, l2: float, steps: int) -> to
         optimizer.zero_grad()
         logits = x @ w[:-1] + w[-1]
         loss = F.binary_cross_entropy_with_logits(logits, y) + l2 * (w[:-1] ** 2).sum()
-        loss.backward()  # type: ignore[no-untyped-call]
+        loss.backward()
         return loss
 
-    optimizer.step(closure)  # type: ignore[no-untyped-call]
+    optimizer.step(closure)
     return w.detach()
 
 
@@ -282,7 +282,7 @@ def end_to_end(
             y = torch.from_numpy(learn.labels[ids]).float().to(device)
             loss = F.binary_cross_entropy_with_logits(logits, y)
             optimizer.zero_grad(set_to_none=True)
-            loss.backward()  # type: ignore[no-untyped-call]
+            loss.backward()
             optimizer.step()
             step += 1
             window.append(loss.item())

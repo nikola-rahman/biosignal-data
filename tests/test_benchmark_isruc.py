@@ -6,26 +6,44 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from biosignal_data.training.loader import Channel  # noqa: E402
+from biosignal_model.batch import SamplesTokenizer  # noqa: E402
 from biosignal_model.benchmarks import isruc  # noqa: E402
 from biosignal_model.model import Encoder, ModelConfig  # noqa: E402
 
 CONFIG = ModelConfig(
     samples_per_token=50, max_channels=4, width=32, layers=1, heads=4, feed_forward=64,
     min_wavelength_s=0.01, max_wavelength_s=1000.0, attention="dense",
+    tokenizer=SamplesTokenizer(kind="samples"), dropout=0.0, drop_path=0.0,
 )  # fmt: skip
 
 
 def _settings(**changes: object) -> isruc.IsrucSettings:
-    base = dict(
-        channels="all", sequence_epochs=2, rows=4, read_threads=1, workers=0,
-        linear_probing=True, linear_probing_l2=[1e-3, 1.0], linear_probing_steps=10,
-        methods=["fine_tuning", "from_scratch"], fine_tuning_epochs=2, fine_tuning_patience=None,
-        fine_tuning_encoder_learning_rate=1e-4, fine_tuning_head_learning_rate=1e-3,
-        fine_tuning_min_learning_rate=1e-6, fine_tuning_weight_decay=5e-2,
-        fine_tuning_sequences_per_step=3, fine_tuning_label_smoothing=0.1,
-        fine_tuning_grad_clip=1.0, head_width=16, head_layers=1, head_heads=2,
-        head_feed_forward=32, head_dropout=0.1, seed=0,
-    )  # fmt: skip
+    base: dict[str, object] = {
+        "channels": "all",
+        "sequence_epochs": 2,
+        "rows": 4,
+        "read_threads": 1,
+        "workers": 0,
+        "linear_probing": True,
+        "linear_probing_l2": [1e-3, 1.0],
+        "linear_probing_steps": 10,
+        "methods": ["fine_tuning", "from_scratch"],
+        "fine_tuning_epochs": 2,
+        "fine_tuning_patience": None,
+        "fine_tuning_encoder_learning_rate": 1e-4,
+        "fine_tuning_head_learning_rate": 1e-3,
+        "fine_tuning_min_learning_rate": 1e-6,
+        "fine_tuning_weight_decay": 5e-2,
+        "fine_tuning_sequences_per_step": 3,
+        "fine_tuning_label_smoothing": 0.1,
+        "fine_tuning_grad_clip": 1.0,
+        "head_width": 16,
+        "head_layers": 1,
+        "head_heads": 2,
+        "head_feed_forward": 32,
+        "head_dropout": 0.1,
+        "seed": 0,
+    }
     return isruc.IsrucSettings.model_validate(base | changes)
 
 

@@ -22,7 +22,7 @@ from biosignal_model.batch import (  # noqa: E402
     Inputs,
     SamplesTokenizer,
 )
-from biosignal_model.benchmarks import BenchmarkRun, apnea, ptbxl  # noqa: E402
+from biosignal_model.benchmarks import BenchmarkRun, apnea, dalia, isruc, ptbxl  # noqa: E402
 from biosignal_model.model import Encoder, LayerGroups, ModelConfig  # noqa: E402
 from biosignal_model.train import TrainConfig  # noqa: E402
 
@@ -132,7 +132,7 @@ def test_the_benchmarks_read_the_model_through_the_interface_only(
 
 def test_every_run_file_is_valid() -> None:
     files = sorted(RUNS.glob("*.yaml"))
-    kinds = {"train": 0, "ptbxl": 0, "apnea": 0}
+    kinds = {"train": 0, "ptbxl": 0, "apnea": 0, "isruc": 0, "dalia": 0}
     for f in files:
         if f.name.startswith("bench-ptbxl-"):
             ptbxl.PtbxlSettings.model_validate(BenchmarkRun.load(f).settings)
@@ -140,6 +140,12 @@ def test_every_run_file_is_valid() -> None:
         elif f.name.startswith("bench-apnea-"):
             apnea.ApneaSettings.model_validate(BenchmarkRun.load(f).settings)
             kinds["apnea"] += 1
+        elif f.name.startswith("bench-isruc-"):
+            isruc.IsrucSettings.model_validate(BenchmarkRun.load(f).settings)
+            kinds["isruc"] += 1
+        elif f.name.startswith("bench-dalia-"):
+            dalia.DaliaSettings.model_validate(BenchmarkRun.load(f).settings)
+            kinds["dalia"] += 1
         else:
             TrainConfig.load(f).model_settings()
             kinds["train"] += 1

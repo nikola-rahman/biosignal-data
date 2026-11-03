@@ -7,10 +7,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-torch = pytest.importorskip("torch")
+pytest.importorskip("torch")
 
-from biosignal_model.benchmarks import s4_incontext as ic  # noqa: E402
-from biosignal_model.benchmarks.s4 import S4Settings  # noqa: E402
+import torch
+
+from biosignal_model.benchmarks import s4_incontext as ic
+from biosignal_model.benchmarks.s4 import S4Settings
 
 SETTINGS = ic.S4InContextSettings(
     input_size_s=0.5, valid_stride_fraction=1.0, validation_on="logits",

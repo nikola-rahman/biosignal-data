@@ -48,11 +48,12 @@ with each token's rate, channel within the row and position within its channel.
 
 from __future__ import annotations
 
+import copy
 import math
 import random
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
-from typing import Annotated, Literal
+from dataclasses import dataclass, fields
+from typing import Annotated, Literal, TypeVar
 
 import numpy as np
 import torch
@@ -154,8 +155,12 @@ class Inputs:
     position: torch.Tensor | None = None  # int64 [R, L]: the token's order in its channel
 
     def to(self, device: torch.device) -> Inputs:
-        return Inputs(**{k: None if v is None else v.to(device, non_blocking=True)
-                         for k, v in vars(self).items()})  # fmt: skip
+        moved = copy.copy(self)
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if value is not None:
+                setattr(moved, f.name, value.to(device, non_blocking=True))
+        return moved
 
 
 @dataclass
@@ -179,12 +184,16 @@ class Batch:
 
 def concat(batches: list[Batch]) -> Batch:
     """One batch of the rows of `batches`, in order (rows of one length: not trimmed)."""
+
     def joined(k: str) -> torch.Tensor | None:
         parts = [vars(b.inputs)[k] for b in batches]
         return None if parts[0] is None else torch.cat(parts)
 
+    inputs = copy.copy(batches[0].inputs)
+    for f in fields(inputs):
+        setattr(inputs, f.name, joined(f.name))
     return Batch(
-        inputs=Inputs(**{k: joined(k) for k in vars(batches[0].inputs)}),
+        inputs=inputs,
         analysis=Analysis(**{k: torch.cat([vars(b.analysis)[k] for b in batches])
                              for k in vars(batches[0].analysis)}),
         examples=sum(b.examples for b in batches),
@@ -223,6 +232,20 @@ class _FrameTokens:
     rate_hz: np.ndarray
     channel: np.ndarray  # the channel within the example
     position: np.ndarray
+
+
+_Kind = TypeVar("_Kind", _Tokens, _FrameTokens)
+
+
+def _rows_of(rows: list[list[_Tokens | _FrameTokens]], kind: type[_Kind]) -> list[list[_Kind]]:
+    """The rows, each token of the type `kind` (one tokenizer makes every token of a batch)."""
+    out: list[list[_Kind]] = []
+    for row in rows:
+        kept = [t for t in row if isinstance(t, kind)]
+        if len(kept) != len(row):
+            raise TypeError(f"a batch of {kind.__name__} holds tokens of another tokenizer")
+        out.append(kept)
+    return out
 
 
 # A trimmed batch's tokens per row are a multiple of this: the block size of flex attention,
@@ -272,7 +295,7 @@ class Packer:
         self._rng = random.Random(seed)  # noqa: S311 - not secret
 
     def batches(self, examples: Iterable[Example]) -> Iterator[Batch]:
-        rows: list[list[_Tokens]] = [[]]
+        rows: list[list[_Tokens | _FrameTokens]] = [[]]
         used = 0
         count = 0
         for example in examples:
@@ -299,7 +322,7 @@ class Packer:
         only as many tokens per row as the longest row holds, rounded up to a multiple of
         TRIM_TOKENS; else every batch is `rows` x `max_tokens`. Padding is masked either
         way, so the model's output for each example is the same."""
-        rows: list[list[_Tokens]] = [[]]
+        rows: list[list[_Tokens | _FrameTokens]] = [[]]
         where: list[tuple[int, int]] = []
         used = 0
         for example in examples:
@@ -411,9 +434,9 @@ class Packer:
             std = float(visible.std()) if visible.size else 0.0
             scale = std if std > 0 else 1.0
             values = np.zeros((tokens, f, largest), dtype=np.float32)
-            values[:, :, :n] = np.where(
-                observed, np.arcsinh((raw - mean) / scale), 0.0
-            ).reshape(tokens, f, n)
+            values[:, :, :n] = np.where(observed, np.arcsinh((raw - mean) / scale), 0.0).reshape(
+                tokens, f, n
+            )
             seen = np.zeros((tokens, f, largest), dtype=bool)
             seen[:, :, :n] = observed.reshape(tokens, f, n)
             centre = signal.start_s + (np.arange(tokens) * f + f / 2) * h / rate
@@ -436,21 +459,22 @@ class Packer:
                     rate_hz=np.full(tokens, rate, dtype=np.float32),
                     channel=np.full(tokens, c, dtype=np.int64),
                     position=np.arange(tokens, dtype=np.int64),
-                )  # fmt: skip
-            )
+                )
+            )  # fmt: skip
         return _FrameTokens(
             **{name: np.concatenate([getattr(part, name) for part in parts])
                for name in _FrameTokens.__dataclass_fields__}
         )  # fmt: skip
 
     def _batch(
-        self, rows: list[list[_Tokens]] | list[list[_FrameTokens]], count: int,
+        self, rows: list[list[_Tokens | _FrameTokens]], count: int,
         r: int | None = None, length: int | None = None,
     ) -> Batch:  # fmt: skip
         r = self.rows if r is None else r
         length = self.max_tokens if length is None else length
         if not isinstance(self.tokenizer, SamplesTokenizer):
-            return self._frame_batch(rows, count, r, length)  # type: ignore[arg-type]
+            return self._frame_batch(_rows_of(rows, _FrameTokens), count, r, length)
+        sample_rows = _rows_of(rows, _Tokens)
         p = self.samples_per_token
         values = np.zeros((r, length, p), dtype=np.float32)
         observed = np.zeros((r, length, p), dtype=bool)
@@ -462,7 +486,7 @@ class Packer:
         document = np.full((r, length), -1, dtype=np.int64)
         dataset = np.full((r, length), -1, dtype=np.int64)
         signal_type = np.full((r, length), -1, dtype=np.int64)
-        for i, row in enumerate(rows):
+        for i, row in enumerate(sample_rows):
             at = 0
             for d, t in enumerate(row):
                 n = len(t.slot)

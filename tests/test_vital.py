@@ -5,12 +5,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-vitaldb = pytest.importorskip("vitaldb")
+pytest.importorskip("vitaldb")
 
-from vitaldb.utils import Track  # noqa: E402
+import vitaldb
+from vitaldb.utils import Track
 
-from biosignal_data.standard import sources  # noqa: E402
-from biosignal_data.standard.discover import discover  # noqa: E402
+from biosignal_data.standard import sources
+from biosignal_data.standard.discover import discover
 
 RNG = np.random.default_rng(7)
 T0 = 4102444800.0  # 2100-01-01, as VitalDB's anonymized files start
