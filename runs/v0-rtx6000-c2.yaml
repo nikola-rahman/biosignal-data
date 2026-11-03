@@ -19,6 +19,7 @@ data:
   workers: 10                 # of 12 cores: the rest for the training process
   pieces_per_epoch: 1
   mixture: null               # every block once per epoch (the mix follows the data)
+  flat_runs: null             # every stored value observed
 
 tokens:
   max_tokens: 8192

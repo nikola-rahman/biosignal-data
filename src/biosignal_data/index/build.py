@@ -17,6 +17,7 @@ import csv
 import hashlib
 import io
 import logging
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -33,7 +34,7 @@ from biosignal_data.index.rules import (
     SubjectTable,
     channel_overrides,
 )
-from biosignal_data.index.signals import signal_type
+from biosignal_data.index.signals import SignalType, signal_type
 from biosignal_data.index.subjects import split_of, subject_of
 from biosignal_data.read.raw import complete_versions
 from biosignal_data.standard import kept_files
@@ -190,7 +191,6 @@ def _index_dataset(
 ) -> int:
     """Add the recordings and channels of one standard version; returns the recordings."""
     dataset_id = location.dataset_id
-    overrides = channel_overrides(rules)
     table = None
     if rules.subject is not None and rules.subject.table is not None:
         table = _subject_table(store, location, rules.subject.table)
@@ -200,6 +200,7 @@ def _index_dataset(
         for i, h in enumerate(rules.held_out) if h.table is not None
     }  # fmt: skip
     indexed = set()
+    overrides: dict[str, list[tuple[re.Pattern[str], SignalType]]] = {}  # per recording
     for r in _read(store, location.table_key("recordings")).to_pylist():
         if not r["signals"]:
             found.without_signals += 1
@@ -231,7 +232,9 @@ def _index_dataset(
     for c in _read(store, location.table_key("channels")).to_pylist():
         if c["recording_id"] not in indexed:
             continue
-        kind, decided_by = signal_type(c["name"], overrides)
+        if c["recording_id"] not in overrides:
+            overrides[c["recording_id"]] = channel_overrides(rules, c["recording_id"])
+        kind, decided_by = signal_type(c["name"], overrides[c["recording_id"]])
         if decided_by == "none":
             found.unknown[f"{dataset_id}: {c['name']}"] += 1
         found.channels.append(

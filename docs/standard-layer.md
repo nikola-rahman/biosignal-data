@@ -18,7 +18,11 @@ never from a source.
   group is one array (e.g. `250Hz`). Choosing a common rate is a decision for training, not
   for storage.
 - **Source names.** Channel names, units and labels are kept as the source wrote them. The
-  `channels` table has a `standard_name` column for a mapping added later.
+  `channels` table has a `standard_name` column for a mapping added later. One exception:
+  a unit that the dataset's headers give wrong, by a rule in [`standard.yaml`](../standard.yaml)
+  with its source, the quotes and the check of the values (`units`; hd-semg writes V for
+  signals in mV). Then `unit` is the true unit and the channel's `source` keeps the unit as
+  written (`unit_as_written`); the samples, scale and offset do not change.
 - **Lineage.** Every recording lists the raw files it was made from, with their SHA-256.
   Every raw file of the version is either used or listed as not converted, with the reason.
 - **Immutable.** A version is complete when `_SUCCESS` exists, and is not changed after that.

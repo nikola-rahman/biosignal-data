@@ -35,7 +35,7 @@ from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 from biosignal_data.index.build import ROOT as INDEX_ROOT
 from biosignal_data.storage.stores import Store, StoreFactory
 from biosignal_data.training import mixture
-from biosignal_data.training.loader import ExampleSource, Selection
+from biosignal_data.training.loader import ExampleSource, FlatRuns, Selection
 from biosignal_model.batch import SIGNAL_TYPES, Analysis, Batch, Inputs, Packer, concat
 from biosignal_model.model import Encoder, ModelConfig, masked_loss
 
@@ -57,6 +57,16 @@ class MixtureSection(_Section):
     clusters: dict[str, list[str]]
 
 
+class FlatRunsSection(_Section):
+    """A run of one stored value is not observed (no input value, no loss) if it is longer
+    than `factor` times the median run of its channel in the span read with `margin_s` on
+    both sides, and longer than `minimum_s`; see biosignal_data.training.FlatRuns."""
+
+    factor: float
+    minimum_s: float
+    margin_s: float
+
+
 class DataSection(_Section):
     store: str  # s3://bucket or a local path
     index: str  # the index version, e.g. 2026-10-20
@@ -76,6 +86,9 @@ class DataSection(_Section):
     pieces_per_epoch: int
     # None: every block once per epoch (the mix follows the data); the training split only
     mixture: MixtureSection | None
+    # Runs of one stored value that are not observed (biosignal_data.training.FlatRuns);
+    # None: every stored value is observed.
+    flat_runs: FlatRunsSection | None
 
 
 class TokenSection(_Section):
@@ -169,6 +182,7 @@ class TrainConfig(_Section):
 ADDED_LATER: dict[tuple[str, str], Any] = {
     ("data", "mixture"): None,  # 44e5541
     ("data", "pieces_per_epoch"): 1,  # 7bc3284
+    ("data", "flat_runs"): None,  # every stored value observed, as before
 }
 
 
@@ -239,6 +253,7 @@ def _stream(
         max_tokens=t.max_tokens, samples_per_token=t.samples_per_token,
         max_channels=t.max_channels, block_s=d.block_s, shuffle_buffer=d.shuffle_buffer,
         reads_in_flight=d.reads_in_flight, seed=config.run.seed, passes=passes,
+        flat_runs=FlatRuns(**d.flat_runs.model_dump()) if d.flat_runs is not None else None,
     )  # fmt: skip
     datasets = sorted({r.dataset_id for r in selection.recordings})
     return BatchStream(source, config, datasets, rank, ranks, rows)

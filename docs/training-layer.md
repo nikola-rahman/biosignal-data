@@ -44,8 +44,11 @@ changes, whatever is added to the index later.
 
 ### Signal types
 
-Each channel gets one of `ecg`, `eeg`, `eog`, `emg`, `resp`, `spo2`, `ppg`, `bp`, `hr`,
-`temp`, `position`, `accel`, `scg`, `pcg`, `sound`, `other`, or `unknown`.
+Each channel gets one of `ecg`, `eeg`, `eog`, `emg`, `emg_envelope` (rectified and smoothed
+EMG, e.g. sleep-edfx's 1 Hz "EMG envelope expressed in uV rms"), `resp`, `spo2`, `ppg`, `bp`,
+`hr`, `temp`, `position`, `accel`, `scg`, `pcg`, `sound`, `other` (device status, event
+markers, channels the documentation says to ignore), or `unknown`. A dataset's channel rule
+can hold for some of its recordings only (`recording`: a regex on the recording id).
 `signal_type_from` says what decided it: `dataset` (a channel rule of the dataset in
 index.yaml), `name` (a general rule in `src/biosignal_data/index/signals.py`) or `none`.
 A name no rule matches stays `unknown`, never a guess; the manifest lists those names.
@@ -77,6 +80,17 @@ channel at its native rate:
 
 The signals are in random order, so the order of channels in a file (a montage
 convention) means nothing. Nothing is resampled, filtered, re-referenced or normalized.
+
+**Flat runs** (`flat_runs`, a setting of the run; none: every stored value is observed). A
+lead that is off, a device that stopped, or a held value gives a run of one stored value. A
+run is not observed (NaN: no input value, no loss) if it is longer than `factor` times the
+median run of its channel and longer than `minimum_s`. The median is measured in the span
+that is read, with `margin_s` more on each side: the runs at the edges of a span are judged
+on the whole run if it is at most `margin_s` long (longer runs on at least `margin_s` of
+them). No value depends on the signal type: the median run is a few samples for EEG, ECG
+and EMG (their noise) and seconds for SpO2 in whole percent. A channel that holds one value
+in all of the span and its margins is not marked: a held level can be information (a stable
+SpO2); channels that hold a placeholder are left out by an index rule instead.
 
 **How a recording becomes examples.** A time cursor moves through the recording. At each
 step the selected channels are put in random order and cut into groups of random size;

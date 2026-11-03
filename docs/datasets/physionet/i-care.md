@@ -46,3 +46,5 @@ biosignal-data download physionet/i-care --dest s3://<bucket>
 ## Notes
 
 - Public subset of the full I-CARE cohort.
+- Signal unit (checked 2026-10-29): the WFDB headers write "nu", and the release notes of v2.1 say why: "It add "nu" units to the ADC gain in the WFDB headers to clarify that the recordings do not have units" (https://physionet.org/content/i-care/2.1/). The paper (Amorim et al., Crit Care Med 2023, PMC10841086) gives no unit or scaling for the files: "data was first converted to .mat format using EEGLAB and then harmonized into WFDB format", "with 16-bit representation for the signal data", "No filtering was performed"; its quantitative EEG analysis uses thresholds in uV ("average five-second amplitude above 500 μV", "Suppressions were defined as segments with amplitudes of <10 μV"). So the unit is not documented: the index keeps "nu". Measured on 2026-10-29: the amplitude of the 5 hospitals differs by about 20 % and matches calibrated EEG in uV (factor about 1).
+- SpO2 (checked 2026-10-29): 200 sampled recordings hold the stored value 0 (1 at 500 Hz) in 120 s each; index.yaml types SpO2 "other" (a placeholder).

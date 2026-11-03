@@ -22,6 +22,7 @@ data:
   reads_in_flight: 16
   workers: 11                 # of each of the 2 GPU processes (24 cores)
   pieces_per_epoch: 18                 # ~1 h each: fresh data workers every hour
+  flat_runs: null             # every stored value observed
   mixture:
     rule: unimax
     budget_tokens: 16425702255  # the training tokens of index 2026-10-27b: v1's one pass

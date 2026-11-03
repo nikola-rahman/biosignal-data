@@ -31,6 +31,8 @@ class SignalType(StrEnum):
     SOUND = "sound"  # microphone, snoring
     OTHER = "other"  # device status, markers
     UNKNOWN = "unknown"
+    # Added after the others, so that the position of each type stays (batch.SIGNAL_TYPES).
+    EMG_ENVELOPE = "emg_envelope"  # rectified and smoothed EMG (e.g. uV rms at 1 Hz)
 
 
 _ELECTRODE = r"(?:FP|AF|FC|FT|CP|TP|PO|F|C|T|P|O|A|M)(?:Z|\d{1,2})"

@@ -5,7 +5,7 @@ selection = Selection.load(store, "2026-10-20", split="train", signal_types=None
 source = ExampleSource(
     selection, store_factory, cache_directory=Path("/data/cache"), cache_bytes=200 * 2**30,
     max_tokens=8192, samples_per_token=64, max_channels=32, block_s=1800.0, shuffle_buffer=4096,
-    reads_in_flight=8, seed=0, passes=None,
+    reads_in_flight=8, seed=0, passes=None, flat_runs=None,
 )
 for example in source.examples(epoch=0, part=0, parts=1):
     example.signals  # the model input: values, rate and start time of each channel
@@ -43,6 +43,10 @@ buffer. Memory is bounded: two buffers of `shuffle_buffer` examples, and one spa
 
 `parts`: the blocks are dealt round-robin over the parts (data loader workers times
 distributed ranks), after a shuffle that depends on `seed` and `epoch` only.
+
+Flat runs (`flat_runs`, optional): a run of one stored value much longer than the channel's
+usual runs is a lead off, a stopped device or a held value, not a measurement; its samples
+become NaN (not observed: no input value, no loss). See `FlatRuns`.
 """
 
 from __future__ import annotations
@@ -121,6 +125,45 @@ class Block:
     index: int
     last: bool
     copy: int = 0  # the block's n-th reading in an epoch (a mixture repeats blocks)
+
+
+@dataclass(frozen=True)
+class FlatRuns:
+    """Which runs of one stored value are not observed. The runs of a channel are found
+    in the span that is read, with `margin_s` more on each side (within the recording); a
+    run is not observed if it is longer than `factor` times the median length of the runs
+    there, and longer than `minimum_s`. A channel that holds one value in all of it is not
+    marked by this rule (it has no usual runs to compare with; a level held for a long time
+    can be information, e.g. a stable SpO2).
+
+    No value depends on the signal type: the median run length is the channel's own (a few
+    samples for EEG, ECG and EMG with their noise; seconds for SpO2 in whole percent). The
+    decision is exact (the same as on the whole recording) for every run up to `margin_s`
+    long; a longer run that is cut by the edge of the margin is judged on the part inside,
+    which is at least `margin_s` long. The median comes from the span and its margins."""
+
+    factor: float
+    minimum_s: float
+    margin_s: float
+
+    def __post_init__(self) -> None:
+        if self.factor < 1 or self.minimum_s < 0 or self.margin_s < 0:
+            raise ValueError("flat_runs: factor >= 1, minimum_s >= 0 and margin_s >= 0")
+
+    def margin(self, rate: float) -> int:
+        return math.ceil(round(self.margin_s * rate, 9))
+
+    def mask(self, stored: np.ndarray, rate: float) -> np.ndarray:
+        """True for the samples of `stored` (one channel) in runs that are not observed."""
+        flat = np.zeros(stored.size, dtype=bool)
+        if stored.size < 2:
+            return flat
+        cuts = np.flatnonzero(stored[1:] != stored[:-1]) + 1
+        if not cuts.size:  # one value in all of it: not this rule
+            return flat
+        lengths = np.diff(np.concatenate([[0], cuts, [stored.size]]))
+        threshold = max(self.factor * float(np.median(lengths)), self.minimum_s * rate)
+        return np.repeat(lengths > threshold, lengths)
 
 
 @dataclass(frozen=True)
@@ -240,9 +283,11 @@ class ExampleSource:
         reads_in_flight: int,
         seed: int,
         passes: Mapping[str, float] | None,
+        flat_runs: FlatRuns | None,
     ) -> None:
         """`passes`: readings of each dataset's blocks in one epoch (training.mixture), or
-        None: every block once."""
+        None: every block once. `flat_runs`: which runs of one stored value are not
+        observed (FlatRuns), or None: every stored value is."""
         if samples_per_token < 1 or max_channels < 1:
             raise ValueError("samples_per_token and max_channels are at least 1")
         if max_tokens <= 2 * max_channels:
@@ -269,6 +314,7 @@ class ExampleSource:
             if missing or any(v < 0 for v in passes.values()):
                 raise ValueError(f"passes: none or negative for {sorted(missing) or passes}")
         self.passes = dict(passes) if passes is not None else None
+        self.flat_runs = flat_runs
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
@@ -439,16 +485,24 @@ class ExampleSource:
         start_s: float,
         stop_s: float,
     ) -> dict[Channel, Signal]:
-        """The samples of [start_s, stop_s) of each channel, one read per array."""
+        """The samples of [start_s, stop_s) of each channel, one read per array (with
+        the margins of `flat_runs` on both sides, if set)."""
         found: dict[Channel, Signal] = {}
         for name in {c.array for c in channels}:
             mine = [c for c in channels if c.array == name]
             rate = mine[0].sampling_rate
+            length = arrays[name].length
             first = _first_sample(start_s, mine[0])
-            last = min(arrays[name].length, _first_sample(stop_s, mine[0]))
-            stored = blocks.span(arrays[name], first, last, self._getter(recording))
+            last = min(length, _first_sample(stop_s, mine[0]))
+            margin = self.flat_runs.margin(rate) if self.flat_runs is not None else 0
+            low, high = max(0, first - margin), min(length, max(first, last) + margin)
+            stored = blocks.span(arrays[name], low, high, self._getter(recording))
+            inside = slice(first - low, max(first, last) - low)
             for c in mine:
-                found[c] = Signal(_values(stored[c.index], c), rate, first / rate - start_s)
+                values = _values(stored[c.index, inside], c)
+                if self.flat_runs is not None and values.size:
+                    values[self.flat_runs.mask(stored[c.index], rate)[inside]] = np.nan
+                found[c] = Signal(values, rate, first / rate - start_s)
         return found
 
     def _getter(self, recording: Recording) -> Callable[[blocks.BlockRef], bytes]:

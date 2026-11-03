@@ -26,6 +26,7 @@ from biosignal_data.standard.rules import (
     EdfSuffixes,
     PickleRecordings,
     StandardRules,
+    UnitCorrection,
 )
 from biosignal_data.storage.stores import LocalStore
 from tests.conftest import FakeFetcher, make_dataset
@@ -903,9 +904,47 @@ def test_a_paired_annotation_file_that_starts_at_another_time_fails_its_recordin
     )
 
 
+def _unit_rules(written: str) -> StandardRules:
+    """mitdb's ECG (written in mV) is said to be in uV; its X channel has no rule."""
+    rule = UnitCorrection(
+        channels="^ECG$", written=written, unit="uV", source="https://example.org/",
+        evidence="the ECG is in microvolts", checked="its values",
+    )  # fmt: skip
+    return StandardRules(datasets=[DatasetRules(id="physionet/mitdb", units=[rule])])
+
+
+def test_a_unit_rule_gives_the_true_unit_and_keeps_the_written_one(
+    store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
+) -> None:
+    plan = plan_standard(store, "physionet/mitdb", "1.0.0", rules=_unit_rules("mV"))
+    report = convert(plan, store, workers=1, part_bytes=1, work_dir=tmp_path / "work",
+                     processes=0)  # fmt: skip
+    assert report.complete and not report.failed
+    ds = StandardDataset.open(store, "physionet/mitdb", "1.0.0")
+    channels = {(c["recording_id"], c["name"]): c for c in ds.channels.to_pylist()}
+    ecg, x = channels["r1", "ECG"], channels["r1", "X"]
+    assert (ecg["unit"], json.loads(ecg["source"])["unit_as_written"]) == ("uV", "mV")
+    assert (x["unit"], "unit_as_written" in json.loads(x["source"])) == ("mV", False)
+    assert ecg["scale"] == pytest.approx(1 / 200)  # the samples and calibration stay
+    np.testing.assert_array_equal(ds.read("r1", "200Hz"), raw["ecg"][None, :])
+
+
+def test_a_unit_rule_for_another_written_unit_fails_the_recording(
+    store: LocalStore, tmp_path: Path, raw: dict[str, np.ndarray]
+) -> None:
+    plan = plan_standard(store, "physionet/mitdb", "1.0.0", rules=_unit_rules("V"))
+    report = convert(plan, store, workers=1, part_bytes=1, work_dir=tmp_path / "work")
+    assert list(report.failed) == ["r1"]
+    expected = "has the unit 'mV'; the standard.yaml rule for '^ECG$' expects 'V'"
+    assert expected in report.failed["r1"]
+
+
 def test_standard_yaml_is_valid() -> None:
     rules = StandardRules.load()
     assert rules.get("physionet/sleep-edfx") is not None
+    hd_semg = rules.get("physionet/hd-semg")
+    assert hd_semg is not None and hd_semg.units[0].unit_of("ED-8-8", "V") == "mV"
+    assert hd_semg.units[0].unit_of("thumb", "V") is None
 
 
 ISRUC_RULES = StandardRules(

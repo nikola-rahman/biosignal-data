@@ -70,3 +70,29 @@ datasets:
         (SX_E4.zip, SX_RespiBAN.h5) are not synchronised ("the RespiBAN and the Empatica
         E4 data need to be manually synchronised") and are kept as published, not
         converted; the benchmark's labels refer to the pickle's signals.
+  - id: physionet/hd-semg
+    units:
+      - channels: '^(ED|EP|FD|FP)-[1-8]-[1-8]$'  # the 256 electrodes of the four 8x8 grids
+        written: V
+        unit: mV
+        source: https://physionet.org/content/hd-semg/2.0.0/
+        evidence: >-
+          Header of 1dof_dataset/subject01_session1/1dof_raw_finger1_sample1.hea:
+          "1dof_raw_finger1_sample1.dat 16 98807.5859(-3216)/V 0 0 -1105 3400 0 ED-8-8".
+          readme.txt: "one ``*.hea" file storing the scaling factors and other supplementary
+          information". equipment_info.pdf: "We used the Quattrocento system (OT
+          Bioelettronica, Torino, Italy) to acquire 256-channel HD-sEMG signals." The page,
+          readme.txt and equipment_info.pdf give no unit for the HD-sEMG signals.
+        checked: >-
+          2026-10-29, all 6,734,848 EMG channels of standard version 2.0.0 (scale and offset
+          of each; each file fills the int16 range, so its gain is set by its own signal):
+          the largest physical value a channel holds is 0.37 (median), 1.9 (99th
+          percentile), 24.4 (largest); offsets up to 8.3; median absolute deviation 0.013
+          (1dof_raw_finger1_sample1, 10 s). In V these are hundreds of mV to tens of volts
+          at a skin electrode, which no surface EMG amplifier takes in; in mV they are
+          surface EMG of the forearm, and the median absolute deviation matches grabmyo
+          (0.027 mV, its headers in mV, the same kind of recording).
+        notes: >-
+          The force channels (thumb ... little) stay as written (V): the force amplifier's "Output Signals ±10V, ±5V Bipolar"
+          (equipment_info.pdf) fits their values (largest 2.8). The paper (IEEE TNSRE 29,
+          1035-1046, 2021) could not be read (the publisher blocks automated access).

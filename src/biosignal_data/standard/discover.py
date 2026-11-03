@@ -30,7 +30,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from biosignal_data.standard.rules import EdfAnnotationFiles
+    from biosignal_data.standard.rules import EdfAnnotationFiles, UnitCorrection
 
 EDF_SUFFIXES = (".edf", ".bdf")
 VITAL_SUFFIX = ".vital"  # VitalDB (VitalRecorder): every such file is a recording
@@ -64,6 +64,7 @@ class Unit:
     # A segment of a multi-segment WFDB record, whose own header gives no start: its start,
     # from its record's header (the record's start and the frames of the segments before it).
     start_time: datetime | None = None
+    unit_corrections: tuple[UnitCorrection, ...] = ()  # standard.yaml rules of the dataset
 
 
 @dataclass(frozen=True)

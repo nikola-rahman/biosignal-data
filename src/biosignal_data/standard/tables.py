@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import io
 import json
-from typing import Any
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from biosignal_data.standard.blocks import BLOCKS
-from biosignal_data.standard.sources import Event, Source
+from biosignal_data.standard.sources import Channel, Event, Source
+
+if TYPE_CHECKING:
+    from biosignal_data.standard.rules import UnitCorrection
 
 RECORDINGS = pa.schema(
     [
@@ -89,31 +93,45 @@ def recording_table(
 
 
 def channel_table(
-    recording_id: str, source: Source, sha256: dict[tuple[str, int], str]
+    recording_id: str,
+    source: Source,
+    sha256: dict[tuple[str, int], str],
+    unit_corrections: Sequence[UnitCorrection] = (),
 ) -> pa.Table:
-    """`sha256`: (array, index) -> the SHA-256 of the channel's stored samples."""
-    return pa.Table.from_pylist(
-        [
-            {
-                "recording_id": recording_id,
-                "array": g.name,
-                "index": i,
-                "name": c.name,
-                "standard_name": None,
-                "unit": c.unit,
-                "sampling_rate": g.rate,
-                "dtype": g.dtype.name,
-                "scale": c.scale,
-                "offset": c.offset,
-                "invalid_value": c.invalid_value,
-                "sha256": sha256.get((g.name, i)),
-                "source": _json(c.source),
-            }
-            for g in source.groups
-            for i, c in enumerate(g.channels)
-        ],
-        schema=CHANNELS,
-    )
+    """`sha256`: (array, index) -> the SHA-256 of the channel's stored samples.
+    `unit_corrections`: the dataset's standard.yaml rules for units its headers give wrong."""
+    rows = []
+    for g in source.groups:
+        for i, c in enumerate(g.channels):
+            unit, fields = _unit(c, unit_corrections)
+            rows.append(
+                {
+                    "recording_id": recording_id,
+                    "array": g.name,
+                    "index": i,
+                    "name": c.name,
+                    "standard_name": None,
+                    "unit": unit,
+                    "sampling_rate": g.rate,
+                    "dtype": g.dtype.name,
+                    "scale": c.scale,
+                    "offset": c.offset,
+                    "invalid_value": c.invalid_value,
+                    "sha256": sha256.get((g.name, i)),
+                    "source": _json(fields),
+                }
+            )
+    return pa.Table.from_pylist(rows, schema=CHANNELS)
+
+
+def _unit(channel: Channel, corrections: Sequence[UnitCorrection]) -> tuple[str, dict[str, Any]]:
+    """The channel's unit and its source fields: the first rule for the channel gives the
+    unit, and the unit as written goes into the source fields."""
+    for rule in corrections:
+        unit = rule.unit_of(channel.name, channel.unit)
+        if unit is not None:
+            return unit, channel.source | {"unit_as_written": channel.unit}
+    return channel.unit, channel.source
 
 
 def event_table(recording_id: str, events: list[Event]) -> pa.Table:
