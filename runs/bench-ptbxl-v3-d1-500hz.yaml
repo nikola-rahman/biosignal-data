@@ -42,6 +42,7 @@ settings:
     kernel_frequencies: 24, kernel_min_hz: 1.0, kernel_max_hz: 240.0}
   from_scratch_model: null           # the checkpoint's size, no dropout
   fine_tuning_rungs: null
+  fine_tuning_label_fraction: 1.0  # every training patient
   seed: 0
 wandb_project: biosignal-fm
 wandb_entity: schnyox-s

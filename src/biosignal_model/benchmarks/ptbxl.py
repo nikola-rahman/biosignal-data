@@ -192,7 +192,17 @@ class PtbxlSettings(BaseModel):
     # rungs' and fold 9 chooses the rung. Needs the constant schedule, no patience, and the
     # last rung at fine_tuning_epochs. None: one run, the best fold-9 epoch is chosen.
     fine_tuning_rungs: CooldownRungs | None
+    # The share of the training patients (folds 1-8) whose records fine_tuning and
+    # from_scratch train on; 1: all. Drawn with `seed`, whole patients, the same for every
+    # method of a run, so pretraining is compared at few labels too (it helps most there).
+    fine_tuning_label_fraction: float
     seed: int
+
+    @model_validator(mode="after")
+    def _label_fraction_fits(self) -> PtbxlSettings:
+        if not 0.0 < self.fine_tuning_label_fraction <= 1.0:
+            raise ValueError("fine_tuning_label_fraction is in (0, 1]")
+        return self
 
     @model_validator(mode="after")
     def _rungs_fit(self) -> PtbxlSettings:
@@ -662,6 +672,17 @@ class _FineTuning:
         return float(np.mean(losses + window))
 
 
+def _labelled(records: Records, train: list[int], fraction: float, seed: int) -> list[int]:
+    """The training records of a random `fraction` of the training patients (whole patients;
+    the same draw for every method of a run with this seed)."""
+    if fraction == 1.0:
+        return train
+    patients = sorted({records.examples[i].origin.subject_id for i in train})
+    rng = random.Random(f"labelled/{seed}")  # noqa: S311 - not secret
+    chosen = set(rng.sample(patients, max(1, round(fraction * len(patients)))))
+    return [i for i in train if records.examples[i].origin.subject_id in chosen]
+
+
 def _crop_to(length_s: float | None, example: Example, rng: random.Random) -> Example:
     """_random_crop with the crop length first (a picklable partial for the data workers)."""
     return _random_crop(example, length_s, rng)
@@ -755,7 +776,9 @@ def end_to_end(
         groups, weight_decay=s.fine_tuning_weight_decay, betas=s.fine_tuning_betas
     )
     packer = _packer(config, max_tokens, s.rows, lead_slots(records.examples, s.fixed_slots))
-    train = [i for i in range(len(records.ids)) if records.folds[i] in TRAIN]
+    train = _labelled(records, [i for i in range(len(records.ids)) if records.folds[i] in TRAIN],
+                      s.fine_tuning_label_fraction, s.seed)  # fmt: skip
+    log({f"{prefix}/train_records": float(len(train))})
     rng = random.Random(s.seed)  # noqa: S311 - not secret
     per_epoch = -(-len(train) // s.fine_tuning_examples_per_step)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, _schedule(s, per_epoch))

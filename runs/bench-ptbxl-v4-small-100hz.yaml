@@ -43,6 +43,7 @@ settings:
   from_scratch_tokenizer: null
   from_scratch_model: null           # the checkpoint's model
   fine_tuning_rungs: null
+  fine_tuning_label_fraction: 1.0  # every training patient
   seed: 0
 wandb_project: biosignal-fm
 wandb_entity: schnyox-s

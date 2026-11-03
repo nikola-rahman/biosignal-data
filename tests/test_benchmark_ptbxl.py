@@ -84,7 +84,7 @@ def test_the_probe_chooses_on_fold_9_and_scores_fold_10() -> None:
         fine_tuning_betas=(0.9, 0.999), fine_tuning_warmup_epochs=0.0,
         fine_tuning_schedule="constant", fine_tuning_grad_clip=None, fine_tuning_head="linear",
         from_scratch_samples_per_token=None, from_scratch_tokenizer=None, from_scratch_model=None,
-        fine_tuning_rungs=None,
+        fine_tuning_rungs=None, fine_tuning_label_fraction=1.0,
         seed=0,
     )  # fmt: skip
     logged: list[dict[str, float]] = []
@@ -119,7 +119,7 @@ def test_fine_tuning_runs_end_to_end_on_a_small_model(monkeypatch: pytest.Monkey
         fine_tuning_betas=(0.9, 0.999), fine_tuning_warmup_epochs=0.0,
         fine_tuning_schedule="constant", fine_tuning_grad_clip=None, fine_tuning_head="linear",
         from_scratch_samples_per_token=None, from_scratch_tokenizer=None, from_scratch_model=None,
-        fine_tuning_rungs=None,
+        fine_tuning_rungs=None, fine_tuning_label_fraction=1.0,
         seed=0,
     )  # fmt: skip
     device = torch.device("cpu")
@@ -218,7 +218,7 @@ def _settings_for_schedule(schedule: Literal["constant", "cosine"]) -> ptbxl.Ptb
         fine_tuning_warmup_epochs=2.0, fine_tuning_schedule=schedule,
         fine_tuning_grad_clip=1.0, fine_tuning_head="reference",
         from_scratch_samples_per_token=None, from_scratch_tokenizer=None, from_scratch_model=None,
-        fine_tuning_rungs=None,
+        fine_tuning_rungs=None, fine_tuning_label_fraction=1.0,
         seed=0,
     )  # fmt: skip
 
@@ -376,7 +376,7 @@ def test_label_groups_are_scored_on_their_own_and_fold_9_still_chooses() -> None
         fine_tuning_warmup_epochs=0.0, fine_tuning_schedule="constant",
         fine_tuning_grad_clip=None, fine_tuning_head="linear",
         from_scratch_samples_per_token=None, from_scratch_tokenizer=None, from_scratch_model=None,
-        fine_tuning_rungs=None,
+        fine_tuning_rungs=None, fine_tuning_label_fraction=1.0,
         seed=0,
     )  # fmt: skip
     logged: list[dict[str, float]] = []
@@ -512,3 +512,20 @@ def test_every_ptbxl_run_file_is_valid() -> None:
         settings = ptbxl.PtbxlSettings.model_validate(BenchmarkRun.load(f).settings)
         if f.name.startswith("bench-ptbxl-rungs-"):
             assert settings.fine_tuning_rungs is not None, f.name
+
+
+def test_a_label_fraction_keeps_whole_patients_and_the_same_ones_for_a_seed() -> None:
+    codes = [["NORM"]] * 40
+    records = _records(codes, [1] * 40)
+    records.examples[:] = [  # two records a patient
+        Example(e.signals, Origin(e.origin.dataset_id, e.origin.recording_id, f"p{i // 2}",
+                                  0.0, e.origin.channels))
+        for i, e in enumerate(records.examples)
+    ]  # fmt: skip
+    train = list(range(40))
+    assert ptbxl._labelled(records, train, 1.0, 0) == train
+    tenth = ptbxl._labelled(records, train, 0.1, 0)
+    patients = {records.examples[i].origin.subject_id for i in tenth}
+    assert len(patients) == 2 and len(tenth) == 4  # 10 % of 20 patients, both their records
+    assert tenth == ptbxl._labelled(records, train, 0.1, 0)
+    assert tenth != ptbxl._labelled(records, train, 0.1, 1)

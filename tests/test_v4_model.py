@@ -250,7 +250,7 @@ def test_ptbxl_fine_tunes_a_v4_model_from_its_checkpoint_weights() -> None:
         fine_tuning_warmup_epochs=0.0, fine_tuning_schedule="constant",
         fine_tuning_grad_clip=None, fine_tuning_head="linear",
         from_scratch_samples_per_token=None, from_scratch_tokenizer=None, from_scratch_model=None,
-        fine_tuning_rungs=None, seed=0,
+        fine_tuning_rungs=None, fine_tuning_label_fraction=1.0, seed=0,
     )  # fmt: skip
     scores, (p_val, p_test) = ptbxl.end_to_end(
         config, records, y, 600, settings, torch.device("cpu"), state, lambda m: None, "f"
