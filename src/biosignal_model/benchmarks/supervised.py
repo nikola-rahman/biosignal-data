@@ -102,7 +102,8 @@ def class_balanced_weights(positives: np.ndarray, beta: float) -> np.ndarray:
     """Cui et al. 2019: 1 / E_n per class, E_n = (1 - beta^n) / (1 - beta), summing to C."""
     n = np.maximum(positives.astype(np.float64), 1.0)
     w: np.ndarray = (1.0 - beta) / (1.0 - np.power(beta, n))
-    return w * len(w) / w.sum()
+    weights: np.ndarray = w * len(w) / w.sum()
+    return weights
 
 
 def asymmetric_loss(
