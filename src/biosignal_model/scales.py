@@ -15,15 +15,19 @@ as YAML with what made it, and a training run names the table it uses.
 from __future__ import annotations
 
 import datetime as dt
+import io
 import math
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 import yaml
 from pydantic import BaseModel, ConfigDict
 
-from biosignal_data.storage.stores import StoreFactory
+from biosignal_data.index.build import ROOT as INDEX_ROOT
+from biosignal_data.storage.stores import Store, StoreFactory
 from biosignal_data.training.loader import (
     Channel,
     ExampleSource,
@@ -107,14 +111,23 @@ def robust_spread(values: np.ndarray) -> float | None:
     return float(MAD_TO_SD * np.median(np.abs(v - np.median(v))))
 
 
+def datasets_of(store: Store, index: str, split: str) -> list[str]:
+    """The datasets with recordings in `split` of an index, from its recordings table (two
+    columns; loading the selection of every dataset at once takes several GB)."""
+    data = store.get_bytes(f"{INDEX_ROOT}/{index}/recordings.parquet")
+    if data is None:
+        raise FileNotFoundError(f"index {index}: no recordings table")
+    table = pq.read_table(io.BytesIO(data), columns=["dataset_id", "split"])
+    chosen = table.filter(pc.equal(table["split"], split))["dataset_id"]
+    return sorted(pc.unique(chosen).to_pylist())
+
+
 def build(settings: ScaleSettings, factory: StoreFactory, code_commit: str) -> ScaleTable:
     store = factory()
-    every = Selection.load(store, settings.index, split=settings.split,
-                           signal_types=set(settings.signal_types))  # fmt: skip
     spreads: dict[str, list[float]] = defaultdict(list)
     flat: dict[str, int] = defaultdict(int)
     sources: dict[str, set[str]] = defaultdict(set)
-    for dataset_id in sorted({r.dataset_id for r in every.recordings}):
+    for dataset_id in datasets_of(store, settings.index, settings.split):
         selection = Selection.load(store, settings.index, split=settings.split,
                                    signal_types=set(settings.signal_types),
                                    datasets={dataset_id})  # fmt: skip
