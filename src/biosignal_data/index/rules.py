@@ -212,12 +212,20 @@ class IndexRules:
         return self.datasets.get(dataset_id) or DatasetRules(id=dataset_id)
 
 
+def channel_rules_for(rules: DatasetRules, recording_id: str) -> tuple[int, ...]:
+    """The positions of the dataset's channel rules that hold for one recording, in order."""
+    return tuple(
+        k
+        for k, c in enumerate(rules.channels)
+        if c.recording is None or re.search(c.recording, recording_id)
+    )
+
+
 def channel_overrides(
     rules: DatasetRules, recording_id: str
 ) -> list[tuple[re.Pattern[str], SignalType]]:
     """The dataset's channel rules that hold for one recording, in their order."""
     return [
-        (re.compile(c.name), c.type)
-        for c in rules.channels
-        if c.recording is None or re.search(c.recording, recording_id)
+        (re.compile(rules.channels[k].name), rules.channels[k].type)
+        for k in channel_rules_for(rules, recording_id)
     ]

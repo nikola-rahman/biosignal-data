@@ -23,7 +23,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from pydantic import BaseModel, ConfigDict
 
@@ -32,9 +34,9 @@ from biosignal_data.index.rules import (
     DatasetRules,
     IndexRules,
     SubjectTable,
-    channel_overrides,
+    channel_rules_for,
 )
-from biosignal_data.index.signals import SignalType, signal_type
+from biosignal_data.index.signals import signal_type
 from biosignal_data.index.subjects import split_of, subject_of
 from biosignal_data.read.raw import complete_versions
 from biosignal_data.standard import kept_files
@@ -144,7 +146,8 @@ def build_index(
         manifests[dataset_id] = hashlib.sha256(data).hexdigest()
         indexed = _index_dataset(store, location, rules.get(dataset_id), found)
         log.info("%s %s: %d recordings indexed", dataset_id, location.version, indexed)
-    recordings, channels = found.recordings, found.channels
+    recordings = found.recordings
+    channels = pa.concat_tables(found.channels) if found.channels else CHANNELS.empty_table()
     subjects = {r["subject_id"]: r["subject_certain"] for r in recordings}
     manifest = IndexManifest(
         version=version,
@@ -161,11 +164,14 @@ def build_index(
         subjects=len(subjects),
         subjects_assumed=sum(1 for certain in subjects.values() if not certain),
         splits=dict(Counter(r["split"] for r in recordings)),
-        signal_types=dict(Counter(c["signal_type"] for c in channels)),
+        signal_types={
+            v["values"].as_py(): v["counts"].as_py()
+            for v in pc.value_counts(channels["signal_type"])
+        },
         unknown_channels=dict(found.unknown.most_common()),
     )
     store.put_bytes(f"{prefix}/recordings.parquet", _parquet(recordings, RECORDINGS))
-    store.put_bytes(f"{prefix}/channels.parquet", _parquet(channels, CHANNELS))
+    store.put_bytes(f"{prefix}/channels.parquet", _table_parquet(channels))
     store.put_bytes(f"{prefix}/_manifest.json", manifest.model_dump_json(indent=2).encode())
     store.put_bytes(f"{prefix}/{SUCCESS}", b"", content_type="text/plain")
     return IndexReport(f"{store.uri}/{prefix}", manifest)
@@ -176,7 +182,7 @@ class _Found:
     """The rows of the index, and what was left out, over all datasets."""
 
     recordings: list[dict[str, Any]] = field(default_factory=list)
-    channels: list[dict[str, Any]] = field(default_factory=list)
+    channels: list[pa.Table] = field(default_factory=list)  # CHANNELS, one table a dataset
     without_signals: int = 0
     excluded: Counter[str] = field(default_factory=Counter)
     held_out: Counter[str] = field(default_factory=Counter)
@@ -200,8 +206,8 @@ def _index_dataset(
         for i, h in enumerate(rules.held_out) if h.table is not None
     }  # fmt: skip
     indexed = set()
-    overrides: dict[str, list[tuple[re.Pattern[str], SignalType]]] = {}  # per recording
-    for r in _read(store, location.table_key("recordings")).to_pylist():
+    recordings = _read(store, location.table_key("recordings"), RECORDING_COLUMNS)
+    for r in recordings.to_pylist():
         if not r["signals"]:
             found.without_signals += 1
             continue
@@ -229,31 +235,68 @@ def _index_dataset(
                 "standard": location.prefix,
             }
         )
-    for c in _read(store, location.table_key("channels")).to_pylist():
-        if c["recording_id"] not in indexed:
-            continue
-        if c["recording_id"] not in overrides:
-            overrides[c["recording_id"]] = channel_overrides(rules, c["recording_id"])
-        kind, decided_by = signal_type(c["name"], overrides[c["recording_id"]])
-        if decided_by == "none":
-            found.unknown[f"{dataset_id}: {c['name']}"] += 1
-        found.channels.append(
-            {
-                "dataset_id": dataset_id,
-                "recording_id": c["recording_id"],
-                "array": c["array"],
-                "index": c["index"],
-                "name": c["name"],
-                "signal_type": kind.value,
-                "signal_type_from": decided_by,
-                "sampling_rate": c["sampling_rate"],
-                "unit": c["unit"],
-                "scale": c["scale"],
-                "offset": c["offset"],
-                "invalid_value": c["invalid_value"],
-            }
-        )
+    found.channels.append(_channels(store, location, rules, indexed, found.unknown))
     return len(indexed)
+
+
+# The columns of the standard tables that the index reads (not `source`: the header text)
+RECORDING_COLUMNS = ["recording_id", "signals", "duration_s", "start_time", "arrays"]
+CHANNEL_COLUMNS = ["recording_id", "array", "index", "name", "sampling_rate", "unit", "scale",
+                   "offset", "invalid_value"]  # fmt: skip
+
+
+def _channels(
+    store: Store, location: StandardLocation, rules: DatasetRules, indexed: set[str],
+    unknown: Counter[str],
+) -> pa.Table:  # fmt: skip
+    """The CHANNELS rows of the recordings `indexed`, in the order of the standard table, column
+    by column. The signal type is decided once for each distinct (channel rules that hold for
+    the recording, channel name) and taken from there for every channel; `unknown` counts the
+    channels of each name that no rule types."""
+    dataset_id = location.dataset_id
+    table = _read(store, location.table_key("channels"), CHANNEL_COLUMNS)
+    table = table.filter(pc.is_in(table["recording_id"], value_set=pa.array(sorted(indexed))))
+    recordings = pc.dictionary_encode(table["recording_id"].combine_chunks())
+    names = pc.dictionary_encode(table["name"].combine_chunks())
+    # which of the dataset's channel rules hold for each recording: few distinct sets
+    rule_sets: dict[tuple[int, ...], int] = {}
+    set_of_recording = np.array([
+        rule_sets.setdefault(channel_rules_for(rules, recording), len(rule_sets))
+        for recording in recordings.dictionary.to_pylist()
+    ], dtype=np.int64)  # fmt: skip
+    overrides = [
+        [(re.compile(rules.channels[k].name), rules.channels[k].type) for k in kept]
+        for kept in rule_sets
+    ]
+    name_list = names.dictionary.to_pylist()
+    rule_set = set_of_recording[recordings.indices.to_numpy()]  # of each channel
+    pairs, inverse = np.unique(
+        rule_set * len(name_list) + names.indices.to_numpy(), return_inverse=True
+    )
+    decided = [
+        signal_type(name_list[p % len(name_list)], overrides[p // len(name_list)]) for p in pairs
+    ]
+    counts = np.bincount(inverse, minlength=len(pairs))
+    for p, (_, decided_by), n in zip(pairs, decided, counts, strict=True):
+        if decided_by == "none":
+            unknown[f"{dataset_id}: {name_list[p % len(name_list)]}"] += int(n)
+    kinds = pa.array([kind.value for kind, _ in decided], pa.string())
+    by = pa.array([decided_by for _, decided_by in decided], pa.string())
+    columns = {
+        "dataset_id": pa.repeat(pa.scalar(dataset_id, pa.string()), len(table)),
+        "recording_id": table["recording_id"],
+        "array": table["array"],
+        "index": table["index"],
+        "name": table["name"],
+        "signal_type": kinds.take(pa.array(inverse)),
+        "signal_type_from": by.take(pa.array(inverse)),
+        "sampling_rate": table["sampling_rate"],
+        "unit": table["unit"],
+        "scale": table["scale"],
+        "offset": table["offset"],
+        "invalid_value": table["invalid_value"],
+    }
+    return pa.table(columns).cast(CHANNELS)
 
 
 def _subject_table(store: Store, location: StandardLocation, table: SubjectTable) -> dict[str, str]:
@@ -283,14 +326,18 @@ def _column(
     return mapping
 
 
-def _read(store: Store, key: str) -> pa.Table:
+def _read(store: Store, key: str, columns: list[str]) -> pa.Table:
     data = store.get_bytes(key)
     if data is None:
         raise FileNotFoundError(key)
-    return pq.read_table(io.BytesIO(data))
+    return pq.read_table(io.BytesIO(data), columns=columns)
 
 
 def _parquet(rows: list[dict[str, Any]], schema: pa.Schema) -> bytes:
+    return _table_parquet(pa.Table.from_pylist(rows, schema=schema))
+
+
+def _table_parquet(table: pa.Table) -> bytes:
     out = io.BytesIO()
-    pq.write_table(pa.Table.from_pylist(rows, schema=schema), out, compression="zstd")
+    pq.write_table(table, out, compression="zstd")
     return out.getvalue()
