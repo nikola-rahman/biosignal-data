@@ -1,0 +1,17 @@
+# The scale table of index 2026-11-03 (biosignal_model.scales; docs/architecture.md section 2):
+# windows cut as a v4 training run cuts them, at most 600 a dataset, 4 h a subject.
+store: s3://biosignal-data
+index: 2026-11-03
+split: train
+signal_types: [ecg, eeg, eog, emg, resp, spo2, ppg, bp, hr, temp, position, accel, scg, pcg, sound,
+               emg_envelope]
+windows_per_dataset: 600
+max_samples: 400000
+max_tokens: 8192
+token_s: 0.04
+max_channels: 32
+subject_hours_per_epoch: 4.0
+block_s: 1800.0
+cache_directory: /root/cache
+cache_bytes: 50000000000
+seed: 0

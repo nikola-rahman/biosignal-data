@@ -1,6 +1,7 @@
 """Command-line interface: `biosignal-model --help`.
 
     train      masked-token pretraining, with every setting from one YAML file
+    scales     the scale table of the value transform, from an index's training split
     benchmark  score a checkpoint on a benchmark (apnea), with its official protocol
 
 S3 settings come from biosignal-data.yaml (`s3` section); keys from the
@@ -52,6 +53,36 @@ def train_(
     typer.echo(
         " ".join(f"{k}={v:.4g}" for k, v in sorted(last.items()) if "/" in k and "_by_" not in k)
     )
+
+
+@app.command("scales")
+def scales(
+    settings_file: Annotated[Path, typer.Argument(help="The table's settings (YAML).")],
+    out: Annotated[Path, typer.Argument(help="Where the table goes (YAML, in the repo).")],
+    settings: Annotated[
+        Path | None, typer.Option(help="biosignal-data.yaml, for the S3 settings.")
+    ] = None,
+) -> None:
+    """The scale table of the value transform, from windows of an index's training split
+    (docs/architecture.md section 2; biosignal_model.scales)."""
+    import yaml  # noqa: PLC0415
+
+    from biosignal_model.scales import ScaleSettings, build, write  # noqa: PLC0415
+
+    chosen = ScaleSettings.model_validate(yaml.safe_load(settings_file.read_text()))
+    s3 = None
+    if chosen.store.startswith("s3://"):
+        try:
+            loaded, path = load_config(settings)
+            section = need(loaded.s3, "s3", path)
+        except ConfigError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(2) from exc
+        s3 = (section.endpoint, section.region, section.addressing)
+    table = build(chosen, StoreFactory(chosen.store, s3), _commit())
+    write(table, out)
+    for key, scale in table.scales.items():
+        typer.echo(f"{key}: {scale.scale:.4g} ({scale.windows} windows, {scale.flat_windows} flat)")
 
 
 @app.command("benchmark")
