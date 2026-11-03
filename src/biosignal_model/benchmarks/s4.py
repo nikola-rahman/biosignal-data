@@ -46,16 +46,22 @@ from typing import Literal
 import numpy as np
 import torch
 import torch.nn.functional as F
-from pydantic import BaseModel, ConfigDict
 from torch import nn
 
+from biosignal_model.benchmarks.supervised import (
+    Augmentation,
+    Ema,
+    RecipeSettings,
+    loss_function,
+    warmup_cosine,
+)
 from biosignal_model.benchmarks.xresnet1d import crop_starts
 
 
-class S4Settings(BaseModel):
-    """The recipe of reference_s4; none has a default (see the module docstring)."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
+class S4Settings(RecipeSettings):
+    """The recipe of reference_s4; none has a default (see the module docstring). The fields of
+    RecipeSettings (benchmarks/supervised.py: loss, moving average, augmentation, schedule,
+    stop, distillation) take the published recipe's values in its config."""
 
     input_size_s: float  # 2.5 (input_size 250 at 100 Hz)
     valid_stride_fraction: float  # 1.0: validation/test crops every input_size
@@ -355,26 +361,48 @@ def train_and_score(
     data = torch.from_numpy(x.astype(np.float32)).to(device)  # normalize False: as recorded
     target = torch.from_numpy(y.astype(np.float32)).to(device)
     size = int(round(s.input_size_s * rate))
-    model: nn.Module = (
-        S4ChannelModel(s, x.shape[1], y.shape[1], size, rate)
-        if isinstance(s, S4ChannelsSettings)
-        else S4Model(s, x.shape[1], y.shape[1], size)
-    ).to(device)
+
+    def build() -> nn.Module:
+        return (
+            S4ChannelModel(s, x.shape[1], y.shape[1], size, rate)
+            if isinstance(s, S4ChannelsSettings)
+            else S4Model(s, x.shape[1], y.shape[1], size)
+        ).to(device)
+
+    model = build()
     log({f"{prefix}/parameters": float(sum(p.numel() for p in model.parameters()))})
     optimizer = torch.optim.AdamW(model.parameters(), lr=s.learning_rate, betas=s.betas,
                                   eps=s.eps, weight_decay=s.weight_decay)  # fmt: skip
     per_epoch = len(tr) // s.batch_size  # drop_last
+    scheduler = (
+        torch.optim.lr_scheduler.LambdaLR(
+            optimizer, warmup_cosine(int(round(s.warmup_epochs * per_epoch)), s.epochs * per_epoch)
+        )
+        if s.schedule == "warmup_cosine"
+        else None
+    )
+    criterion = loss_function(s, y[tr], device)
+    ema = Ema(model, s.ema_decay) if s.ema_decay is not None else None
+    scored = ema.model if ema is not None else model  # the weights validated and tested
+    augment = Augmentation(s.augmentation, rate) if s.augmentation is not None else None
+    generator = torch.Generator(device=device)
+    generator.manual_seed(seed)
+    teacher = None
+    if s.distillation is not None:
+        teacher = build().eval()
+        teacher.load_state_dict(torch.load(s.distillation.teacher_weights, map_location=device,
+                                           weights_only=True))  # fmt: skip
     length = x.shape[2]
     starts = crop_starts(length, size, int(round(size * s.valid_stride_fraction)))
 
-    def predict(ids: np.ndarray, on: str) -> np.ndarray:
-        model.eval()
+    def predict(net: nn.Module, ids: np.ndarray, on: str) -> np.ndarray:
+        net.eval()
         out = []
         with torch.no_grad():
             for k in range(0, len(ids), s.batch_size):
                 batch = data[torch.from_numpy(ids[k : k + s.batch_size]).to(device)]
                 crops = torch.stack([batch[:, :, a : a + size] for a in starts], 1)
-                p = model(crops.flatten(0, 1)).view(len(batch), len(starts), -1)
+                p = net(crops.flatten(0, 1)).view(len(batch), len(starts), -1)
                 out.append((torch.sigmoid(p) if on == "probabilities" else p).mean(1).cpu().numpy())
         return np.concatenate(out)
 
@@ -386,26 +414,54 @@ def train_and_score(
         losses = []
         for k in range(per_epoch):
             ids = order[k * s.batch_size : (k + 1) * s.batch_size]
-            first = [0 if length == size else random.randint(0, length - size - 1) for _ in ids]
-            batch = torch.stack(
-                [data[i, :, a : a + size] for i, a in zip(ids, first, strict=True)]
+            if augment is None:  # the published crops
+                first = [0 if length == size else random.randint(0, length - size - 1) for _ in ids]  # noqa: S311
+                batch = torch.stack(
+                    [data[i, :, a : a + size] for i, a in zip(ids, first, strict=True)]
+                )
+            else:
+                batch = augment.crops(data[torch.from_numpy(ids).to(device)], size, generator)
+            goal = target[ids]
+            if teacher is not None and s.distillation is not None:
+                with torch.no_grad():
+                    soft = torch.sigmoid(teacher(batch))
+                a = s.distillation.teacher_fraction
+                goal = (1 - a) * goal + a * soft
+            logits = model(batch)
+            loss = (
+                F.binary_cross_entropy_with_logits(logits, goal)
+                if criterion is None
+                else criterion(logits, goal)
             )
-            loss = F.binary_cross_entropy_with_logits(model(batch), target[ids])
             optimizer.zero_grad(set_to_none=True)
             loss.backward()  # type: ignore[no-untyped-call]
             optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
+            if ema is not None:
+                ema.update(model)
             losses.append(loss.item())
-        p_val = predict(va, s.validation_on)
+        p_val = predict(scored, va, s.validation_on)
         auc_val, _ = macro_auc(y[va], p_val)
         record = {f"{prefix}/epoch": float(epoch),
                   f"{prefix}/epoch_train_loss": float(np.mean(losses)),
                   f"{prefix}/epoch_validation_macro_auc": auc_val}  # fmt: skip
+        if scheduler is not None:
+            record[f"{prefix}/learning_rate"] = float(scheduler.get_last_lr()[0])
+        if ema is not None:  # the trained weights themselves, for comparison only
+            raw, _ = macro_auc(y[va], predict(model, va, s.validation_on))
+            record[f"{prefix}/epoch_validation_macro_auc_raw"] = raw
         if auc_val > best_val:  # ModelCheckpoint(monitor="val/val_macro_agg", mode="max")
             best_val, best_epoch = auc_val, epoch
-            best_p_val, best_p_test = p_val, predict(te, s.test_on)
+            best_p_val, best_p_test = p_val, predict(scored, te, s.test_on)
             best_test, labels_n = macro_auc(y[te], best_p_test)
             record[f"{prefix}/chosen_epoch"] = float(epoch)
             record[f"{prefix}/chosen_test_macro_auc"] = best_test
+            if s.save_chosen_to is not None:
+                torch.save(scored.state_dict(), s.save_chosen_to)
         log(record)
+        if s.patience_epochs is not None and epoch - best_epoch >= s.patience_epochs:
+            log({f"{prefix}/stopped_epoch": float(epoch)})
+            break
     return {"macro_auc": best_test, "labels": float(labels_n), "epoch": float(best_epoch),
             "validation_macro_auc": best_val}, (best_p_val, best_p_test)  # fmt: skip

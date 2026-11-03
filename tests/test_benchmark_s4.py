@@ -15,7 +15,9 @@ SETTINGS = s4.S4Settings(
     input_size_s=0.5, valid_stride_fraction=1.0, validation_on="logits",
     test_on="probabilities", batch_size=4, epochs=2, learning_rate=1e-3, weight_decay=1e-3,
     betas=(0.9, 0.999), eps=1e-8, d_model=8, d_state=8, n_layers=2, dropout=0.2,
-    dt_min=1e-3, dt_max=1e-1,
+    dt_min=1e-3, dt_max=1e-1, loss="bce", class_balanced_beta=None, asymmetric=None,
+    ema_decay=None, augmentation=None, schedule="constant", warmup_epochs=0,
+    patience_epochs=None, distillation=None, save_chosen_to=None,
 )  # fmt: skip
 
 

@@ -32,9 +32,20 @@ settings:
     dropout: 0.2                # s4_dropout default
     dt_min: 1.0e-3              # HippoSSKernel defaults
     dt_max: 1.0e-1
+    loss: bce                   # RecipeSettings (benchmarks/supervised.py): the published recipe
+    class_balanced_beta: null
+    asymmetric: null
+    ema_decay: null
+    augmentation: null
+    schedule: constant
+    warmup_epochs: 0
+    patience_epochs: null       # 100 epochs, no early stop
+    distillation: null
+    save_chosen_to: null
     heads: 8                    # attention across the 12 leads, 38 per head
     base_rate_hz: 100.0         # time steps as published at 100 Hz
     identity_std: 0.02          # lead-identity vectors start small
+  reference_s4_incontext: null  # the in-context S4; not run
   linear_probing: false
   fixed_slots: false           # a random channel slot per record, as in pretraining
   linear_probing_l2: [1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]

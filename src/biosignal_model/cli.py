@@ -100,7 +100,7 @@ def benchmark(
     described = run.model_dump(mode="json") | {"code_commit": _commit(), "step": checkpoint["step"]}
     logged = wandb.init(
         project=run.wandb_project, entity=run.wandb_entity, mode=run.wandb_mode,
-        job_type="benchmark", name=f"{name} {run.checkpoint}", save_code=False, config=described,
+        job_type="benchmark", name=f"{name} {run.checkpoint} {config.stem}", save_code=False, config=described,
     )  # fmt: skip
 
     def log(metrics: dict[str, float]) -> None:
