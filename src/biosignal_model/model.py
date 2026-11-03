@@ -394,6 +394,16 @@ class Block(nn.Module):
         rotary: tuple[torch.Tensor, torch.Tensor],
         attend: Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor],
     ) -> torch.Tensor:
+        return self.parts(h, rotary, attend)[0]
+
+    def parts(
+        self,
+        h: torch.Tensor,
+        rotary: tuple[torch.Tensor, torch.Tensor],
+        attend: Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """The block's output and its feed-forward output before the residual add (the target
+        layer of data2vec: "the output of the FFN prior to the last residual connection")."""
         r, length, d = h.shape
         q, k, v = (
             self.qkv(self.norm1(h)).view(r, length, 3, self.heads, d // self.heads)
@@ -403,8 +413,9 @@ class Block(nn.Module):
         a = attend(q, k, v).transpose(1, 2).reshape(r, length, d)
         h = h + self._branch(self.out(a))
         gate, value = self.up(self.norm2(h)).chunk(2, dim=-1)
-        result: torch.Tensor = h + self._branch(self.down(F.silu(gate) * value))
-        return result
+        ffn = self.down(F.silu(gate) * value)
+        result: torch.Tensor = h + self._branch(ffn)
+        return result, ffn
 
     def _branch(self, y: torch.Tensor) -> torch.Tensor:
         return _drop_path(F.dropout(y, self.dropout, self.training), self.drop_path, self.training)

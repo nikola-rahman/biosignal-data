@@ -11,12 +11,13 @@ import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
+F = torch.nn.functional
 
 from biosignal_data.storage.stores import LocalStore, StoreFactory  # noqa: E402
 from biosignal_data.training.loader import Channel, Example, Origin, Signal  # noqa: E402
 from biosignal_model.channel_batch import ChannelBatch, ChannelPacker, MaskSpec  # noqa: E402
 from biosignal_model.train import TrainConfig, train  # noqa: E402
-from biosignal_model.v4 import Data2Vec, V4Spec, layout  # noqa: E402
+from biosignal_model.v4 import Data2Vec, V4Spec, layout, per_channel_norm  # noqa: E402
 from tests.test_model import _short_config  # noqa: E402
 
 TOKEN_S = 0.04
@@ -132,6 +133,24 @@ def test_the_teacher_gets_no_gradient_and_follows_the_student_by_its_decay() -> 
         torch.testing.assert_close(t, 0.99 * b + 0.01 * s)
 
 
+def test_no_part_of_a_target_follows_from_its_channel_alone() -> None:
+    """The targets are instance-normalized per channel of each example: over a channel's
+    tokens every feature has mean 0, so the channel's embedding (which the decoder gets)
+    predicts nothing of them; per_channel_norm is torch's instance_norm (variance 1, up to its
+    epsilon for features with little spread)."""
+    model = _model().eval()
+    batch = _batch([_example(12), _example(13)], rows=2)
+    target = model.all_targets(batch)
+    channel = batch.inputs.tokens.channel
+    for k in range(batch.inputs.channels.row.numel()):
+        mine = target[channel == k]
+        torch.testing.assert_close(mine.mean(0), torch.zeros(mine.shape[1]), atol=1e-4, rtol=0)
+    h = torch.randn(30, 8)
+    one = torch.zeros(30, dtype=torch.int64)
+    expected = F.instance_norm(h.T[None]).squeeze(0).T
+    torch.testing.assert_close(per_channel_norm(h, one, 1), expected, atol=1e-5, rtol=1e-5)
+
+
 def test_the_objective_runs_under_bf16_autocast() -> None:
     """As on the GPU: linear maps give bf16 under autocast, the learned vectors stay float32."""
     model = _model().train()
@@ -158,7 +177,8 @@ def test_the_layout_puts_each_row_from_place_zero_and_pads_to_the_block_size() -
 
 def test_the_objective_can_be_learned_on_one_batch() -> None:
     """A sanity check of the wiring: on one fixed batch with the teacher fixed (decay 1), the
-    loss falls well within a few dozen steps."""
+    loss falls clearly within a few dozen steps (to ~66 %; the per-channel normalized targets
+    hold nothing the channel embedding alone gives, so they fall less than before)."""
     spec = SPEC.model_copy(update={"objective": SPEC.objective.model_copy(
         update={"ema_start": 1.0, "ema_end": 1.0})})  # fmt: skip
     torch.manual_seed(0)
@@ -173,7 +193,7 @@ def test_the_objective_can_be_learned_on_one_batch() -> None:
         optimizer.step()
         model.update_teacher(step)
         losses.append(loss.item())
-    assert losses[-1] < 0.5 * losses[0]
+    assert losses[-1] < 0.8 * losses[0]
 
 
 def test_a_v4_run_trains_validates_and_checkpoints_with_its_teacher(

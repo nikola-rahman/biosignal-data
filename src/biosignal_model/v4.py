@@ -20,7 +20,13 @@ time reaches it. The teacher is an exponential moving average (EMA) of the stude
 every token of the unmasked input (`ChannelBatch.teacher_inputs`).
 
 Objective (data2vec 2.0 type): the target of a token is the mean over the teacher's top
-`top_k` blocks of each block's output, each layer-normalized (no affine) per token; a narrow
+`top_k` blocks of each block's feed-forward output before its residual add (data2vec's target
+layer), each instance-normalized as data2vec 2.0 does: per
+feature over the sequence, here the tokens of one channel of one example (its own time
+series). That removes what is constant along a channel (its embedding: type, slot, level and
+scale, which the decoder also gets), so no part of a target follows from the channel alone
+(a per-token layer norm, the first version, kept that part: the loss fell to 8 % of the target
+variance within 500 steps); a narrow
 decoder (its own blocks, attention within one example) gets the student's visible tokens and,
 for each hidden token, a learned mask vector plus its channel embedding, and predicts the
 targets of the hidden tokens; the loss is their mean squared error. The teacher's decay rises
@@ -196,6 +202,10 @@ class V4Encoder(nn.Module):
         )
         self.norm = nn.RMSNorm(g.width)
 
+    def block_list(self) -> list[Block]:
+        """The global blocks, typed (an nn.ModuleList yields modules)."""
+        return [b for b in self.blocks if isinstance(b, Block)]
+
     def channel_embedding(self, c: ChannelTable) -> torch.Tensor:
         """[C, width]: signal type + slot + (level, log scale)."""
         level_scale = torch.stack([c.level, c.log_scale], dim=-1).to(self.level_scale.weight.dtype)
@@ -215,7 +225,8 @@ class V4Encoder(nn.Module):
         self, x: ChannelInputs, select: torch.Tensor
     ) -> tuple[torch.Tensor, list[torch.Tensor], Layout]:
         """The tokens `select` picks, through the blocks: the output [N, width] (after the
-        final norm), each block's output [N, width], and their layout."""
+        final norm), each block's feed-forward output before its residual add [N, width] (the
+        target layers of the objective), and their layout."""
         where = layout(x.tokens, x.channels, x.rows, select)
         h = where.scatter(self.token_features(x)[where.index])
         g = self.spec
@@ -223,10 +234,23 @@ class V4Encoder(nn.Module):
                         g.max_wavelength_s, h.dtype)  # fmt: skip
         attend = _attention(where.document, g.attention)
         layers = []
-        for block in self.blocks:
-            h = block(h, angles, attend)
-            layers.append(where.gather(h))
+        for block in self.block_list():
+            h, ffn = block.parts(h, angles, attend)
+            layers.append(where.gather(ffn))
         return where.gather(self.norm(h)), layers, where
+
+
+def per_channel_norm(
+    h: torch.Tensor, channel: torch.Tensor, channels: int, eps: float = 1e-5
+) -> torch.Tensor:
+    """Instance norm of `h` [T, width] per feature over the tokens of each channel (`channel`
+    [T]: its index among `channels`): (h - mean) / sqrt(var + eps), the statistics of the
+    channel's own tokens (eps as torch's instance_norm)."""
+    count = torch.bincount(channel, minlength=channels).clamp(min=1).to(h.dtype)[:, None]
+    mean = h.new_zeros(channels, h.shape[1]).index_add_(0, channel, h) / count
+    centred = h - mean[channel]
+    var = h.new_zeros(channels, h.shape[1]).index_add_(0, channel, centred * centred) / count
+    return centred / torch.sqrt(var[channel] + eps)
 
 
 class Data2Vec(nn.Module):
@@ -254,16 +278,20 @@ class Data2Vec(nn.Module):
         self.predict = nn.Linear(o.decoder_width, g.width)
 
     @torch.no_grad()
-    def targets(self, batch: ChannelBatch) -> torch.Tensor:
-        """[hidden tokens, width]: the teacher's mean of its top_k blocks' layer-normalized
-        outputs, over the unmasked input, at the hidden tokens."""
+    def all_targets(self, batch: ChannelBatch) -> torch.Tensor:
+        """[T, width]: the target of every token: the teacher's top_k block outputs over the
+        unmasked input, each instance-normalized per channel (per_channel_norm), averaged."""
         self.teacher.eval()
         x = batch.teacher_inputs()
         everything = torch.ones_like(x.tokens.hidden)
         _, layers, _ = self.teacher(x, everything)
         top = layers[-self.spec.objective.top_k :]
-        target = torch.stack([F.layer_norm(h.float(), h.shape[-1:]) for h in top]).mean(0)
-        return target[batch.inputs.tokens.hidden]
+        channel, channels = x.tokens.channel, x.channels.row.numel()
+        return torch.stack([per_channel_norm(h.float(), channel, channels) for h in top]).mean(0)
+
+    def targets(self, batch: ChannelBatch) -> torch.Tensor:
+        """[hidden tokens, width]: the targets of the hidden tokens."""
+        return self.all_targets(batch)[batch.inputs.tokens.hidden]
 
     def predictions(self, x: ChannelInputs) -> torch.Tensor:
         """[hidden tokens, width]: the decoder's predictions from the student's visible
