@@ -215,6 +215,15 @@ def test_a_v4_run_trains_validates_and_checkpoints_with_its_teacher(
     assert "validation/loss" in last and np.isfinite(last["validation/loss"])
     saved = torch.load(store._path("models/t/step-00000010.pt"), weights_only=True)
     assert any(k.startswith("teacher.") for k in saved["model"])
+    # a benchmark reads the run's config back from the checkpoint (TrainConfig.from_checkpoint)
+    assert TrainConfig.from_checkpoint(saved["config"]) == TrainConfig.model_validate(config)
+    assert "global" in saved["config"]["model"]  # written under the config's name
+    first_runs = saved["config"] | {
+        "model": {
+            ("global_" if k == "global" else k): v for k, v in saved["config"]["model"].items()
+        }
+    }
+    assert TrainConfig.from_checkpoint(first_runs) == TrainConfig.model_validate(config)
 
 
 def test_ptbxl_fine_tunes_a_v4_model_from_its_checkpoint_weights() -> None:

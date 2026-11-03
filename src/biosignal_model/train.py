@@ -205,8 +205,10 @@ class TrainConfig(_Section):
         """The config stored in a checkpoint. One written before a field existed gets the
         value that does what its run did (ADDED_LATER); a run's own config never does."""
         config = {section: dict(values) for section, values in config.items()}
+        v4 = config["model"].get("format") == "v4"  # its fields were all there from the start
         for (section, name), value in ADDED_LATER.items():
-            config[section].setdefault(name, value)
+            if not (v4 and section == "model"):
+                config[section].setdefault(name, value)
         if config["data"]["mixture"] is not None:
             config["data"]["mixture"] = {"unit": "sample_tokens"} | config["data"]["mixture"]
         return cls.model_validate(config)

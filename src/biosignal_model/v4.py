@@ -94,7 +94,14 @@ class Data2VecSpec(_Spec):
 
 
 class V4Spec(_Spec):
-    """`model` of a v4 train config (tokens.format channels)."""
+    """`model` of a v4 train config (tokens.format channels). `global` is a Python keyword, so
+    the field is `global_`: read under either name (configs write `global`; checkpoints of the
+    first v4 runs stored `global_`), written as `global`."""
+
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, validate_by_name=True, validate_by_alias=True,
+        serialize_by_alias=True,
+    )  # fmt: skip
 
     format: Literal["v4"]
     local: LocalStageSpec
