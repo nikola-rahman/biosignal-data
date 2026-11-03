@@ -132,6 +132,16 @@ def test_the_teacher_gets_no_gradient_and_follows_the_student_by_its_decay() -> 
         torch.testing.assert_close(t, 0.99 * b + 0.01 * s)
 
 
+def test_the_objective_runs_under_bf16_autocast() -> None:
+    """As on the GPU: linear maps give bf16 under autocast, the learned vectors stay float32."""
+    model = _model().train()
+    batch = _batch([_example(11)])
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        loss, stats = model.loss(batch)
+    loss.backward()
+    assert torch.isfinite(loss) and float(stats["target_std"]) > 0
+
+
 def test_the_layout_puts_each_row_from_place_zero_and_pads_to_the_block_size() -> None:
     batch = _batch([_example(7), _example(8)], rows=2, max_tokens=300)  # 225 tokens each
     x = batch.inputs

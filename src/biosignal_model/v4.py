@@ -269,8 +269,10 @@ class Data2Vec(nn.Module):
         where = layout(t, x.channels, x.rows, torch.ones_like(t.hidden))
         channel = self.channel_into_decoder(self.student.channel_embedding(x.channels))[t.channel]
         # a hidden token: the mask vector and its channel; a visible one: the student's output
-        d = (self.mask + channel).index_copy(
-            0, (~t.hidden).nonzero(as_tuple=True)[0], self.into_decoder(visible).to(channel.dtype)
+        # (one dtype for both: under autocast the linear maps give bf16, the mask is float32)
+        seen = self.into_decoder(visible)
+        d = (self.mask + channel).to(seen.dtype).index_copy(
+            0, (~t.hidden).nonzero(as_tuple=True)[0], seen
         )
         h = where.scatter(d)
         o = self.spec.objective
