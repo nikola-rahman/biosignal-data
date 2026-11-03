@@ -4,8 +4,9 @@ from biosignal_data.training import ExampleSource, Selection
 selection = Selection.load(store, "2026-10-20", split="train", signal_types=None)
 source = ExampleSource(
     selection, store_factory, cache_directory=Path("/data/cache"), cache_bytes=200 * 2**30,
-    max_tokens=8192, samples_per_token=64, max_channels=32, block_s=1800.0, shuffle_buffer=4096,
-    reads_in_flight=8, seed=0, passes=None, flat_runs=None,
+    limit=SampleAndTokenLimit(max_samples=400_000, max_tokens=8192, token_s=0.04),
+    spans="per_group", subject_hours_per_epoch=4.0, max_channels=32, block_s=1800.0,
+    shuffle_buffer=4096, reads_in_flight=8, seed=0, passes=None, flat_runs=None,
 )
 for example in source.examples(epoch=0, part=0, parts=1):
     example.signals  # the model input: values, rate and start time of each channel
@@ -29,17 +30,32 @@ also bounds the longest example.
 
 How a block becomes examples, for one epoch: a time cursor moves from the start to the
 end of the block. At each step the selected channels are put in random order and
-cut into groups of random size (1 to `max_channels`); each group is one example over the
-same time span. The span is as long as the group with the most samples per second allows:
-at most `max_tokens` tokens of `samples_per_token` samples in each example. The first span
-is a random part of a full one, so the cuts differ from epoch to epoch. Every sample of
-every selected channel is in exactly one example per epoch; nothing is left out.
+cut into groups of random size (1 to `max_channels`). The longest span a group may have
+comes from `limit`:
+
+- `SampleTokenLimit` (v0-v3): at most `max_tokens` tokens of `samples_per_token` samples;
+- `SampleAndTokenLimit` (v4, docs/architecture.md): at most `max_samples` local samples (what
+  the local stage reads) and at most `max_tokens` global tokens (cells of `token_s` seconds
+  on one grid from the example's start that hold at least one sample of the channel).
+
+`spans`: `shared` (v0-v3): every group is one example over the same span, as long as the
+group with the most samples per second allows (the minimum over the groups). `per_group`:
+each group cuts its own spans, each as long as its own limit allows, up to the step's end
+(the longest of the groups' spans), where all groups are made anew; a slow group is then not
+cut to the span of a fast one. The first step is a random part of a full one, so the cuts
+differ from epoch to epoch. Every sample of every selected channel of every block read is in
+exactly one example per reading of the block; nothing is left out.
+
+`subject_hours_per_epoch` (None: no cap): a subject gives at most this many hours of blocks
+to one pass over its dataset, as random blocks drawn anew in each epoch and pass (i-care has
+~607 patients and more than half of all samples; docs/architecture.md section 1).
 
 How it reads: the block index of each standard version is loaded once (blocks.parquet);
 a span is one ranged request per block it touches (blocks hold at most 8 MiB), through a
 local disk cache of blocks, several recordings at the same time (`reads_in_flight`),
 because one read from the S3 storage takes 80-240 ms. Examples go through a shuffle
-buffer. Memory is bounded: two buffers of `shuffle_buffer` examples, and one span per read.
+buffer. Memory is bounded: two buffers of `shuffle_buffer` examples, and one read: one
+span (`shared`), or one group over one step (`per_group`; at most one block).
 
 `parts`: the blocks are dealt round-robin over the parts (data loader workers times
 distributed ranks), after a shuffle that depends on `seed` and `epoch` only.
@@ -64,7 +80,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from http.client import HTTPException
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -192,6 +208,38 @@ class Example:
     origin: Origin
 
 
+@dataclass(frozen=True)
+class SampleTokenLimit:
+    """v0-v3: a span holds at most `max_tokens` tokens of `samples_per_token` samples."""
+
+    max_tokens: int
+    samples_per_token: int
+
+    def tokens_per_second(self, channel: Channel) -> float:
+        """The tokens one second of `channel` gives (for the mixture's sizes)."""
+        return channel.sampling_rate / self.samples_per_token
+
+
+@dataclass(frozen=True)
+class SampleAndTokenLimit:
+    """v4: a span holds at most `max_samples` samples (over its channels) and at most
+    `max_tokens` global tokens: cells of `token_s` seconds on one grid from the example's
+    start that hold at least one sample of their channel (biosignal_model.channel_batch)."""
+
+    max_samples: int
+    max_tokens: int
+    token_s: float
+
+    def tokens_per_second(self, channel: Channel) -> float:
+        """The global tokens one second of `channel` gives at most: a cell holds at least
+        one sample, so a channel slower than one sample a cell has one token a sample."""
+        return min(1.0 / self.token_s, channel.sampling_rate)
+
+
+SpanLimit = SampleTokenLimit | SampleAndTokenLimit
+Spans = Literal["shared", "per_group"]
+
+
 class ReadError(RuntimeError):
     """A recording could not be read; the message names it, the cause is chained."""
 
@@ -275,8 +323,9 @@ class ExampleSource:
         *,
         cache_directory: Path,
         cache_bytes: int,
-        max_tokens: int,
-        samples_per_token: int,
+        limit: SpanLimit,
+        spans: Spans,
+        subject_hours_per_epoch: float | None,
         max_channels: int,
         block_s: float,
         shuffle_buffer: int,
@@ -285,13 +334,21 @@ class ExampleSource:
         passes: Mapping[str, float] | None,
         flat_runs: FlatRuns | None,
     ) -> None:
-        """`passes`: readings of each dataset's blocks in one epoch (training.mixture), or
-        None: every block once. `flat_runs`: which runs of one stored value are not
-        observed (FlatRuns), or None: every stored value is."""
-        if samples_per_token < 1 or max_channels < 1:
-            raise ValueError("samples_per_token and max_channels are at least 1")
-        if max_tokens <= 2 * max_channels:
+        """`limit`, `spans`, `subject_hours_per_epoch`: see the module docstring. `passes`:
+        readings of each dataset's blocks in one epoch (training.mixture), or None: every
+        block once. `flat_runs`: which runs of one stored value are not observed
+        (FlatRuns), or None: every stored value is."""
+        if max_channels < 1:
+            raise ValueError("max_channels is at least 1")
+        if isinstance(limit, SampleTokenLimit):
+            if limit.samples_per_token < 1:
+                raise ValueError("samples_per_token is at least 1")
+        elif limit.token_s <= 0 or limit.max_samples <= 2 * max_channels:
+            raise ValueError("token_s is more than 0; max_samples more than twice max_channels")
+        if limit.max_tokens <= 2 * max_channels:
             raise ValueError("max_tokens must be more than twice max_channels")
+        if spans not in ("shared", "per_group"):
+            raise ValueError(f"spans is shared or per_group, not {spans!r}")
         if shuffle_buffer < 1 or reads_in_flight < 1:
             raise ValueError("shuffle_buffer and reads_in_flight are at least 1")
         self.selection = selection
@@ -300,11 +357,14 @@ class ExampleSource:
         self._cache: BlockCache | None = None
         self.cache_directory = cache_directory
         self.cache_bytes = cache_bytes
-        self.max_tokens = max_tokens
-        self.samples_per_token = samples_per_token
+        self.limit = limit
+        self.spans = spans
         self.max_channels = max_channels
         if block_s <= 0:
             raise ValueError("block_s is more than 0")
+        if subject_hours_per_epoch is not None and subject_hours_per_epoch * 3600.0 < block_s:
+            raise ValueError("subject_hours_per_epoch must hold at least one block (block_s)")
+        self.subject_hours_per_epoch = subject_hours_per_epoch
         self.block_s = block_s
         self.shuffle_buffer = shuffle_buffer
         self.reads_in_flight = reads_in_flight
@@ -340,23 +400,26 @@ class ExampleSource:
         index = np.arange(recording.size, dtype=np.int64) - np.repeat(
             np.cumsum(counts) - counts, counts
         )
-        copy = np.zeros(recording.size, dtype=np.int64)
-        if self.passes is not None:
-            recording, index, copy = self._repeated(recording, index, epoch)
+        recording, index, copy = self._readings(recording, index, epoch)
         order = _rng(f"{self.seed}/{epoch}").permutation(recording.size)[part::parts]
         return [
             Block(recordings[r], int(i), int(i) == counts[r] - 1, int(c))
             for r, i, c in zip(recording[order], index[order], copy[order], strict=True)
         ]
 
-    def _repeated(
+    def _readings(
         self, recording: np.ndarray, index: np.ndarray, epoch: int
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """The blocks of each dataset `passes` times: whole passes, then a random part of
-        its blocks for the fraction (different in each epoch), as (recording, index, copy)
-        arrays. A repeated block is cut afresh (its `copy` is in the seed of its cuts)."""
+        """The blocks read in `epoch`, as (recording, index, copy) arrays: each dataset's
+        blocks `passes` times (whole passes, then a random part of its blocks for the
+        fraction, different in each epoch), or once without a mixture; in each pass a
+        subject gives at most `subject_hours_per_epoch` hours of random blocks (drawn anew
+        in each pass). A repeated block is cut afresh (its `copy` is in the seed of its
+        cuts)."""
+        everything = np.arange(recording.size, dtype=np.int64)
         if self.passes is None:
-            return recording, index, np.zeros(recording.size, dtype=np.int64)
+            chosen = self._capped(everything, recording, index, _rng(f"{self.seed}/{epoch}/cap/0"))
+            return recording[chosen], index[chosen], np.zeros(chosen.size, dtype=np.int64)
         names = sorted({r.dataset_id for r in self.selection.recordings})
         number = {name: k for k, name in enumerate(names)}
         dataset_of = np.array([number[r.dataset_id] for r in self.selection.recordings])
@@ -365,15 +428,40 @@ class ExampleSource:
         picked, copies = [], []
         for k, name in enumerate(names):
             found = np.flatnonzero(dataset == k)
-            whole, part = divmod(self.passes[name], 1.0)
-            for c in range(int(whole)):
-                picked.append(found)
-                copies.append(np.full(found.size, c, dtype=np.int64))
-            extra = rng.choice(found, round(part * found.size), replace=False)
-            picked.append(extra)
-            copies.append(np.full(extra.size, int(whole), dtype=np.int64))
-        chosen = np.concatenate(picked)
-        return recording[chosen], index[chosen], np.concatenate(copies)
+            whole, fraction = divmod(self.passes[name], 1.0)
+            for c in range(int(whole) + 1):
+                kept = self._capped(found, recording, index, _rng(f"{self.seed}/{epoch}/cap/{c}"))
+                if c == int(whole):  # the fraction: a random part of one more pass
+                    kept = rng.choice(kept, round(fraction * kept.size), replace=False)
+                picked.append(kept)
+                copies.append(np.full(kept.size, c, dtype=np.int64))
+        return (recording[np.concatenate(picked)], index[np.concatenate(picked)],
+                np.concatenate(copies))  # fmt: skip
+
+    def _capped(
+        self, blocks: np.ndarray, recording: np.ndarray, index: np.ndarray,
+        rng: np.random.Generator,
+    ) -> np.ndarray:  # fmt: skip
+        """The positions `blocks` (into `recording`, `index`) left after the subject cap: of
+        each subject, random blocks while their seconds stay within the cap; all of them
+        without a cap. In the order of `blocks`."""
+        if self.subject_hours_per_epoch is None or blocks.size == 0:
+            return blocks
+        recordings = self.selection.recordings
+        subjects = {s: k for k, s in enumerate(sorted({r.subject_id for r in recordings}))}
+        subject_of = np.array([subjects[r.subject_id] for r in recordings], dtype=np.int64)
+        duration_of = np.array([r.duration_s for r in recordings], dtype=np.float64)
+        r = recording[blocks]
+        seconds = np.clip(duration_of[r] - index[blocks] * self.block_s, 0.0, self.block_s)
+        shuffled = rng.permutation(blocks.size)
+        subject = subject_of[r][shuffled]
+        by_subject = np.argsort(subject, kind="stable")  # random order within each subject
+        ordered = shuffled[by_subject]
+        total = np.cumsum(seconds[ordered])
+        first_of = np.searchsorted(subject[by_subject], subject[by_subject], side="left")
+        before = np.where(first_of > 0, total[first_of - 1], 0.0)
+        keep = (total - before) <= self.subject_hours_per_epoch * 3600.0 + 1e-9
+        return blocks[np.sort(ordered[keep])]
 
     def examples(
         self, epoch: int, part: int, parts: int, piece: int = 0, pieces: int = 1
@@ -432,7 +520,7 @@ class ExampleSource:
             pool.shutdown(wait=True, cancel_futures=True)
 
     def cut(self, block: Block, epoch: int) -> Iterator[Example]:
-        """All examples of one block in `epoch`, in time order."""
+        """All examples of one block in `epoch`, in time order (of their steps)."""
         recording = block.recording
         rng = random.Random(  # noqa: S311 - not secret
             f"{self.seed}/{epoch}/{recording.dataset_id}/{recording.recording_id}/{block.index}"
@@ -451,31 +539,57 @@ class ExampleSource:
                 break
             rng.shuffle(channels)
             groups = _random_groups(channels, self.max_channels, rng)
-            duration = min(self._longest(g) for g in groups)
-            if first:  # a random part of a span: the cuts differ from epoch to epoch
-                duration *= 1.0 - rng.random()
+            longest = [self._longest(g) for g in groups]
+            step = min(longest) if self.spans == "shared" else max(longest)
+            if first:  # a random part of a step: the cuts differ from epoch to epoch
+                step *= 1.0 - rng.random()
                 first = False
-            stop_s = min(t + duration, end_s)
-            read = self._read(recording, arrays, channels, t, stop_s)
-            for group in groups:
-                chosen = [c for c in group if read[c].values.size]  # a span can be too short
-                if not chosen:
-                    continue
-                signals = tuple(read[c] for c in chosen)
-                origin = Origin(
-                    recording.dataset_id, recording.recording_id, recording.subject_id, t,
-                    tuple(chosen),
-                )  # fmt: skip
-                yield Example(signals, origin)
+            stop_s = min(t + step, end_s)
+            if self.spans == "shared":
+                read = self._read(recording, arrays, channels, t, stop_s)
+                for group in groups:
+                    yield from self._example(recording, group, read, t)
+            else:
+                for group, span in zip(groups, longest, strict=True):
+                    read = self._read(recording, arrays, group, t, stop_s)
+                    at = t
+                    while at < stop_s:
+                        until = min(at + span, stop_s)
+                        part = {c: _piece(read[c], t, at, until) for c in group}
+                        yield from self._example(recording, group, part, at)
+                        at = until
             t = stop_s
 
+    def _example(
+        self, recording: Recording, group: list[Channel], read: dict[Channel, Signal],
+        start_s: float,
+    ) -> Iterator[Example]:  # fmt: skip
+        """The example of `group` from `read` (signals from `start_s`); none if no channel
+        has a sample (a span can be too short)."""
+        chosen = [c for c in group if read[c].values.size]
+        if chosen:
+            origin = Origin(
+                recording.dataset_id, recording.recording_id, recording.subject_id, start_s,
+                tuple(chosen),
+            )  # fmt: skip
+            yield Example(tuple(read[c] for c in chosen), origin)
+
     def _longest(self, channels: list[Channel]) -> float:
-        """The longest span (s) in which `channels` fit `max_tokens`. A span of d seconds
-        holds at most rate * d + 1 samples of a channel, which take at most
-        (rate * d + 1) / samples_per_token + 1 tokens: two more tokens a channel at most."""
-        samples_per_s = sum(c.sampling_rate for c in channels)
-        tokens = self.max_tokens - 2 * len(channels)
-        return tokens * self.samples_per_token / samples_per_s
+        """The longest span (s) in which `channels` fit the limit. A span of d seconds holds
+        at most rate * d + 1 samples of a channel. Sample tokens: at most
+        (rate * d + 1) / samples_per_token + 1 tokens, two more a channel at most. Global
+        tokens: a channel's cells with a sample are at most ceil(d / token_s) and at most its
+        samples, so at most min(1 / token_s, rate) * d + 1."""
+        limit = self.limit
+        if isinstance(limit, SampleTokenLimit):
+            samples_per_s = sum(c.sampling_rate for c in channels)
+            tokens = limit.max_tokens - 2 * len(channels)
+            return tokens * limit.samples_per_token / samples_per_s
+        by_samples = (limit.max_samples - len(channels)) / sum(c.sampling_rate for c in channels)
+        by_tokens = (limit.max_tokens - len(channels)) / sum(
+            limit.tokens_per_second(c) for c in channels
+        )
+        return min(by_samples, by_tokens)
 
     def _read(
         self,
@@ -580,6 +694,22 @@ def _values(stored: np.ndarray, channel: Channel) -> np.ndarray:
     if channel.invalid_value is not None:
         values[stored == channel.invalid_value] = np.nan
     return values
+
+
+def _piece(signal: Signal, read_s: float, start_s: float, stop_s: float) -> Signal:
+    """The samples of `signal` (read from `read_s`) in [start_s, stop_s), timed from
+    `start_s`."""
+    rate = signal.sampling_rate
+    offset = _sample_at(read_s + signal.start_s, rate)  # the read's first sample
+    first = max(0, math.ceil(round(start_s * rate, 9)) - offset)
+    stop = max(first, math.ceil(round(stop_s * rate, 9)) - offset)
+    values = signal.values[first:stop]
+    return Signal(values, rate, (offset + first) / rate - start_s)
+
+
+def _sample_at(t: float, rate: float) -> int:
+    """The index of the sample at `t` seconds (t is a sample time)."""
+    return round(t * rate)
 
 
 def _random_groups(

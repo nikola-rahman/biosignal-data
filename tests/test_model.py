@@ -15,7 +15,14 @@ torch = pytest.importorskip("torch")
 from biosignal_data.storage.stores import LocalStore, StoreFactory  # noqa: E402
 from biosignal_data.training import Selection  # noqa: E402
 from biosignal_data.training.loader import Channel, Example, Origin, Signal  # noqa: E402
-from biosignal_model.batch import SIGNAL_TYPES, Batch, Inputs, Packer, concat  # noqa: E402
+from biosignal_model.batch import (  # noqa: E402
+    SIGNAL_TYPES,
+    Batch,
+    Inputs,
+    Packer,
+    SamplesTokenizer,
+    concat,
+)
 from biosignal_model.model import Encoder, ModelConfig, masked_loss  # noqa: E402
 from biosignal_model.train import (  # noqa: E402
     ADDED_LATER,
@@ -44,6 +51,7 @@ def _packer(**kw: object) -> Packer:
     fields: dict[str, object] = {
         "datasets": ["d/x", "d/y"], "max_tokens": 64, "samples_per_token": 8,
         "max_channels": 4, "rows": 2, "mask_ratio": 0.5, "seed": 3, "slots": None,
+        "tokenizer": SamplesTokenizer(kind="samples"),
     }  # fmt: skip
     return Packer(**(fields | kw))  # type: ignore[arg-type]
 
@@ -118,7 +126,8 @@ def _config(**model: object) -> ModelConfig:
     fields: dict[str, object] = {
         "samples_per_token": 8, "max_channels": 4, "width": 32, "layers": 2, "heads": 4,
         "feed_forward": 64, "min_wavelength_s": 0.01, "max_wavelength_s": 1000.0,
-        "attention": "dense",
+        "attention": "dense", "tokenizer": SamplesTokenizer(kind="samples"),
+        "dropout": 0.0, "drop_path": 0.0,
     }  # fmt: skip
     return ModelConfig(**(fields | model))  # type: ignore[arg-type]
 
@@ -139,6 +148,27 @@ def test_an_example_never_sees_the_other_examples_of_its_row() -> None:
     assert loss.item() > 0 and per_token.shape == (1, 64, 2)
 
 
+def test_the_block_mask_made_row_by_row_is_the_mask_of_all_rows() -> None:
+    from torch.nn.attention.flex_attention import create_block_mask  # noqa: PLC0415
+
+    from biosignal_model.model import _block_mask  # noqa: PLC0415
+
+    document = torch.full((3, 384), -1)
+    document[0, :200], document[0, 200:330] = 0, 1
+    document[1, :384] = 0
+    document[2, :50], document[2, 50:300], document[2, 300:301] = 0, 1, 2
+
+    def same(b: torch.Tensor, h: torch.Tensor, q: torch.Tensor, kv: torch.Tensor) -> torch.Tensor:
+        return document[b, q] == document[b, kv]
+
+    joined, whole = _block_mask(document), create_block_mask(same, 3, None, 384, 384, "cpu")
+    for name in ("kv_num_blocks", "kv_indices", "full_kv_num_blocks", "full_kv_indices",
+                 "q_num_blocks", "q_indices", "full_q_num_blocks", "full_q_indices"):  # fmt: skip
+        assert torch.equal(getattr(joined, name), getattr(whole, name)), name
+    assert joined.BLOCK_SIZE == whole.BLOCK_SIZE and joined.seq_lengths == whole.seq_lengths
+    assert torch.equal(joined.to_dense(), whole.to_dense())
+
+
 def test_a_short_run_learns_and_logs_without_artifacts(store: LocalStore, tmp_path: Path) -> None:
     _index(store, {f"r{i}": 40.0 for i in range(6)} | {"held-out": 40.0})
     store.put_bytes("index/i1/_manifest.json", b'{"version": "i1"}')
@@ -148,12 +178,14 @@ def test_a_short_run_learns_and_logs_without_artifacts(store: LocalStore, tmp_pa
                      "validation_split": "test", "signal_types": None, "datasets": None,
                      "cache_directory": str(tmp_path / "cache"), "cache_bytes": 10**9,
                      "block_s": 20.0, "shuffle_buffer": 16, "reads_in_flight": 2, "workers": 0,
-                     "mixture": None, "pieces_per_epoch": 1, "flat_runs": None},
-            "tokens": {"max_tokens": 128, "samples_per_token": 16, "max_channels": 4,
-                       "rows": 2, "mask_ratio": 0.4},
+                     "mixture": None, "pieces_per_epoch": 1, "spans": "shared",
+                     "subject_hours_per_epoch": None, "flat_runs": None},
+            "tokens": {"format": "tokens", "max_tokens": 128, "samples_per_token": 16,
+                       "max_channels": 4, "rows": 2, "mask_ratio": 0.4},
             "model": {"width": 32, "layers": 2, "heads": 4, "feed_forward": 64,
                       "min_wavelength_s": 0.01, "max_wavelength_s": 1000.0,
-                      "attention": "dense"},
+                      "attention": "dense", "tokenizer": {"kind": "samples"},
+                      "dropout": 0.0, "drop_path": 0.0},
             "optim": {"learning_rate": 3e-3, "min_learning_rate": 3e-4, "warmup_steps": 5,
                       "steps": 40, "weight_decay": 0.01, "beta1": 0.9, "beta2": 0.95,
                       "grad_clip": 1.0, "schedule": "cosine", "decay_steps": None,
@@ -185,12 +217,14 @@ def _short_config(store: LocalStore, tmp_path: Path, **run: object) -> TrainConf
                      "validation_split": "test", "signal_types": None, "datasets": None,
                      "cache_directory": str(tmp_path / "cache"), "cache_bytes": 10**9,
                      "block_s": 20.0, "shuffle_buffer": 16, "reads_in_flight": 2, "workers": 0,
-                     "mixture": None, "pieces_per_epoch": 1, "flat_runs": None},
-            "tokens": {"max_tokens": 128, "samples_per_token": 16, "max_channels": 4,
-                       "rows": 2, "mask_ratio": 0.4},
+                     "mixture": None, "pieces_per_epoch": 1, "spans": "shared",
+                     "subject_hours_per_epoch": None, "flat_runs": None},
+            "tokens": {"format": "tokens", "max_tokens": 128, "samples_per_token": 16,
+                       "max_channels": 4, "rows": 2, "mask_ratio": 0.4},
             "model": {"width": 32, "layers": 1, "heads": 4, "feed_forward": 64,
                       "min_wavelength_s": 0.01, "max_wavelength_s": 1000.0,
-                      "attention": "dense"},
+                      "attention": "dense", "tokenizer": {"kind": "samples"},
+                      "dropout": 0.0, "drop_path": 0.0},
             "optim": {"learning_rate": 1e-3, "min_learning_rate": 1e-4, "warmup_steps": 2,
                       "steps": 10, "weight_decay": 0.0, "beta1": 0.9, "beta2": 0.95,
                       "grad_clip": 1.0, "schedule": "cosine", "decay_steps": None,
@@ -305,7 +339,7 @@ def _two_row_batch() -> Batch:
 
 
 def _rows(x: Inputs, rows: slice) -> Inputs:
-    return Inputs(**{k: v[rows] for k, v in vars(x).items()})
+    return Inputs(**{k: None if v is None else v[rows] for k, v in vars(x).items()})
 
 
 _NO_CLIP = OptimSection(
@@ -377,7 +411,8 @@ def test_single_rows_joined_are_the_rows_packed_together() -> None:
     singles = list(_packer(rows=1).batches(examples))[:2]
     joined = concat(singles)
     for k, v in vars(together.inputs).items():
-        assert torch.equal(v, vars(joined.inputs)[k]), k
+        other = vars(joined.inputs)[k]
+        assert (v is None and other is None) or torch.equal(v, other), k
     for k, v in vars(together.analysis).items():
         assert torch.equal(v, vars(joined.analysis)[k]), k
     assert (joined.examples, joined.samples) == (together.examples, together.samples)

@@ -9,11 +9,13 @@ from biosignal_data.training.loader import (
     FlatRuns,
     Origin,
     ReadError,
+    SampleAndTokenLimit,
+    SampleTokenLimit,
     Selection,
     Signal,
 )
 
 __all__ = [
-    "BlockCache", "Example", "ExampleSource", "FlatRuns", "Origin", "ReadError", "Selection",
-    "Signal",
+    "BlockCache", "Example", "ExampleSource", "FlatRuns", "Origin", "ReadError",
+    "SampleAndTokenLimit", "SampleTokenLimit", "Selection", "Signal",
 ]  # fmt: skip

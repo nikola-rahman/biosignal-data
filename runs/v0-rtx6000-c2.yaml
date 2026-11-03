@@ -20,8 +20,11 @@ data:
   pieces_per_epoch: 1
   mixture: null               # every block once per epoch (the mix follows the data)
   flat_runs: null             # every stored value observed
+  spans: shared               # v0-v3: the groups of a step share the shortest span
+  subject_hours_per_epoch: null  # v0-v3: no cap per subject
 
 tokens:
+  format: tokens              # the v0-v3 [rows, tokens, samples] batch
   max_tokens: 8192
   samples_per_token: 64
   max_channels: 32
@@ -36,6 +39,9 @@ model:
   min_wavelength_s: 0.01
   max_wavelength_s: 10000.0
   attention: flex
+  tokenizer: {kind: samples}  # 64-sample tokens, as v0-v2
+  dropout: 0.0  # as v0-v2
+  drop_path: 0.0
 
 optim:
   learning_rate: 6.0e-4

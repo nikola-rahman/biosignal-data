@@ -27,6 +27,7 @@ random weights, its L2 chosen on fold 9). Folds 9 and 10 are held out of pretrai
 from __future__ import annotations
 
 import ast
+import copy
 import csv
 import io
 import math
@@ -39,20 +40,51 @@ from typing import Any, Literal
 import numpy as np
 import torch
 import torch.nn.functional as F  # noqa: N812 - the usual name
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from scipy.stats import rankdata
 
 from biosignal_data.read.standard import StandardDataset
 from biosignal_data.storage.stores import Store
 from biosignal_data.training.loader import Channel, Example, Origin, Signal
-from biosignal_model.batch import Batch, Packer
-from biosignal_model.benchmarks import LOG_EVERY_STEPS, Log
+from biosignal_model.batch import Batch, Packer, Tokenizer
+from biosignal_model.benchmarks import LOG_EVERY_STEPS, Log, TaskModel
+from biosignal_model.benchmarks.s4 import S4ChannelsSettings, S4Settings
+from biosignal_model.benchmarks.s4 import train_and_score as train_and_score_s4
 from biosignal_model.benchmarks.xresnet1d import ReferenceSettings, train_and_score
 from biosignal_model.model import Encoder, ModelConfig
 
 DATASET = "physionet/ptb-xl"
 TASKS = ("all", "diagnostic", "subdiagnostic", "superdiagnostic", "form", "rhythm")
 TRAIN, VALIDATION, TEST = (1, 2, 3, 4, 5, 6, 7, 8), (9,), (10,)
+
+
+class FromScratchModel(BaseModel):
+    """The size and regularization of a from_scratch model (the global transformer; the
+    tokenizer's own sizes are in its settings): for small proxy models of the v3 bench."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    width: int
+    layers: int
+    heads: int
+    feed_forward: int
+    dropout: float
+    drop_path: float
+
+
+class CooldownRungs(BaseModel):
+    """WSD cooldown branches (Hägele et al. 2024, arXiv 2405.18392): the main run trains at a
+    constant rate after warmup; at each rung epoch its state is kept, a branch decays the rate
+    linearly to 0 over max(`min_epochs`, round(`fraction` x rung)) more epochs and is scored,
+    and the main run goes on from the kept state. A rung's score is its branch's: a cut on it
+    does not keep fast learners that a mid-schedule snapshot favours (coordinator,
+    2026-10-29). The last rung is the end of the main run."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    epochs: list[int]
+    fraction: float
+    min_epochs: int
 
 
 class PtbxlSettings(BaseModel):
@@ -72,9 +104,18 @@ class PtbxlSettings(BaseModel):
     fixed_slots: bool
     # fine_tuning: the pretrained encoder and a head; from_scratch: the same from random weights
     # reference_xresnet1d101: the paper's own baseline (benchmarks/xresnet1d.py) trained through
-    # this pipeline, with its recipe (`reference`), to check the pipeline itself
-    methods: list[Literal["fine_tuning", "from_scratch", "reference_xresnet1d101"]]
+    # this pipeline, with its recipe (`reference`), to check the pipeline itself;
+    # reference_s4: the supervised S4 of Mehari & Strodthoff (benchmarks/s4.py, `reference_s4`);
+    # reference_s4_channels: the same with the leads as a set (S4ChannelModel)
+    methods: list[
+        Literal[
+            "fine_tuning", "from_scratch", "reference_xresnet1d101", "reference_s4",
+            "reference_s4_channels",
+        ]
+    ]  # fmt: skip
     reference: ReferenceSettings | None  # the recipe of reference_xresnet1d101; None: not run
+    reference_s4: S4Settings | None  # the recipe of reference_s4; None: not run
+    reference_s4_channels: S4ChannelsSettings | None  # of reference_s4_channels; None: not run
     linear_probing_l2: list[float]
     linear_probing_steps: int
     fine_tuning_epochs: int  # the best epoch on fold 9 is the one scored
@@ -124,7 +165,30 @@ class PtbxlSettings(BaseModel):
     # from_scratch, whose weights are new: a test of the token size without pretraining (at
     # 100 Hz the checkpoint's 64 samples are 0.64 s, about a whole beat; user, 2026-10-29).
     from_scratch_samples_per_token: int | None
+    # The tokenizer of from_scratch runs (docs/v3-tokenizer.md); None: the checkpoint's. Only for
+    # from_scratch runs alone, like from_scratch_samples_per_token (the v3 tokenizer bench).
+    from_scratch_tokenizer: Tokenizer | None
+    # The size and regularization of from_scratch models; None: the checkpoint's (proxy models
+    # of the v3 bench, user 2026-10-29: "small proxy models ... successive halving").
+    from_scratch_model: FromScratchModel | None
+    # Cooldown branches (CooldownRungs) of fine_tuning / from_scratch; the run's scores are its
+    # rungs' and fold 9 chooses the rung. Needs the constant schedule, no patience, and the
+    # last rung at fine_tuning_epochs. None: one run, the best fold-9 epoch is chosen.
+    fine_tuning_rungs: CooldownRungs | None
     seed: int
+
+    @model_validator(mode="after")
+    def _rungs_fit(self) -> PtbxlSettings:
+        r = self.fine_tuning_rungs
+        if r is None:
+            return self
+        if self.fine_tuning_schedule != "constant" or self.fine_tuning_patience is not None:
+            raise ValueError("fine_tuning_rungs need the constant schedule and no patience")
+        if r.epochs != sorted(set(r.epochs)) or r.epochs[-1] != self.fine_tuning_epochs:
+            raise ValueError("rung epochs must increase and end at fine_tuning_epochs")
+        if r.epochs[0] < self.fine_tuning_warmup_epochs or r.min_epochs < 1:
+            raise ValueError("rungs start after the warmup; a branch has at least 1 epoch")
+        return self
 
 
 @dataclass
@@ -167,18 +231,47 @@ def labels(
     return y, classes, keep
 
 
+def label_groups(classes: list[str], statements: list[dict[str, str]]) -> dict[str, np.ndarray]:
+    """The columns of each statement group among `classes` (task "all"): diagnostic, form and
+    rhythm, by the flags of scp_statements.csv (a statement can be in more than one)."""
+    by_code = {s[""]: s for s in statements}
+    return {
+        group: np.array([by_code.get(c, {}).get(group) in ("1", "1.0") for c in classes])
+        for group in ("diagnostic", "form", "rhythm")
+    }
+
+
+def _auc(y: np.ndarray, p: np.ndarray) -> float | None:
+    """The ROC AUC of one label (ties get average ranks); None without both classes."""
+    positive = y == 1
+    n_pos, n_neg = int(positive.sum()), int((~positive).sum())
+    if n_pos == 0 or n_neg == 0:
+        return None
+    ranks = rankdata(p)
+    return float((ranks[positive].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
+
+
 def macro_auc(y: np.ndarray, p: np.ndarray) -> tuple[float, int]:
     """The mean ROC AUC over the labels with both classes in `y` (ties get average ranks),
     and how many labels that is."""
-    aucs = []
-    for k in range(y.shape[1]):
-        positive = y[:, k] == 1
-        n_pos, n_neg = int(positive.sum()), int((~positive).sum())
-        if n_pos == 0 or n_neg == 0:
-            continue
-        ranks = rankdata(p[:, k])
-        aucs.append((ranks[positive].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
+    aucs = [a for k in range(y.shape[1]) if (a := _auc(y[:, k], p[:, k])) is not None]
     return float(np.mean(aucs)), len(aucs)
+
+
+def per_label(
+    classes: list[str], y_val: np.ndarray, p_val: np.ndarray, y_test: np.ndarray,
+    p_test: np.ndarray,
+) -> dict[str, float]:  # fmt: skip
+    """Each label's score for the chosen epoch: `label/<code>/validation_positives`,
+    `.../test_positives` (fold 9, fold 10) and `.../validation_auc`, `.../test_auc` (only
+    where the fold has both classes)."""
+    out: dict[str, float] = {}
+    for k, code in enumerate(classes):
+        for fold, y, p in (("validation", y_val, p_val), ("test", y_test, p_test)):
+            out[f"label/{code}/{fold}_positives"] = float((y[:, k] == 1).sum())
+            if (auc := _auc(y[:, k], p[:, k])) is not None:
+                out[f"label/{code}/{fold}_auc"] = auc
+    return out
 
 
 def load(store: Store, settings: PtbxlSettings, log: Log) -> tuple[Records, list[dict[str, str]]]:
@@ -237,6 +330,7 @@ def _packer(
     return Packer(
         datasets=[DATASET], max_tokens=max_tokens, samples_per_token=model.samples_per_token,
         max_channels=model.max_channels, rows=rows, mask_ratio=0.0, seed=0, slots=slots,
+        tokenizer=model.tokenizer,
     )  # fmt: skip
 
 
@@ -249,7 +343,7 @@ def lead_slots(examples: list[Example], fixed: bool) -> dict[str, int] | None:
 
 
 def _pooled(
-    model: Encoder, examples: list[Example], packer: Packer, device: torch.device
+    model: TaskModel, examples: list[Example], packer: Packer, device: torch.device
 ) -> torch.Tensor:
     """The mean feature over all tokens of each example, [len(examples), width]."""
     batch, where = packer.pack(examples, trim=True)
@@ -257,7 +351,7 @@ def _pooled(
 
 
 def _mean_features(
-    model: Encoder, batch: Batch, where: list[tuple[int, int]], device: torch.device,
+    model: TaskModel, batch: Batch, where: list[tuple[int, int]], device: torch.device,
     with_max: bool = False,
 ) -> torch.Tensor:  # fmt: skip
     """The mean feature over the tokens of each (row, document) in `where`, in one pass
@@ -366,7 +460,7 @@ def _batches(n: int, packer: Packer, examples: list[Example], rows: int) -> list
 
 @torch.no_grad()
 def embed(
-    model: Encoder, examples: list[Example], max_tokens: int, rows: int, device: torch.device,
+    model: TaskModel, examples: list[Example], max_tokens: int, rows: int, device: torch.device,
     log: Log, name: str, slots: dict[str, int] | None,
 ) -> np.ndarray:  # fmt: skip
     """The mean feature of every example; progress as `embed/<name>/...`."""
@@ -427,13 +521,21 @@ def linear_probing(
 def end_to_end(
     config: ModelConfig, records: Records, y: np.ndarray, max_tokens: int, s: PtbxlSettings,
     device: torch.device, start: dict[str, torch.Tensor] | None, log: Log, prefix: str,
-) -> dict[str, float]:  # fmt: skip
+    scored_groups: dict[str, np.ndarray] | None = None,
+) -> tuple[dict[str, float], tuple[np.ndarray, np.ndarray]]:  # fmt: skip
     """The encoder and a linear head on its mean feature, every weight trained on folds 1-8
     (layer-dependent learning rates and crops: see PtbxlSettings); the epoch with the best
     macro-AUC on fold 9 is scored on fold 10 (at most `fine_tuning_patience` epochs after it are
     run). `start`: pretrained weights, or None.
     Logged under `prefix`: the training loss every LOG_EVERY_STEPS steps, and per epoch its
-    mean training loss, fold-9 macro-AUC, time and speed; fold 10 only for a chosen epoch."""
+    mean training loss, fold-9 macro-AUC, time and speed; fold 10 only for a chosen epoch.
+    `scored_groups`: columns of label groups (label_groups), also scored on their own
+    (macro-AUC over the group's labels), on fold 9 each epoch and on fold 10 for a chosen
+    epoch; fold 9 alone (all labels) still chooses the epoch. With `fine_tuning_rungs`: a
+    cooldown branch at each rung (CooldownRungs), scored on fold 9 and fold 10 with its loss
+    gap (`rung_<epoch>/...` in the scores, `rung_...` in the log); fold 9 chooses the rung and
+    the main run's epochs are not scored on fold 10. Also returned: the chosen epoch's (or
+    rung's) probabilities on fold 9 and fold 10 (records in order)."""
     torch.manual_seed(s.seed)
     model = Encoder(config).to(device)
     if start is not None:
@@ -472,16 +574,25 @@ def end_to_end(
     # loss next to the fold-9 loss shows overfitting on one scale.
     rng_eval = random.Random(s.seed)  # noqa: S311 - not secret
     train_eval = sorted(rng_eval.sample(train, min(len(train), len(val))))
-    best_val, best_test, best_epoch, labels_n = -1.0, 0.0, 0, 0
+    rungs = s.fine_tuning_rungs
+    per_epoch = -(-len(train) // n)
     step = 0
-    for epoch in range(1, s.fine_tuning_epochs + 1):
+
+    def train_epoch(epoch: int, order: list[int], rate: Callable[[int], float] | None) -> float:
+        """One epoch over `order`: its mean training loss. `rate`: None, the scheduler sets the
+        learning rate (the main run); else the rate of the epoch's step k is the fork's rate x
+        rate(k) (a cooldown branch; it moves no step counter)."""
+        nonlocal step
         model.train()
         head.train()
-        rng.shuffle(train)
-        started, losses, window = time.monotonic(), [], []
-        steps = [train[k : k + n] for k in range(0, len(train), n)]
+        losses: list[float] = []
+        window: list[float] = []
+        steps = [order[k : k + n] for k in range(0, len(order), n)]
         batches = _packed(records.examples, steps, crop, packer, f"{s.seed}/{epoch}", s.workers)
-        for ids, (batch, where) in zip(steps, batches, strict=True):
+        for k, (ids, (batch, where)) in enumerate(zip(steps, batches, strict=True)):
+            if rate is not None:
+                for g, fork_lr in zip(optimizer.param_groups, fork_lrs, strict=True):
+                    g["lr"] = fork_lr * rate(k)
             pooled = _mean_features(model, batch, where, device, with_max)
             target = torch.from_numpy(y[ids]).to(device)
             loss = F.binary_cross_entropy_with_logits(head(pooled), target)
@@ -490,41 +601,152 @@ def end_to_end(
             if s.fine_tuning_grad_clip is not None:
                 torch.nn.utils.clip_grad_norm_(trained, s.fine_tuning_grad_clip)
             optimizer.step()
-            scheduler.step()
-            step += 1
             window.append(loss.item())
-            if step % LOG_EVERY_STEPS == 0:
-                log({f"{prefix}/train_loss": float(np.mean(window)), f"{prefix}/step": float(step)})
-                losses += window
-                window = []
-        losses += window
+            if rate is None:
+                scheduler.step()
+                step += 1
+                if step % LOG_EVERY_STEPS == 0:
+                    log({f"{prefix}/train_loss": float(np.mean(window)),
+                         f"{prefix}/step": float(step)})  # fmt: skip
+                    losses += window
+                    window = []
+        return float(np.mean(losses + window))
+
+    def groups_auc(y_: np.ndarray, p: np.ndarray) -> dict[str, float]:
+        return {name: macro_auc(y_[:, c], p[:, c])[0] for name, c in (scored_groups or {}).items()}
+
+    fork_lrs: list[float] = []
+    best_val, best_test, best_epoch, labels_n = -1.0, 0.0, 0, 0
+    best_groups: dict[str, float] = {}
+    chosen = np.zeros((0, y.shape[1])), np.zeros((0, y.shape[1]))
+    scores: dict[str, float] = {}
+    for epoch in range(1, s.fine_tuning_epochs + 1):
+        rng.shuffle(train)
+        started = time.monotonic()
+        train_loss = train_epoch(epoch, train, None)
         seconds = time.monotonic() - started
         p_val = predict(val)
         auc_val, _ = macro_auc(y[val], p_val)
         record = {
             f"{prefix}/epoch": float(epoch),
-            f"{prefix}/epoch_train_loss": float(np.mean(losses)),
+            f"{prefix}/epoch_train_loss": train_loss,
             f"{prefix}/epoch_train_eval_loss": _bce(y[train_eval], predict(train_eval)),
             f"{prefix}/epoch_validation_loss": _bce(y[val], p_val),
             f"{prefix}/epoch_validation_macro_auc": auc_val,
             f"{prefix}/epoch_seconds": seconds,
             f"{prefix}/examples_per_s": len(train) / seconds,
         }
-        if auc_val > best_val:  # fold 10 is scored for the epoch fold 9 chooses
+        for name, value in groups_auc(y[val], p_val).items():
+            record[f"{prefix}/epoch_validation_macro_auc/{name}"] = value
+        if rungs is None and auc_val > best_val:  # fold 10 for the epoch fold 9 chooses
             best_val, best_epoch = auc_val, epoch
-            best_test, labels_n = macro_auc(y[test], predict(test))
+            p_test = predict(test)
+            chosen = p_val, p_test
+            best_test, labels_n = macro_auc(y[test], p_test)
             record[f"{prefix}/chosen_epoch"] = float(epoch)
             record[f"{prefix}/chosen_test_macro_auc"] = best_test
+            best_groups = groups_auc(y[test], p_test)
+            for name, value in best_groups.items():
+                record[f"{prefix}/chosen_test_macro_auc/{name}"] = value
         log(record)
+        if rungs is not None and epoch in rungs.epochs:
+            # The branch: from the main run's state at this rung, kept and put back after it.
+            last = epoch == rungs.epochs[-1]
+            kept = None if last else _Kept.of(model, head, optimizer, scheduler, rng, train, device)
+            cooldown = cooldown_epochs(rungs, epoch)
+            fork_lrs = [g["lr"] for g in optimizer.param_groups]
+            branch_rng = random.Random()  # noqa: S311 - not secret
+            branch_rng.setstate(rng.getstate())
+            order = list(train)
+            for b in range(cooldown):
+                branch_rng.shuffle(order)
+                decay = _linear_to_zero(b * per_epoch, cooldown * per_epoch)
+                train_epoch(epoch + 1 + b, order, decay)
+            p_val, p_train, p_test = predict(val), predict(train_eval), predict(test)
+            auc_val, _ = macro_auc(y[val], p_val)
+            auc_test, n_test = macro_auc(y[test], p_test)
+            val_loss, train_eval_loss = _bce(y[val], p_val), _bce(y[train_eval], p_train)
+            rung = {
+                "epoch": float(epoch), "cooldown_epochs": float(cooldown),
+                "validation_macro_auc": auc_val, "test_macro_auc": auc_test,
+                "validation_loss": val_loss, "train_eval_loss": train_eval_loss,
+                "train_minus_validation_loss": train_eval_loss - val_loss,
+            } | {f"validation_macro_auc_{k}": v for k, v in groups_auc(y[val], p_val).items()} | {
+                f"test_macro_auc_{k}": v for k, v in groups_auc(y[test], p_test).items()
+            }  # fmt: skip
+            log({f"{prefix}/rung_{k}": v for k, v in rung.items()})
+            scores |= {f"rung_{epoch}/{k}": v for k, v in rung.items()}
+            if auc_val > best_val:  # fold 9 chooses the rung
+                best_val, best_test, best_epoch, labels_n = auc_val, auc_test, epoch, n_test
+                best_groups = groups_auc(y[test], p_test)
+                chosen = p_val, p_test
+            if kept is not None:
+                kept.put_back(model, head, optimizer, scheduler, rng, train)
         if s.fine_tuning_patience is not None and epoch - best_epoch >= s.fine_tuning_patience:
             break
     return {"macro_auc": best_test, "labels": float(labels_n), "epoch": float(best_epoch),
-            "validation_macro_auc": best_val, "epochs_run": float(epoch)}  # fmt: skip
+            "validation_macro_auc": best_val, "epochs_run": float(epoch)} | {
+        f"macro_auc_{name}": value for name, value in best_groups.items()
+    } | scores, chosen  # fmt: skip
+
+
+def _linear_to_zero(done: int, total: int) -> Callable[[int], float]:
+    """The rate factor of a cooldown branch's step k of an epoch after `done` of its `total`
+    steps: linear from 1 to 0."""
+    return lambda k: 1.0 - (done + k) / total
+
+
+@dataclass
+class _Kept:
+    """The main run's state at a rung: weights, optimizer, scheduler, random states, data
+    order."""
+
+    model: dict[str, Any]
+    head: dict[str, Any]
+    optimizer: dict[str, Any]
+    scheduler: dict[str, Any]
+    torch_rng: torch.Tensor
+    cuda_rng: list[torch.Tensor] | None
+    rng: tuple[Any, ...]
+    train: list[int]
+
+    @staticmethod
+    def of(
+        model: torch.nn.Module, head: torch.nn.Module, optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler.LRScheduler, rng: random.Random, train: list[int],
+        device: torch.device,
+    ) -> _Kept:  # fmt: skip
+        return _Kept(
+            copy.deepcopy(model.state_dict()), copy.deepcopy(head.state_dict()),
+            copy.deepcopy(optimizer.state_dict()), copy.deepcopy(scheduler.state_dict()),
+            torch.get_rng_state(),
+            torch.cuda.get_rng_state_all() if device.type == "cuda" else None,
+            rng.getstate(), list(train),
+        )  # fmt: skip
+
+    def put_back(
+        self, model: torch.nn.Module, head: torch.nn.Module, optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler.LRScheduler, rng: random.Random, train: list[int],
+    ) -> None:  # fmt: skip
+        model.load_state_dict(self.model)
+        head.load_state_dict(self.head)
+        optimizer.load_state_dict(self.optimizer)
+        scheduler.load_state_dict(self.scheduler)
+        torch.set_rng_state(self.torch_rng)
+        if self.cuda_rng is not None:
+            torch.cuda.set_rng_state_all(self.cuda_rng)
+        rng.setstate(self.rng)
+        train[:] = self.train
+
+
+def cooldown_epochs(rungs: CooldownRungs, epoch: int) -> int:
+    """The length of the cooldown branch at a rung epoch, in epochs."""
+    return max(rungs.min_epochs, round(rungs.fraction * epoch))
 
 
 @torch.no_grad()
 def _predict(
-    model: Encoder, head: torch.nn.Module, examples: list[Example], crop_s: float | None,
+    model: TaskModel, head: torch.nn.Module, examples: list[Example], crop_s: float | None,
     packer: Packer, rows: int, device: torch.device, workers: int, seed: str,
     stride_fraction: float, aggregate: Literal["mean", "max"], with_max: bool,
 ) -> np.ndarray:  # fmt: skip
@@ -552,20 +774,19 @@ def _predict(
 
 
 def parameter_groups(
-    model: Encoder, head: torch.nn.Module, lr: float, factor: float, lower_fraction: float,
+    model: TaskModel, head: torch.nn.Module, lr: float, factor: float, lower_fraction: float,
     slot_group: Literal["lower", "head"],
 ) -> list[dict[str, Any]]:  # fmt: skip
-    """AdamW groups: the head at `lr`; the encoder's upper blocks and final norm at
-    lr x factor; its input embedding and lowest blocks (`lower_fraction` of them, rounded) at
-    lr x factor^2; the slot embedding with the lower part or the head (`slot_group`). The
-    pretraining head (`model.head`) is not used by a task and left out."""
-    lower_blocks = round(len(model.blocks) * lower_fraction)
-    embedding = [model.samples, model.context] + ([model.slot] if slot_group == "lower" else [])
-    lower = [p for m in embedding for p in m.parameters()] + [model.hidden]
-    lower += [p for b in model.blocks[:lower_blocks] for p in b.parameters()]
-    upper = [p for b in model.blocks[lower_blocks:] for p in b.parameters()]
-    upper += list(model.norm.parameters())
-    top = list(head.parameters()) + (list(model.slot.parameters()) if slot_group == "head" else [])
+    """AdamW groups from `model.layer_groups()`: the head at `lr`; the upper layers and the
+    output part at lr x factor; the input part and the lowest layers (`lower_fraction` of them,
+    rounded) at lr x factor^2; the channel identity (slot embedding) with the lower part or the
+    head (`slot_group`). The pretraining heads are not in the layer groups."""
+    g = model.layer_groups()
+    lower_layers = round(len(g.layers) * lower_fraction)
+    lower = g.input + (g.channel if slot_group == "lower" else [])
+    lower += [p for layer in g.layers[:lower_layers] for p in layer]
+    upper = [p for layer in g.layers[lower_layers:] for p in layer] + g.output
+    top = list(head.parameters()) + (g.channel if slot_group == "head" else [])
     return [
         {"params": top, "lr": lr},
         {"params": upper, "lr": lr * factor},
@@ -625,6 +846,14 @@ def run(
         if settings.methods != ["from_scratch"] or settings.linear_probing:
             raise ValueError("from_scratch_samples_per_token is only for from_scratch runs alone")
         config = replace(config, samples_per_token=settings.from_scratch_samples_per_token)
+    if settings.from_scratch_tokenizer is not None:
+        if settings.methods != ["from_scratch"] or settings.linear_probing:
+            raise ValueError("from_scratch_tokenizer is only for from_scratch runs alone")
+        config = replace(config, tokenizer=settings.from_scratch_tokenizer)
+    if settings.from_scratch_model is not None:
+        if settings.methods != ["from_scratch"] or settings.linear_probing:
+            raise ValueError("from_scratch_model is only for from_scratch runs alone")
+        config = replace(config, **settings.from_scratch_model.model_dump())
     records, statements = load(store, settings, log)
     features = {}
     if settings.linear_probing:
@@ -664,20 +893,57 @@ def run(
         starts = {"fine_tuning": checkpoint["model"], "from_scratch": None}
         for name in settings.methods:
             if name == "reference_xresnet1d101":
-                scores = _reference(kept, y[keep], settings, device, log, f"{task}/{name}")
+                scores, (p_val, p_test) = _reference(
+                    kept, y[keep], settings, device, log, f"{task}/{name}"
+                )
+            elif name in ("reference_s4", "reference_s4_channels"):
+                scores, (p_val, p_test) = _reference_s4(
+                    kept, y[keep], settings, device, log, f"{task}/{name}", name
+                )
             else:
-                scores = end_to_end(
+                scores, (p_val, p_test) = end_to_end(
                     config, kept, y[keep], max_tokens, settings, device, starts[name], log,
                     f"{task}/{name}",
+                    scored_groups=label_groups(classes, statements) if task == "all" else None,
                 )
+            val, test = np.isin(kept.folds, VALIDATION), np.isin(kept.folds, TEST)
+            scores |= per_label(classes, y[keep][val], p_val, y[keep][test], p_test)
             results |= {f"{task}/{name}/{k}": v for k, v in scores.items()}
             log({f"{task}/{name}/macro_auc": scores["macro_auc"]})
     return results
 
 
+def _records_array(records: Records) -> np.ndarray:
+    """[records, leads, samples] in the order of the files (I, II, III, aVR, aVL, aVF, V1-V6, as
+    the papers' wfdb.rdsamp), in physical units (mV)."""
+    lengths = {sig.values.size for e in records.examples for sig in e.signals}
+    leads = {len(e.signals) for e in records.examples}
+    if len(lengths) != 1 or len(leads) != 1:
+        raise ValueError(f"records of different lengths {lengths} or leads {leads}")
+    x = np.stack([np.stack([sig.values for sig in e.signals]) for e in records.examples])
+    if not np.isfinite(x).all():
+        raise ValueError("a record has invalid samples")
+    return x
+
+
+def _reference_s4(
+    records: Records, y: np.ndarray, s: PtbxlSettings, device: torch.device, log: Log, prefix: str,
+    name: str,
+) -> tuple[dict[str, float], tuple[np.ndarray, np.ndarray]]:  # fmt: skip
+    """reference_s4 or reference_s4_channels on the records (see benchmarks/s4.py); also the
+    chosen epoch's predictions on the validation and test folds."""
+    recipe = s.reference_s4 if name == "reference_s4" else s.reference_s4_channels
+    if recipe is None:
+        raise ValueError(f"{name} needs the `{name}` settings")
+    return train_and_score_s4(
+        _records_array(records), y, records.folds, TRAIN, VALIDATION, TEST, float(s.rate),
+        recipe, s.seed, device, log, prefix, macro_auc,
+    )
+
+
 def _reference(
     records: Records, y: np.ndarray, s: PtbxlSettings, device: torch.device, log: Log, prefix: str
-) -> dict[str, float]:
+) -> tuple[dict[str, float], tuple[np.ndarray, np.ndarray]]:
     """reference_xresnet1d101 on the records: the leads in the order of the files (I, II, III,
     aVR, aVL, aVF, V1-V6, as the paper's wfdb.rdsamp), in physical units (mV)."""
     if s.reference is None:

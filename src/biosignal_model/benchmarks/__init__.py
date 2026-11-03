@@ -7,10 +7,16 @@ benchmark's own `settings` (each benchmark module checks them against its settin
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import yaml
 from pydantic import BaseModel, ConfigDict
+
+if TYPE_CHECKING:
+    import torch
+
+    from biosignal_model.batch import Inputs
+    from biosignal_model.model import LayerGroups, ModelConfig
 
 LOG_EVERY_STEPS = 20  # training steps between two records of the training loss
 
@@ -20,6 +26,24 @@ class Log(Protocol):
     such as `<task>/<method>/train_loss`."""
 
     def __call__(self, metrics: dict[str, float]) -> None: ...
+
+
+class TaskModel(Protocol):
+    """All a benchmark may use of a model: its config (it sets the input format the packer
+    makes), `features` (the representation of every token, [R, L, width]), `layer_groups` (the
+    weights from the input to the output, for layer-wise learning rates) and the train / eval
+    switch. Nothing else is named, so a new architecture only has to give these."""
+
+    @property
+    def config(self) -> ModelConfig: ...
+
+    def features(self, x: Inputs) -> torch.Tensor: ...
+
+    def layer_groups(self) -> LayerGroups: ...
+
+    def train(self, mode: bool = True) -> object: ...
+
+    def eval(self) -> object: ...
 
 
 class BenchmarkRun(BaseModel):

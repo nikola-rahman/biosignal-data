@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
-from biosignal_data.training.loader import Selection
+from biosignal_data.training.loader import Selection, SpanLimit
 
 
 def unimax(sizes: Mapping[str, float], budget: float, max_epochs: float) -> dict[str, float]:
@@ -67,11 +67,22 @@ def passes(
     return out
 
 
-def dataset_tokens(selection: Selection, samples_per_token: int) -> dict[str, float]:
-    """The tokens of each dataset of a selection: the samples of its selected channels
-    (duration x sampling rate) over `samples_per_token`."""
+def dataset_tokens(
+    selection: Selection, limit: SpanLimit, subject_hours_per_epoch: float | None
+) -> dict[str, float]:
+    """The tokens of each dataset of a selection in one pass, in the unit of `limit`: sample
+    tokens (v0-v3: the samples of the selected channels over `samples_per_token`) or global
+    tokens (v4: at most one a cell of `token_s` seconds and one a sample; the loss and the
+    compute count these, docs/architecture.md section 1). With a subject cap, a subject's
+    tokens are scaled to the hours it gives to one pass (at most the cap)."""
+    hours: dict[str, float] = {}
+    for r in selection.recordings:
+        hours[r.subject_id] = hours.get(r.subject_id, 0.0) + r.duration_s / 3600.0
     out: dict[str, float] = {}
     for r in selection.recordings:
-        samples = sum(c.sampling_rate for c in r.channels) * r.duration_s
-        out[r.dataset_id] = out.get(r.dataset_id, 0.0) + samples / samples_per_token
+        share = 1.0
+        if subject_hours_per_epoch is not None and hours[r.subject_id] > subject_hours_per_epoch:
+            share = subject_hours_per_epoch / hours[r.subject_id]
+        tokens = sum(limit.tokens_per_second(c) for c in r.channels) * r.duration_s * share
+        out[r.dataset_id] = out.get(r.dataset_id, 0.0) + tokens
     return out

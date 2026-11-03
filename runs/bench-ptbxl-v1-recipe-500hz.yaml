@@ -21,6 +21,8 @@ settings:
   workers: 6                  # data loader processes that crop and pack batches
   methods: [fine_tuning]
   reference: null              # the reference_xresnet1d101 recipe; not run
+  reference_s4: null
+  reference_s4_channels: null   # the channel-set S4; not run
   linear_probing: false
   fixed_slots: false           # a random channel slot per record, as in pretraining
   linear_probing_l2: [1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]
@@ -42,6 +44,9 @@ settings:
   fine_tuning_grad_clip: null
   fine_tuning_head: linear
   from_scratch_samples_per_token: null
+  from_scratch_tokenizer: null
+  from_scratch_model: null           # the checkpoint's size, no dropout
+  fine_tuning_rungs: null
   seed: 0
 wandb_project: biosignal-fm
 wandb_entity: schnyox-s

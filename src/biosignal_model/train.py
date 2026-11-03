@@ -23,20 +23,37 @@ import time
 from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import torch
 import torch.distributed as dist
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 
 from biosignal_data.index.build import ROOT as INDEX_ROOT
 from biosignal_data.storage.stores import Store, StoreFactory
 from biosignal_data.training import mixture
-from biosignal_data.training.loader import ExampleSource, FlatRuns, Selection
-from biosignal_model.batch import SIGNAL_TYPES, Analysis, Batch, Inputs, Packer, concat
+from biosignal_data.training.loader import (
+    ExampleSource,
+    FlatRuns,
+    SampleAndTokenLimit,
+    SampleTokenLimit,
+    Selection,
+    SpanLimit,
+)
+from biosignal_model import channel_batch
+from biosignal_model.batch import (
+    SIGNAL_TYPES,
+    Analysis,
+    Batch,
+    Inputs,
+    Packer,
+    Tokenizer,
+    concat,
+)
+from biosignal_model.channel_batch import ChannelBatch, ChannelPacker, ChannelTokens
 from biosignal_model.model import Encoder, ModelConfig, masked_loss
 
 log = logging.getLogger(__name__)
@@ -49,9 +66,12 @@ class _Section(BaseModel):
 class MixtureSection(_Section):
     """How much of each dataset an epoch reads (biosignal_data.training.mixture): UniMax
     over `clusters` of datasets, then over the datasets of each cluster, with `budget_tokens`
-    for one epoch and at most `max_epochs` passes over any dataset."""
+    for one epoch and at most `max_epochs` passes over any dataset. `unit`: what a token is
+    for the sizes and the budget: `sample_tokens` (v0-v3: samples / samples_per_token) or
+    `global_tokens` (v4: the global tokens of `tokens.token_s`, docs/architecture.md)."""
 
     rule: Literal["unimax"]
+    unit: Literal["sample_tokens", "global_tokens"]
     budget_tokens: float
     max_epochs: float
     clusters: dict[str, list[str]]
@@ -89,9 +109,18 @@ class DataSection(_Section):
     # Runs of one stored value that are not observed (biosignal_data.training.FlatRuns);
     # None: every stored value is observed.
     flat_runs: FlatRunsSection | None
+    # shared (v0-v3): the groups of channels of one step share one span, the shortest of
+    # theirs; per_group: each group cuts spans as long as its own limit allows
+    # (biosignal_data.training.loader)
+    spans: Literal["shared", "per_group"]
+    # at most this many hours of random blocks of one subject in one pass; None: no cap
+    subject_hours_per_epoch: float | None
 
 
 class TokenSection(_Section):
+    """v0-v3: the [rows, tokens, samples] batch of biosignal_model.batch."""
+
+    format: Literal["tokens"]
     max_tokens: int
     samples_per_token: int
     max_channels: int
@@ -107,6 +136,9 @@ class ModelSection(_Section):
     min_wavelength_s: float
     max_wavelength_s: float
     attention: Literal["flex", "dense"]
+    tokenizer: Tokenizer  # how channels become tokens (docs/v3-tokenizer.md)
+    dropout: float  # on the residual branches; 0: none
+    drop_path: float  # stochastic depth of the residual branches; 0: none
 
 
 class OptimSection(_Section):
@@ -149,9 +181,13 @@ class RunSection(_Section):
     resume: Literal["newest", "never"]
 
 
+# The batch format: `tokens` (v0-v3) or `channels` (v4: biosignal_model.channel_batch)
+Tokens = Annotated[TokenSection | ChannelTokens, Field(discriminator="format")]
+
+
 class TrainConfig(_Section):
     data: DataSection
-    tokens: TokenSection
+    tokens: Tokens
     model: ModelSection
     optim: OptimSection
     run: RunSection
@@ -167,13 +203,29 @@ class TrainConfig(_Section):
         config = {section: dict(values) for section, values in config.items()}
         for (section, name), value in ADDED_LATER.items():
             config[section].setdefault(name, value)
+        if config["data"]["mixture"] is not None:
+            config["data"]["mixture"] = {"unit": "sample_tokens"} | config["data"]["mixture"]
         return cls.model_validate(config)
 
+    def span_limit(self) -> SpanLimit:
+        """The loader's limit of a span, from the batch format."""
+        t = self.tokens
+        if isinstance(t, TokenSection):
+            return SampleTokenLimit(max_tokens=t.max_tokens, samples_per_token=t.samples_per_token)
+        return SampleAndTokenLimit(max_samples=t.max_samples, max_tokens=t.max_tokens,
+                                   token_s=t.token_s)  # fmt: skip
+
     def model_settings(self) -> ModelConfig:
+        if not isinstance(self.tokens, TokenSection):
+            raise NotImplementedError(
+                "the v4 model on the channel batch (global model, MAE) is a later step "
+                "(docs/architecture.md section 11)"
+            )
         return ModelConfig(
             samples_per_token=self.tokens.samples_per_token,
             max_channels=self.tokens.max_channels,
-            **self.model.model_dump(),
+            tokenizer=self.model.tokenizer,
+            **self.model.model_dump(exclude={"tokenizer"}),
         )
 
 
@@ -183,6 +235,13 @@ ADDED_LATER: dict[tuple[str, str], Any] = {
     ("data", "mixture"): None,  # 44e5541
     ("data", "pieces_per_epoch"): 1,  # 7bc3284
     ("data", "flat_runs"): None,  # every stored value observed, as before
+    ("model", "tokenizer"): {"kind": "samples"},  # v3-tokenizer: v0-v2 cut 64-sample tokens
+    ("model", "dropout"): 0.0,  # v3 proxy bench: v0-v2 had no dropout
+    ("model", "drop_path"): 0.0,  # nor stochastic depth
+    ("tokens", "format"): "tokens",  # v4: v0-v3 had the [rows, tokens, samples] batch only
+    ("data", "spans"): "shared",  # v0-v3: the groups of a step shared the shortest span
+    ("data", "subject_hours_per_epoch"): None,  # and no subject had a cap
+    # data.mixture.unit: sample_tokens (from_checkpoint)
 }
 
 
@@ -213,14 +272,22 @@ class BatchStream(IterableDataset[Batch]):
         worker, workers = (info.id, info.num_workers) if info is not None else (0, 1)
         part, parts = self.rank * workers + worker, self.ranks * workers
         t = self.config.tokens
-        packer = Packer(
-            datasets=self.datasets, max_tokens=t.max_tokens,
-            samples_per_token=t.samples_per_token, max_channels=t.max_channels, rows=self.rows,
-            mask_ratio=t.mask_ratio,
-            seed=((self.config.run.seed * 1_000_003 + self.epoch) * 1_009 + part) * 101
-            + self.piece, slots=None,
-        )  # fmt: skip
-        yield from packer.batches(
+        seed = ((self.config.run.seed * 1_000_003 + self.epoch) * 1_009 + part) * 101 + self.piece
+        packer: Packer | ChannelPacker
+        if isinstance(t, TokenSection):
+            packer = Packer(
+                datasets=self.datasets, max_tokens=t.max_tokens,
+                samples_per_token=t.samples_per_token, max_channels=t.max_channels,
+                rows=self.rows, mask_ratio=t.mask_ratio, seed=seed, slots=None,
+                tokenizer=self.config.model.tokenizer,
+            )  # fmt: skip
+        else:
+            packer = ChannelPacker(
+                datasets=self.datasets, token_s=t.token_s, max_tokens=t.max_tokens,
+                max_samples=t.max_samples, max_channels=t.max_channels, rows=self.rows,
+                mask=t.mask, seed=seed,
+            )  # fmt: skip
+        yield from packer.batches(  # type: ignore[misc]
             self.source.examples(self.epoch, part, parts, self.piece, self.pieces)
         )
 
@@ -240,9 +307,12 @@ def _stream(
     if not selection.recordings:
         raise ValueError(f"index {d.index}: no recordings in split {split!r} for this selection")
     m = d.mixture if split == d.train_split else None
+    limit = config.span_limit()
+    if m is not None and (m.unit == "global_tokens") != isinstance(limit, SampleAndTokenLimit):
+        raise ValueError("mixture.unit global_tokens goes with tokens.format channels only")
     passes = (
         mixture.passes(
-            mixture.dataset_tokens(selection, t.samples_per_token), m.clusters,
+            mixture.dataset_tokens(selection, limit, d.subject_hours_per_epoch), m.clusters,
             m.budget_tokens, m.max_epochs,
         )
         if m is not None
@@ -250,7 +320,7 @@ def _stream(
     )  # fmt: skip
     source = ExampleSource(
         selection, factory, cache_directory=d.cache_directory, cache_bytes=d.cache_bytes,
-        max_tokens=t.max_tokens, samples_per_token=t.samples_per_token,
+        limit=limit, spans=d.spans, subject_hours_per_epoch=d.subject_hours_per_epoch,
         max_channels=t.max_channels, block_s=d.block_s, shuffle_buffer=d.shuffle_buffer,
         reads_in_flight=d.reads_in_flight, seed=config.run.seed, passes=passes,
         flat_runs=FlatRuns(**d.flat_runs.model_dump()) if d.flat_runs is not None else None,
@@ -401,6 +471,7 @@ def _wandb_run(
 def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[str, float]:
     """Run the pretraining; returns the last logged metrics."""
     run_cfg, o = config.run, config.optim
+    settings = config.model_settings()  # the v4 channel batch has no model to train yet
     rank, ranks, device = _process_group(run_cfg.device, config.tokens.rows)
     first = rank == 0
     torch.manual_seed(run_cfg.seed)
@@ -409,7 +480,7 @@ def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[
     if index_manifest is None:
         raise FileNotFoundError(f"index {config.data.index} has no manifest")
     train_stream, validation_stream, validation_batches = _data(config, factory, rank, ranks)
-    model = Encoder(config.model_settings()).to(device)
+    model = Encoder(settings).to(device)
     optimizer = _optimizer(model, o, device)
     described = config.model_dump(mode="json") | {"code_commit": code_commit, "gpus": ranks}
     start, wandb_id = _resume(store, run_cfg, model, optimizer, described, write=first)
@@ -597,7 +668,11 @@ def _steps(rows: Iterator[Batch], per_step: int) -> Iterator[Batch]:
     reading its own blocks: a step mixes per_step times as many recordings as a batch
     packed by one worker (v1-pretrain: ~16 blocks a GPU step)."""
     while True:
-        yield concat(list(itertools.islice(rows, per_step)))
+        parts = list(itertools.islice(rows, per_step))
+        if parts and isinstance(parts[0], ChannelBatch):
+            yield channel_batch.concat(parts)
+        else:
+            yield concat(parts)
 
 
 VALIDATION_ROOT = "models/validation-sets"
@@ -612,11 +687,17 @@ def _validation_batches(stream: BatchStream, config: TrainConfig, store: Store) 
     workers the order in which examples come is not fixed; v1-pretrain's two resumes drew
     other batches, and its validation loss jumped.)"""
     d, t = config.data, config.tokens
+    tokens = t.model_dump(mode="json")
     made_of = {
         "index": d.index, "split": d.validation_split, "signal_types": d.signal_types,
-        "datasets": d.datasets, "block_s": d.block_s, "tokens": t.model_dump(mode="json"),
+        "datasets": d.datasets, "block_s": d.block_s, "tokens": tokens,
         "batches": config.run.validation_batches, "seed": config.run.seed,
     }  # fmt: skip
+    # The key of the v0-v3 sets stays as it was (they were made with these values).
+    if tokens["format"] == "tokens":
+        del tokens["format"]
+    if (d.spans, d.subject_hours_per_epoch) != ("shared", None):
+        made_of |= {"spans": d.spans, "subject_hours_per_epoch": d.subject_hours_per_epoch}
     digest = hashlib.sha256(json.dumps(made_of, sort_keys=True).encode()).hexdigest()[:16]
     key = f"{VALIDATION_ROOT}/{d.index}/{digest}.pt"
     data = store.get_bytes(key)
