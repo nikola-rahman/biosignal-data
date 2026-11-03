@@ -50,7 +50,11 @@ from biosignal_model.channel_batch import (
 from biosignal_model.local_stage import LocalStageSpec, local_stage
 from biosignal_model.model import Block, LayerGroups, _attention
 
-LENGTH_MULTIPLE = 128  # a row's sequence is padded to a multiple of the flex block size
+# A row's sequence is padded to a power of two of at least the flex block size (128): few
+# distinct lengths, so the compiled attention kernel is made a few times and then reused (with
+# any multiple of 128 it was made again for each new length, until torch fell back to the eager
+# kernel, which holds L x L matrices and ran out of memory on the first GPU run).
+LENGTH_MULTIPLE = 128
 
 
 class _Spec(BaseModel):
@@ -116,14 +120,14 @@ class Layout:
 
 def layout(tokens: TokenTable, channels: ChannelTable, rows: int, select: torch.Tensor) -> Layout:
     """The rows of the tokens `select` [T] (bool) picks, in token-table order (which is row by
-    row), each row's tokens from place 0, padded to a multiple of LENGTH_MULTIPLE."""
+    row), each row's tokens from place 0, padded to a power of two >= LENGTH_MULTIPLE."""
     index = (select).nonzero(as_tuple=True)[0]
     row = tokens.row[index]
     counts = torch.bincount(row, minlength=rows)
     starts = torch.cumsum(counts, 0) - counts
     place = torch.arange(index.numel(), device=index.device) - starts[row]
     longest = int(counts.max()) if index.numel() else 1
-    length = -(-max(longest, 1) // LENGTH_MULTIPLE) * LENGTH_MULTIPLE
+    length = max(LENGTH_MULTIPLE, 1 << (longest - 1).bit_length())
     flat = row * length + place
     document = torch.full((rows * length,), -1, dtype=torch.int64, device=index.device)
     document[flat] = channels.document[tokens.channel[index]]

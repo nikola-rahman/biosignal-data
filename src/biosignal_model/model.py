@@ -486,8 +486,17 @@ def _block_mask(document: torch.Tensor) -> BlockMask:
 _FLEX: dict[str, Callable[..., torch.Tensor]] = {}
 
 
+# Compiled flex kernels kept: one per (rows, length, heads, head width). The v4 model has two
+# head shapes (encoder, decoder) and power-of-two row lengths (biosignal_model.v4.layout): with
+# torch's default of 8, the ninth shape fell back to the eager kernel.
+FLEX_SHAPES = 64
+
+
 def _compiled_flex(flex: Callable[..., torch.Tensor]) -> Callable[..., torch.Tensor]:
     if "flex" not in _FLEX:
+        torch._dynamo.config.recompile_limit = max(
+            torch._dynamo.config.recompile_limit, FLEX_SHAPES
+        )
         _FLEX["flex"] = torch.compile(flex, dynamic=False)
     return _FLEX["flex"]
 
