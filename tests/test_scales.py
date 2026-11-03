@@ -70,7 +70,8 @@ def test_the_table_from_an_index_has_a_scale_per_type_and_unit(
         store=str(store.root), index="i1", split="train", signal_types=["eeg", "ecg", "resp"],
         windows_per_dataset=50, max_samples=2000, max_tokens=500, token_s=0.04,
         max_channels=8, subject_hours_per_epoch=1.0, block_s=10.0,
-        cache_directory=tmp_path / "cache", cache_bytes=10**8, seed=0,
+        cache_directory=tmp_path / "cache", cache_bytes=10**8, shuffle_buffer=8,
+        reads_in_flight=1, seed=0,  # one read at a time: the same windows in every run
     )  # fmt: skip
     table = build(settings, StoreFactory(str(store.root), None), "abc")
     assert set(table.scales) == {"eeg uV", "ecg uV", "resp uV"}

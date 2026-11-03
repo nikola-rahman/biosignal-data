@@ -14,4 +14,6 @@ subject_hours_per_epoch: 4.0
 block_s: 1800.0
 cache_directory: /root/cache
 cache_bytes: 50000000000
+shuffle_buffer: 64   # 64 windows of up to 1.6 MB in memory
+reads_in_flight: 4
 seed: 0

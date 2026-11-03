@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+import logging
 import math
 from collections import defaultdict
 from pathlib import Path
@@ -34,6 +35,8 @@ from biosignal_data.training.loader import (
     SampleAndTokenLimit,
     Selection,
 )
+
+log = logging.getLogger(__name__)
 
 MAD_TO_SD = 1.4826  # the median absolute deviation of a normal distribution x this = its sd
 # Units that are not physical units (the dataset says the numbers have none): i-care's EEG
@@ -68,6 +71,10 @@ class ScaleSettings(BaseModel):
     block_s: float
     cache_directory: Path
     cache_bytes: int
+    # windows shuffled in memory and blocks read at the same time: each window can hold
+    # max_samples float32 values (1.6 MB at 400,000), so these set the memory the job needs
+    shuffle_buffer: int
+    reads_in_flight: int
     seed: int
 
 
@@ -127,7 +134,9 @@ def build(settings: ScaleSettings, factory: StoreFactory, code_commit: str) -> S
     spreads: dict[str, list[float]] = defaultdict(list)
     flat: dict[str, int] = defaultdict(int)
     sources: dict[str, set[str]] = defaultdict(set)
-    for dataset_id in datasets_of(store, settings.index, settings.split):
+    datasets = datasets_of(store, settings.index, settings.split)
+    done = 0
+    for dataset_id in datasets:
         selection = Selection.load(store, settings.index, split=settings.split,
                                    signal_types=set(settings.signal_types),
                                    datasets={dataset_id})  # fmt: skip
@@ -137,14 +146,17 @@ def build(settings: ScaleSettings, factory: StoreFactory, code_commit: str) -> S
             limit=SampleAndTokenLimit(settings.max_samples, settings.max_tokens,
                                       settings.token_s),
             spans="per_group", subject_hours_per_epoch=settings.subject_hours_per_epoch,
-            max_channels=settings.max_channels, block_s=settings.block_s, shuffle_buffer=4096,
-            reads_in_flight=8, seed=settings.seed, passes=None, flat_runs=None,
+            max_channels=settings.max_channels, block_s=settings.block_s,
+            shuffle_buffer=settings.shuffle_buffer, reads_in_flight=settings.reads_in_flight,
+            seed=settings.seed, passes=None, flat_runs=None,
         )  # fmt: skip
         examples = source.examples(0, 0, 1)
-        for n, example in enumerate(examples):
-            if n >= settings.windows_per_dataset:
+        read = 0
+        for example in examples:
+            if read >= settings.windows_per_dataset:
                 examples.close()
                 break
+            read += 1
             for signal, channel in zip(example.signals, example.origin.channels, strict=True):
                 spread = robust_spread(signal.values)
                 if spread is None:
@@ -155,6 +167,8 @@ def build(settings: ScaleSettings, factory: StoreFactory, code_commit: str) -> S
                     spreads[key].append(spread)
                 else:
                     flat[key] += 1
+        done += 1
+        log.info("%s: %d windows (%d of %d datasets)", dataset_id, read, done, len(datasets))
     scales = {}
     for key in sorted(set(spreads) | set(flat)):
         s = np.array(spreads.get(key, []))
