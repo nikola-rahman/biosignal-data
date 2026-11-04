@@ -6,6 +6,8 @@ import json
 import math
 import os
 import socket
+import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -32,6 +34,7 @@ from biosignal_model.train import (
     ADDED_LATER,
     OptimSection,
     TrainConfig,
+    _CheckpointWriter,
     _forward_backward,
     _stream,
     _validation_batches,
@@ -458,3 +461,40 @@ def test_the_validation_batches_are_kept_and_the_same_on_every_start(
     for a, b in zip(first, again, strict=True):
         assert torch.equal(a.inputs.values, b.inputs.values)
         assert torch.equal(a.inputs.hidden, b.inputs.hidden)
+
+
+class _SlowStore(LocalStore):
+    """A store whose puts wait until released."""
+
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.release = threading.Event()
+
+    def put_bytes(self, key: str, data: bytes, content_type: str = "application/json") -> None:
+        assert self.release.wait(10)
+        super().put_bytes(key, data, content_type)
+
+
+class _BrokenStore(LocalStore):
+    def put_bytes(self, key: str, data: bytes, content_type: str = "application/json") -> None:
+        raise OSError("the store refused it")
+
+
+def test_a_checkpoint_upload_does_not_hold_up_training_and_its_failure_is_raised(
+    tmp_path: Path,
+) -> None:
+    """The writer puts a checkpoint from a background thread: `write` returns while the store
+    is still busy; the next write or `wait` waits for it; a failed upload raises there."""
+    slow = _SlowStore(tmp_path / "slow")
+    writer = _CheckpointWriter(slow)
+    began = time.monotonic()
+    writer.write("models/x/step-1.pt", b"state")
+    assert time.monotonic() - began < 1.0 and slow.get_bytes("models/x/step-1.pt") is None
+    slow.release.set()
+    writer.write("models/x/step-2.pt", b"state")  # waits for the first upload
+    writer.wait()
+    assert slow.get_bytes("models/x/step-1.pt") == slow.get_bytes("models/x/step-2.pt") == b"state"
+    broken = _CheckpointWriter(_BrokenStore(tmp_path / "broken"))
+    broken.write("models/x/step-3.pt", b"state")
+    with pytest.raises(OSError, match="refused"):
+        broken.wait()

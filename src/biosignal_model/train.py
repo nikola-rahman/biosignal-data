@@ -20,6 +20,7 @@ import logging
 import math
 import os
 import resource
+import threading
 import time
 from collections.abc import Iterator
 from datetime import timedelta
@@ -521,6 +522,7 @@ def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[
     )
     window = _new_window(model, train_stream.datasets, device)
     last: dict[str, float] = {}
+    writer = _CheckpointWriter(store)
     # A resumed run numbers its epochs from its first step: the data in a new order.
     batches = _steps(
         _epochs(
@@ -557,17 +559,42 @@ def train(config: TrainConfig, factory: StoreFactory, code_commit: str) -> dict[
                                       "train/learning_rate": rate} | _memory(device)  # fmt: skip
             _record(run, last, step)
             window = _new_window(model, train_stream.datasets, device)
-        if first and (step % run_cfg.validate_every == 0 or step == o.steps):
-            validation = _validation(
-                model, validation_batches, validation_stream.datasets, device, autocast
-            )
-            _record(run, validation, step)
-            last |= validation
-            window.start = time.perf_counter()  # validation time is not training time
-        if first and (step % run_cfg.checkpoint_every == 0 or step == o.steps):
-            _checkpoint(store, run_cfg.checkpoint_prefix, step, model, optimizer, config, run.id)
-            window.start = time.perf_counter()
+        if first:
+            last = _milestones(step, last, config, model, optimizer, run, writer, window,
+                               validation_batches, validation_stream.datasets, device,
+                               autocast)  # fmt: skip
+    writer.wait()
     _finish(run, ranks)
+    return last
+
+
+def _milestones(
+    step: int,
+    last: dict[str, float],
+    config: TrainConfig,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    run: Any,
+    writer: _CheckpointWriter,
+    window: _Window | _V4Window,
+    validation_batches: list[Batch],
+    validation_datasets: list[str],
+    device: torch.device,
+    autocast: Any,
+) -> dict[str, float]:
+    """At the validation and checkpoint steps (the first process only): the validation (its
+    metrics join `last`) and the checkpoint (to the writer). Their time is not training time,
+    so the window's clock starts again after them."""
+    run_cfg, steps = config.run, config.optim.steps
+    if step % run_cfg.validate_every == 0 or step == steps:
+        validation = _validation(model, validation_batches, validation_datasets, device, autocast)
+        _record(run, validation, step)
+        last = last | validation
+        window.start = time.perf_counter()
+    if step % run_cfg.checkpoint_every == 0 or step == steps:
+        writer.write(*_checkpoint(run_cfg.checkpoint_prefix, step, model, optimizer, config,
+                                  run.id))  # fmt: skip
+        window.start = time.perf_counter()
     return last
 
 
@@ -944,21 +971,53 @@ def _validate(
 
 
 def _checkpoint(
-    store: Store,
     prefix: str,
     step: int,
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     config: TrainConfig,
     wandb_id: str,
-) -> None:
+) -> tuple[str, bytes]:
+    """The key and bytes of this step's checkpoint (serialized now: a snapshot of the step)."""
     out = io.BytesIO()
     torch.save(
         {"step": step, "model": model.state_dict(), "optimizer": optimizer.state_dict(),
          "config": config.model_dump(mode="json"), "wandb_id": wandb_id},
         out,
     )  # fmt: skip
-    store.put_bytes(f"{prefix}/step-{step:08d}.pt", out.getvalue())
+    return f"{prefix}/step-{step:08d}.pt", out.getvalue()
+
+
+class _CheckpointWriter:
+    """Puts checkpoints in the store from a background thread, so training does not wait for
+    a slow upload (Hippius took up to 15 minutes for one 110 MB checkpoint, 2026-11-04, and the
+    run stood still). One upload at a time: a new checkpoint first waits for the one before.
+    A failed upload raises at the next write or at `wait` (the end of the run)."""
+
+    def __init__(self, store: Store) -> None:
+        self.store = store
+        self._thread: threading.Thread | None = None
+        self._error: BaseException | None = None
+
+    def write(self, key: str, data: bytes) -> None:
+        self.wait()
+        self._thread = threading.Thread(target=self._put, args=(key, data), name="checkpoint")
+        self._thread.start()
+
+    def _put(self, key: str, data: bytes) -> None:
+        try:
+            self.store.put_bytes(key, data)
+        except Exception as error:
+            log.exception("checkpoint %s: the upload failed", key)
+            self._error = error  # raised again in the training thread
+
+    def wait(self) -> None:
+        if self._thread is not None:
+            self._thread.join()
+            self._thread = None
+        if self._error is not None:
+            error, self._error = self._error, None
+            raise error
 
 
 def _newest_checkpoint(store: Store, prefix: str) -> dict[str, Any] | None:
