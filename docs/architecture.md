@@ -200,12 +200,17 @@ QRS core's variance, the neighbour beats 93 %, the beat's own P wave, QRS onset 
 or two beats away plus the neighbours explains 0.27, the model 0.36. Harder spans alone (80 % in
 0.2-2 s, v4-small-m80) lowered the copy share but gave worse PTB-XL features (10 % of the labels,
 seed 0: 0.821 vs 0.845). A comb hides the same phase of every cycle (VideoMAE's tube, ST-MTM's
-period comb): the period from the example's autocorrelation of the first difference, averaged
-over its channels (`cycle_period`; none below `cycle_strength`: the share goes to spans), a
-uniform random phase, a tooth width a uniform part of the period; combs stay whole (the last
-one gets a narrower tooth). A copy from the next cycle then finds a visible cell for 9 % of the
-hidden tokens (spans: 72 %). The layout shows the period and nothing more of the content (the
-layout of another draw of the same design predicts the targets as well).
+period comb): the period from the autocorrelation of the example's energy envelope (|first
+difference|, a moving mean over one token), averaged over its channels (`cycle_period`; none
+below `cycle_strength`: the share goes to spans), a uniform random phase, a tooth width a
+uniform part of the period; combs stay whole (the last one gets a narrower tooth). On PTB-XL
+(folds 1-8, 500 Hz): a period of strength >= 0.3 in 91 % of the records (non-AF 96 %), within
+40 ms of the median RR in 91 % (the first difference's own autocorrelation: 37 %, noise
+dominates it). A copy from the next detected beat finds a visible cell for 27 % of the
+comb-hidden tokens (spans: 72 %; with the true median RR 22 %; teeth anchored at each detected
+beat 9 %: the heart rate drifts within 10 s; anchored teeth would show the beat times in the
+layout, a rhythm leak to test first). The layout shows the period and nothing more of the
+content (the layout of another draw of the same design predicts the targets as well).
 
 **The teacher's input does not change with the mask** (fixed 2026-11-04): the student's values
 are transformed with its visible samples' mean and standard deviation (nothing hidden reaches

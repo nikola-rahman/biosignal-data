@@ -319,16 +319,16 @@ def _beats(seconds: float, rate: float, period: float, seed: int, shift: float =
 def test_the_period_is_found_and_not_twice_it(period: float) -> None:
     rates = [500.0, 250.0, 100.0]
     signals = [Signal(_beats(10.0, r, period, k), r, 0.0) for k, r in enumerate(rates)]
-    found = cycle_period(signals, COMBS.cycle_period_s, COMBS.cycle_strength)
+    found = cycle_period(signals, COMBS.cycle_period_s, COMBS.cycle_strength, TOKEN_S)
     assert found is not None and abs(found - period) < 0.011
 
 
 def test_no_period_without_a_repeating_part_or_two_cycles() -> None:
     rng = np.random.default_rng(0)
     noise = [Signal(rng.normal(size=5000).astype(np.float32), 500.0, 0.0)]
-    assert cycle_period(noise, COMBS.cycle_period_s, COMBS.cycle_strength) is None
+    assert cycle_period(noise, COMBS.cycle_period_s, COMBS.cycle_strength, TOKEN_S) is None
     short = [Signal(_beats(3.0, 500.0, 0.8, 0), 500.0, 0.0)]  # shorter than two longest periods
-    assert cycle_period(short, COMBS.cycle_period_s, COMBS.cycle_strength) is None
+    assert cycle_period(short, COMBS.cycle_period_s, COMBS.cycle_strength, TOKEN_S) is None
 
 
 def _copy_visible(hidden: np.ndarray, period: float) -> float:

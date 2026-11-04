@@ -27,10 +27,10 @@ global bounds in seconds; nothing depends on the signal type. A cycle comb hides
 of every cycle of the example (all channels together): with a repeating signal (the beats of an
 ECG) a span leaves the same phase visible in the other cycles, and a copy from there solves
 most of the task (2026-11-04: a copy of the beat before explains 88 % of a PTB-XL QRS); a comb
-leaves only the cycle's own other phases. The period comes from the example's own
-autocorrelation (`cycle_period`); without a clear period the comb's share goes to time spans.
-The mask then depends on the values through the period only. A token is in a span when its
-centre is. The
+leaves only the cycle's own other phases. The period comes from the autocorrelation of the
+example's own energy envelope (`cycle_period`); without a clear period the comb's share goes to
+time spans. The mask then depends on the values through the period only. A token is in a span
+when its centre is. The
 hidden tokens are then applied to the SAMPLES: every sample of a hidden token is set to 0 and
 flagged hidden, before any part of the model, so no model part (the local stage sees the whole
 crop) can read them. The values before masking are kept apart, in `ChannelTargets`, for the
@@ -336,7 +336,7 @@ class ChannelPacker:
             rng = np.random.default_rng(self._rng.getrandbits(64))
             m = self.mask
             period = (
-                cycle_period(example.signals, m.cycle_period_s, m.cycle_strength)
+                cycle_period(example.signals, m.cycle_period_s, m.cycle_strength, self.token_s)
                 if m.cycles > 0 else None
             )  # fmt: skip
             hidden = hide(cells, self.token_s, m, rng, groups=None, period_s=period)
@@ -559,20 +559,25 @@ def _check(mask: MaskSpec) -> None:
 
 
 def cycle_period(
-    signals: Iterable[Signal], bounds: tuple[float, float], strength: float
+    signals: Iterable[Signal], bounds: tuple[float, float], strength: float, smooth_s: float
 ) -> float | None:
     """The period (s) of an example's repeating part, or None: the lag in `bounds` where the
-    autocorrelation of the first difference (so a slow drift does not count), averaged over the
-    channels on a 1 ms grid of lags, is highest; the first lag within 10 % of that peak is taken
-    (so twice the period is not). None when that peak is below `strength`, or no channel holds
-    two periods. Invalid (NaN) samples count as 0."""
+    autocorrelation of the energy envelope (the absolute first difference, a moving mean over
+    `smooth_s`: one global token), averaged over the channels on a 1 ms grid of lags, is
+    highest; the first lag within 10 % of that peak is taken (so twice the period is not). None
+    when that peak is below `strength`, or no channel holds two periods. Invalid (NaN) samples
+    count as 0. On PTB-XL (folds 1-8, 500 Hz, 2026-11-04) the envelope found a period of
+    strength >= 0.3 in 91 % of the records (non-AF 96 %), within 40 ms of the median RR in
+    91 %; the autocorrelation of the first difference itself in 37 % (noise dominates it)."""
     grid = np.arange(bounds[0], bounds[1] + 5e-4, 1e-3)
     total, count = np.zeros(grid.size), 0
     for s in signals:
-        x = np.diff(np.nan_to_num(np.asarray(s.values, dtype=np.float64)))
+        x = np.abs(np.diff(np.nan_to_num(np.asarray(s.values, dtype=np.float64))))
         longest = math.ceil(bounds[1] * s.sampling_rate) + 1
         if x.size < 2 * longest or not np.any(x):
             continue
+        width = max(1, round(smooth_s * s.sampling_rate))
+        x = np.convolve(x, np.ones(width) / width, mode="same")
         x = x - x.mean()
         n = 1 << (2 * x.size - 1).bit_length()
         spectrum = np.fft.rfft(x, n)

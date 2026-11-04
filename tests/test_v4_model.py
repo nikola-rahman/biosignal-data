@@ -379,7 +379,9 @@ def test_with_combs_the_mask_layout_tells_nothing_but_the_period() -> None:
     0.098-0.114; the layout of time spans adds nothing. (Content-free alone: the test above.)"""
     examples = [_beat_example(s) for s in range(40, 46)]
     m = COMB_MASK
-    assert all(cycle_period(e.signals, m.cycle_period_s, m.cycle_strength) for e in examples)
+    assert all(
+        cycle_period(e.signals, m.cycle_period_s, m.cycle_strength, TOKEN_S) for e in examples
+    )
     model = _model().eval()
     batch = _batch(examples, rows=6, mask=m, seed=0)
     target = model.all_targets(batch).double()
