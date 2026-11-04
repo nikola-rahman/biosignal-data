@@ -1,0 +1,143 @@
+# v4-ecg-small: the first ECG-only run (2026-11-04, the user's pivot to ECG only: solve the
+# masking for one signal first). Everything as v4-small-b (same model, mask, optimizer, steps and
+# tokens a step) but the signal types: ECG channels only, from every dataset that has them. So
+# it also answers, at the same compute, whether the other signals helped or took capacity from
+# ECG (PTB-XL: v4-small-b 0.925 at 100 % of the labels, 0.843 at 10 %, mean of the seeds).
+# v4-small: the first v4 run, cheap (one GPU, ~10,000 steps), before the ladder. The three fixes
+# of v0-v2's measured problems (docs/architecture.md, "The first v4 runs"): the local stage at
+# every sample with 40 ms global tokens, masks as time spans over all channels in whole cells,
+# and latent targets (data2vec 2.0 type). Everything else as v2: per-window values with the
+# level and scale as inputs, random slots, the signal type as the only descriptor, UniMax over
+# the clusters of v2. What it must show: the loss falls, the targets do not collapse
+# (train/target_std stays away from 0), the speed and memory per GPU; then PTB-XL fine-tuning
+# from its checkpoint against from scratch.
+# Second version (2026-11-03 18:20): the first (learning rate 1e-3 after 500 warmup steps, EMA from
+# 0.999, spans 0.2-2 s) collapsed by step 2000 (target spread 0.54 -> 0.35, prediction spread 0.03).
+# Two 2000-step diagnoses (runs/v4-diag-*.yaml): the data2vec stability settings (3e-4, warmup 1000,
+# EMA from 0.9995) learned steadily (loss 0.81 -> 0.70 of the target variance, steps 1000-1750);
+# shorter spans alone (0.1-0.5 s) learned faster at first (0.62) and slid again after step 1000. So
+# both here: the stability settings and the shorter spans.
+data:
+  store: s3://biosignal-data
+  index: '2026-11-03'           # with the data fixes (hd-semg in mV, envelopes, placeholders)
+  train_split: train
+  validation_split: validation
+  # Measured signals, as v2 (position, other, unknown and sound left out); emg_envelope is the
+  # sleep-edfx channel that v2 read as emg.
+  signal_types: [ecg]           # ECG only (v4-small-b: all measured types)
+  datasets: null
+  cache_directory: /workspace/cache
+  cache_bytes: 200000000000
+  block_s: 1800.0
+  shuffle_buffer: 64            # examples per worker, up to 1.6 MB each
+  reads_in_flight: 8
+  workers: 10
+  pieces_per_epoch: 1
+  flat_runs: null             # every stored value observed, as v2 (no evidence that flat runs hurt)
+  mixture:
+    unit: global_tokens
+    rule: unimax
+    budget_tokens: 5293219887   # one ECG pass: `biosignal-model tokens runs/v4-ecg-small.yaml`, 2026-11-04
+    max_epochs: 4
+    clusters:
+      icu-eeg: [physionet/i-care]
+      icu-intraop-waveforms: [physionet/vitaldb, physionet/mimic4wdb]
+      sleep-psg: [physionet/challenge-2018, physionet/capslpdb, physionet/hmc-sleep-staging,
+                  physionet/sleep-edfx, physionet/apnea-ecg]
+      scalp-eeg: [physionet/chbmit, physionet/siena-scalp-eeg, physionet/eegmmidb]
+      ecg-12lead: [physionet/mimic-iv-ecg, physionet/challenge-2021, physionet/ptb-xl,
+                   physionet/ptbdb, physionet/ludb, physionet/brugada-huca]
+      ecg-holter: [physionet/ltstdb, physionet/shdb-af, physionet/ltafdb, physionet/sddb,
+                   physionet/incartdb, physionet/afdb, physionet/nsrdb, physionet/edb,
+                   physionet/ltdb, physionet/mitdb, physionet/svdb, physionet/stdb]
+      ecg-short-wearable: [physionet/challenge-2017, physionet/butqdb, physionet/ecgiddb]
+      lab-cardio: [physionet/autonomic-aging-cardiovascular, physionet/fantasia,
+                   physionet/cebsdb, physionet/ephnogram]
+      emg: [physionet/hd-semg, physionet/grabmyo]
+      obstetric: [physionet/ctu-uhb-ctgdb, physionet/tpehgdb, physionet/adfecgdb]
+  spans: per_group
+  subject_hours_per_epoch: 4.0  # docs/architecture.md section 1: the subject is the unit
+
+tokens:
+  format: channels
+  token_s: 0.04                 # 40 ms global tokens (QRS 80-120 ms spans 2-3)
+  max_tokens: 8192              # global tokens a row
+  max_samples: 400000           # samples a row (what the local stage reads)
+  max_channels: 32
+  rows: 4                       # 1.6 M samples, 32 k global tokens a step
+  mask:
+    ratio: 0.6
+    time_spans: 1.0             # time spans over all channels only (no cross-channel leak)
+    channel_groups: 0.0
+    single_tokens: 0.0
+    time_span_s: [0.1, 0.5]     # log-uniform; a hidden QRS still cannot be interpolated (tests)
+    group_span_s: [0.2, 2.0]    # unused (channel_groups 0)
+
+model:
+  format: v4
+  local:
+    kind: s4d
+    width: 64
+    layers: 4
+    states: 32
+    min_time_s: 0.001
+    max_time_s: 10.0
+    kernel_time_constants: 5.0
+    discretization: zoh_centred  # decided 2026-10-29 (architecture section 3)
+    masked_modes: static_gain
+    mixing_layers: [1, 3]
+    mixing_heads: 4
+    dropout: 0.0
+    checkpoint: true
+  global:                       # about 6 M parameters
+    width: 256
+    layers: 6
+    heads: 4
+    feed_forward: 1024
+    pool_heads: 4
+    max_channels: 32
+    min_wavelength_s: 0.01
+    max_wavelength_s: 10000.0
+    attention: flex
+    dropout: 0.0
+    drop_path: 0.0
+  objective:
+    kind: data2vec
+    top_k: 4                    # of 6 blocks (data2vec 2.0: 8 of 12)
+    decoder_width: 128
+    decoder_layers: 2
+    decoder_heads: 4
+    decoder_feed_forward: 512
+    ema_start: 0.9995
+    ema_end: 0.9999
+    ema_steps: 10000
+
+optim:
+  learning_rate: 3.0e-4
+  min_learning_rate: 1.0e-5
+  warmup_steps: 1000
+  steps: 10000
+  weight_decay: 0.05
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: wsd
+  decay_steps: 2000
+  decay_shape: 1-sqrt
+
+run:
+  name: v4-ecg-small          # ECG only: its own checkpoints
+  seed: 0
+  device: cuda
+  precision: bf16
+  log_every: 20
+  validate_every: 500
+  validation_batches: 20
+  checkpoint_every: 1000
+  checkpoint_prefix: models/v4-ecg-small
+  wandb_project: biosignal-fm
+  wandb_entity: schnyox-s
+  wandb_mode: online
+  max_bad_steps: 20
+  bad_batch_directory: /workspace/debug/bad-batches
+  resume: newest
