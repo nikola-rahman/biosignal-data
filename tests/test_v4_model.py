@@ -18,15 +18,21 @@ F = torch.nn.functional
 
 from biosignal_data.storage.stores import LocalStore, StoreFactory  # noqa: E402
 from biosignal_data.training.loader import Channel, Example, Origin, Signal  # noqa: E402
-from biosignal_model.channel_batch import ChannelBatch, ChannelPacker, MaskSpec  # noqa: E402
+from biosignal_model.channel_batch import (  # noqa: E402
+    ChannelBatch,
+    ChannelPacker,
+    MaskSpec,
+    cycle_period,
+)
 from biosignal_model.train import TrainConfig, train  # noqa: E402
 from biosignal_model.v4 import Data2Vec, V4Spec, layout, per_channel_norm  # noqa: E402
 from tests.test_model import _short_config  # noqa: E402
 
 TOKEN_S = 0.04
 MASK = MaskSpec(
-    ratio=0.6, time_spans=1.0, channel_groups=0.0, single_tokens=0.0,
+    ratio=0.6, cycles=0.0, time_spans=1.0, channel_groups=0.0, single_tokens=0.0,
     time_span_s=(0.2, 1.0), group_span_s=(0.2, 1.0),
+    cycle_period_s=(0.3, 2.0), cycle_tooth=(0.1, 0.25), cycle_strength=0.3,
 )  # fmt: skip
 SPEC = V4Spec.model_validate({
     "format": "v4",
@@ -313,6 +319,78 @@ def test_a_predictor_that_reads_no_signal_explains_almost_nothing_of_the_targets
     residual = target[held] - features[held] @ w
     explained = 1 - residual.pow(2).sum() / (target[held] - target[held].mean(0)).pow(2).sum()
     assert float(explained) < 0.05
+
+
+COMB_MASK = MASK.model_copy(update={"cycles": 0.5, "time_spans": 0.5})
+
+
+def _layout_features(batch: ChannelBatch, reach: int = 30) -> torch.Tensor:
+    """Per token, the hidden flags of its channel's tokens from `reach` cells before to
+    `reach` after it (0.5 past the ends): all a predictor could read of a mask's layout,
+    which with combs shows the period."""
+    t = batch.inputs.tokens
+    out = torch.full((len(t.channel), 2 * reach + 1), 0.5, dtype=torch.float64)
+    for ch in t.channel.unique().tolist():
+        idx = (t.channel == ch).nonzero(as_tuple=True)[0]
+        idx = idx[torch.argsort(t.centre[idx])]
+        h = t.hidden[idx].double()
+        for j, off in enumerate(range(-reach, reach + 1)):
+            src = torch.arange(len(idx)) + off
+            ok = (src >= 0) & (src < len(idx))
+            out[idx[ok], j] = h[src[ok]]
+    return out
+
+
+def _beat_example(seed: int, seconds: float = 8.0) -> Example:
+    """QRS-like spikes at a random period (0.6-1.0 s) and phase, the same beats on every
+    channel (amplitudes differ), with noise: a signal with a clear period, whose content the
+    time alone does not tell."""
+    rng = np.random.default_rng(seed)
+    period, shift = rng.uniform(0.6, 1.0), rng.uniform(0.0, 1.0)
+    signals, channels = [], []
+    for i, rate in enumerate(RATES):
+        t = np.arange(round(seconds * rate)) / rate
+        v = 0.05 * rng.normal(size=t.size)
+        for at in np.arange(shift, seconds, period):
+            v += (1 + i) * np.exp(-0.5 * ((t - at) / 0.015) ** 2)
+        signals.append(Signal(v.astype(np.float32), rate, 0.0))
+        channels.append(Channel("a", i, rate, 1.0, 0.0, None, f"c{i}", "ecg", "mV"))
+    return Example(tuple(signals), Origin("d/x", f"b{seed}", "s", 0.0, tuple(channels)))
+
+
+def _explained(features: torch.Tensor, target: torch.Tensor) -> float:
+    """Held-out share of the targets' variance a ridge regression from `features` explains
+    (fitted on one half of the tokens, scored on the other)."""
+    order = torch.randperm(len(target), generator=torch.Generator().manual_seed(0))
+    fit, held = order[: len(order) // 2], order[len(order) // 2 :]
+    a = features[fit]
+    w = torch.linalg.solve(a.T @ a + 1e-3 * torch.eye(a.shape[1], dtype=torch.float64),
+                           a.T @ target[fit])  # fmt: skip
+    residual = target[held] - features[held] @ w
+    return float(1 - residual.pow(2).sum() / (target[held] - target[held].mean(0)).pow(2).sum())
+
+
+def test_with_combs_the_mask_layout_tells_nothing_but_the_period() -> None:
+    """Combs hide the same phase of every cycle, so their layout shows the period (as the
+    visible cycles do). It must show nothing more of the content: from the content-free
+    features and the layout around each token, a ridge regression explains no more of the
+    targets with the example's own mask than with an independent mask of the same design
+    (another seed: the same period, an unrelated phase). Measured 2026-11-04: own 0.084, others
+    0.098-0.114; the layout of time spans adds nothing. (Content-free alone: the test above.)"""
+    examples = [_beat_example(s) for s in range(40, 46)]
+    m = COMB_MASK
+    assert all(cycle_period(e.signals, m.cycle_period_s, m.cycle_strength) for e in examples)
+    model = _model().eval()
+    batch = _batch(examples, rows=6, mask=m, seed=0)
+    target = model.all_targets(batch).double()
+    free = _content_free_features(batch)
+    own = _explained(torch.cat([free, _layout_features(batch)], dim=1), target)
+    others = [
+        _explained(torch.cat([free, _layout_features(_batch(examples, rows=6, mask=m, seed=s))],
+                             dim=1), target)
+        for s in (1, 2, 3)
+    ]  # fmt: skip
+    assert own <= float(np.mean(others)) + 0.02
 
 
 def test_another_example_in_the_row_changes_nothing_of_this_ones_predictions() -> None:

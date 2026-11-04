@@ -193,6 +193,25 @@ masks leak again (ECG: II = I + III, so a hidden lead follows from the visible o
 off until channel groups come from descriptors (which channels share electrodes). Tests:
 tests/test_masking.py, tests/test_v4_model.py.
 
+**Cycle combs (2026-11-04, ECG-only phase).** Spans leave the copy from another beat open: on
+PTB-XL (500 Hz, 8 independent leads, fold 9) a plain copy of the beat before explains 88 % of a
+QRS core's variance, the neighbour beats 93 %, the beat's own P wave, QRS onset and ST-T 60 %
+(scratchpad qrs_sources.py); in v4-small-b's latent targets a ridge map from the same phase one
+or two beats away plus the neighbours explains 0.27, the model 0.36. Harder spans alone (80 % in
+0.2-2 s, v4-small-m80) lowered the copy share but gave worse PTB-XL features (10 % of the labels,
+seed 0: 0.821 vs 0.845). A comb hides the same phase of every cycle (VideoMAE's tube, ST-MTM's
+period comb): the period from the example's autocorrelation of the first difference, averaged
+over its channels (`cycle_period`; none below `cycle_strength`: the share goes to spans), a
+uniform random phase, a tooth width a uniform part of the period; combs stay whole (the last
+one gets a narrower tooth). A copy from the next cycle then finds a visible cell for 9 % of the
+hidden tokens (spans: 72 %). The layout shows the period and nothing more of the content (the
+layout of another draw of the same design predicts the targets as well).
+
+**The teacher's input does not change with the mask** (fixed 2026-11-04): the student's values
+are transformed with its visible samples' mean and standard deviation (nothing hidden reaches
+it); the teacher's with those of all valid samples. Before, the teacher used the student's, so
+two masks of one example gave targets that differed by up to 7.7 (unit-variance targets).
+
 The earlier plan: MAE type, asymmetric: the global model sees only visible tokens; a narrow
 decoder (1/4 width, 4 blocks) gets the mask tokens.
 

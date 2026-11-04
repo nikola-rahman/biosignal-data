@@ -62,11 +62,15 @@ tokens:
   rows: 4                       # 1.6 M samples, 32 k global tokens a step
   mask:
     ratio: 0.6
+    cycles: 0.0                 # no cycle combs (added 2026-11-04)
     time_spans: 1.0             # time spans over all channels only (no cross-channel leak)
     channel_groups: 0.0
     single_tokens: 0.0
     time_span_s: [0.1, 0.5]     # log-uniform; a hidden QRS still cannot be interpolated (tests)
     group_span_s: [0.2, 2.0]    # unused (channel_groups 0)
+    cycle_period_s: [0.3, 2.0]   # unused (cycles 0)
+    cycle_tooth: [0.1, 0.25]     # unused
+    cycle_strength: 0.3         # unused
 
 model:
   format: v4

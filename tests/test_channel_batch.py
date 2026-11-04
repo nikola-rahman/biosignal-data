@@ -16,13 +16,15 @@ from biosignal_model.channel_batch import (  # noqa: E402
     MaskSpec,
     concat,
     hide,
+    normalize,
     token_cells,
 )
 from biosignal_model.chunking import FixedChunker, upsample  # noqa: E402
 
 MASK = MaskSpec(
-    ratio=0.75, time_spans=0.5, channel_groups=0.3, single_tokens=0.2,
+    ratio=0.75, cycles=0.0, time_spans=0.5, channel_groups=0.3, single_tokens=0.2,
     time_span_s=(0.2, 2.0), group_span_s=(0.2, 2.0),
+    cycle_period_s=(0.3, 2.0), cycle_tooth=(0.1, 0.25), cycle_strength=0.3,
 )  # fmt: skip
 
 
@@ -95,7 +97,12 @@ def test_the_mask_hides_its_ratio_on_the_samples_and_keeps_the_values_for_the_lo
     assert torch.equal(x.hidden, t.hidden[t.sample_token])  # the samples of hidden tokens
     assert (x.values[x.hidden] == 0).all() and not x.observed[x.hidden].any()
     valid = batch.targets.observed
-    assert torch.equal(x.values[~x.hidden], batch.targets.normalized[~x.hidden])
+    for k in range(c.row.numel()):  # the student's transform uses its visible samples only
+        o, n = int(c.offset[k]), int(c.length[k])
+        raw = torch.where(valid[o : o + n], batch.targets.values[o : o + n], torch.nan)
+        z, _, _ = normalize(raw.numpy(), ~x.hidden[o : o + n].numpy())
+        seen = ~x.hidden[o : o + n]
+        assert torch.equal(x.values[o : o + n][seen], torch.from_numpy(z)[seen])
     assert (batch.targets.values[x.hidden & valid] != 0).all()  # kept apart for the loss
     assert (batch.targets.normalized[x.hidden & valid] != 0).all()  # and for the teacher
     teacher = batch.teacher_inputs()

@@ -21,9 +21,16 @@ token table is what the fixed chunker gives (biosignal_model.chunking); a learne
 place the boundaries in the model instead.
 
 Masks (section 7), for masked pretraining: a set ratio of each example's global tokens is
-hidden, in three kinds with set shares: time spans over all channels together, channel groups
-over a time window, and single tokens. Span lengths are log-uniform between two global bounds
-in seconds; nothing depends on the signal type. A token is in a span when its centre is. The
+hidden, in four kinds with set shares: cycle combs, time spans over all channels together,
+channel groups over a time window, and single tokens. Span lengths are log-uniform between two
+global bounds in seconds; nothing depends on the signal type. A cycle comb hides the same phase
+of every cycle of the example (all channels together): with a repeating signal (the beats of an
+ECG) a span leaves the same phase visible in the other cycles, and a copy from there solves
+most of the task (2026-11-04: a copy of the beat before explains 88 % of a PTB-XL QRS); a comb
+leaves only the cycle's own other phases. The period comes from the example's own
+autocorrelation (`cycle_period`); without a clear period the comb's share goes to time spans.
+The mask then depends on the values through the period only. A token is in a span when its
+centre is. The
 hidden tokens are then applied to the SAMPLES: every sample of a hidden token is set to 0 and
 flagged hidden, before any part of the model, so no model part (the local stage sees the whole
 crop) can read them. The values before masking are kept apart, in `ChannelTargets`, for the
@@ -48,7 +55,7 @@ from __future__ import annotations
 import dataclasses
 import math
 import random
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field, fields
 from typing import Any, Literal, TypeVar
 
@@ -57,7 +64,7 @@ import torch
 from pydantic import BaseModel, ConfigDict
 
 from biosignal_data.index.signals import SignalType
-from biosignal_data.training.loader import Example
+from biosignal_data.training.loader import Example, Signal
 
 SIGNAL_TYPES = [t.value for t in SignalType]
 
@@ -71,11 +78,15 @@ class MaskSpec(_Spec):
 
     ratio: float  # of the example's global tokens, in [0, 1); at least one token stays visible
     # shares of the hidden tokens by kind; they sum to 1
+    cycles: float  # cycle combs: the same phase of every cycle, over all channels together
     time_spans: float  # time spans hidden over all channels of the example together
     channel_groups: float  # a group of channels hidden over a time window
     single_tokens: float  # single tokens at random
     time_span_s: tuple[float, float]  # bounds of the log-uniform span length (s)
     group_span_s: tuple[float, float]  # bounds of the log-uniform window of a channel group (s)
+    cycle_period_s: tuple[float, float]  # the periods a comb looks for (s)
+    cycle_tooth: tuple[float, float]  # bounds of a tooth's uniform width, as a part of the period
+    cycle_strength: float  # least autocorrelation at the period for a comb, in (0, 1)
 
 
 class ChannelTokens(_Spec):
@@ -155,7 +166,14 @@ class ChannelTargets:
 
     values: torch.Tensor  # float32 [S]: the samples before masking; 0 where not observed
     observed: torch.Tensor  # bool [S]: observed in the source
-    normalized: torch.Tensor  # float32 [S]: the transformed values of every valid sample
+    # The teacher's input: the transform of every valid sample with the mean and standard
+    # deviation of ALL the channel's valid samples, and its level and log scale [C]. (The
+    # student's come from its visible samples, so nothing hidden reaches it; the teacher sees
+    # everything, so with the student's statistics its targets changed with the mask: by up to
+    # 7.7 on unit-variance targets between two masks of one example, 2026-11-04.)
+    normalized: torch.Tensor  # float32 [S]
+    level: torch.Tensor  # float32 [C]
+    log_scale: torch.Tensor  # float32 [C]
 
 
 @dataclass
@@ -179,17 +197,20 @@ class ChannelBatch:
             values=t.values.to(device, non_blocking=True),
             observed=t.observed.to(device, non_blocking=True),
             normalized=t.normalized.to(device, non_blocking=True),
+            level=t.level.to(device, non_blocking=True),
+            log_scale=t.log_scale.to(device, non_blocking=True),
         )
         analysis = ChannelAnalysis(self.analysis.dataset.to(device, non_blocking=True))
         return ChannelBatch(self.inputs.to(device), targets, analysis, self.examples, self.samples)
 
     def teacher_inputs(self) -> ChannelInputs:
-        """The input of the latent objective's teacher: every valid sample, nothing hidden
-        (the tables, levels and scales are the student's)."""
-        x = self.inputs
+        """The input of the latent objective's teacher: every valid sample, nothing hidden,
+        transformed with the statistics of all of them (the tables are the student's but for
+        the levels and scales). It does not depend on the mask."""
+        x, t = self.inputs, self.targets
         return ChannelInputs(
-            values=self.targets.normalized, observed=self.targets.observed,
-            hidden=torch.zeros_like(x.hidden), channels=x.channels,
+            values=t.normalized, observed=t.observed, hidden=torch.zeros_like(x.hidden),
+            channels=dataclasses.replace(x.channels, level=t.level, log_scale=t.log_scale),
             tokens=dataclasses.replace(x.tokens, hidden=torch.zeros_like(x.tokens.hidden)),
             rows=x.rows, max_tokens=x.max_tokens,
         )  # fmt: skip
@@ -313,7 +334,12 @@ class ChannelPacker:
         hidden = [np.zeros(c.size, dtype=bool) for c in cells]
         if self.mask is not None:
             rng = np.random.default_rng(self._rng.getrandbits(64))
-            hidden = hide(cells, self.token_s, self.mask, rng, groups=None)
+            m = self.mask
+            period = (
+                cycle_period(example.signals, m.cycle_period_s, m.cycle_strength)
+                if m.cycles > 0 else None
+            )  # fmt: skip
+            hidden = hide(cells, self.token_s, m, rng, groups=None, period_s=period)
         slots = self._rng.sample(range(self.max_channels), len(example.signals))
         return _Example(
             values=[s.values for s in example.signals],
@@ -373,10 +399,11 @@ class ChannelPacker:
     def _batch(self, rows: list[list[_Example]], count: int) -> ChannelBatch:
         ch: dict[str, list[float | int]] = {
             k: [] for k in ("row", "document", "rate", "start", "offset", "length", "type",
-                            "dataset", "slot", "level", "log_scale")
+                            "dataset", "slot", "level", "log_scale", "t_level", "t_log_scale")
         }  # fmt: skip
         values: list[np.ndarray] = []
         normalized: list[np.ndarray] = []
+        teacher: list[np.ndarray] = []
         tok: dict[str, list[np.ndarray]] = {
             k: [] for k in ("channel", "cell", "hidden", "row", "position")
         }
@@ -389,11 +416,15 @@ class ChannelPacker:
                     visible_hidden = e.hidden[k][e.sample_token[k]]
                     z, level, log_scale = normalize(v, ~visible_hidden)
                     normalized.append(z)
+                    zt, t_level, t_log_scale = normalize(v, np.ones(v.size, dtype=bool))
+                    teacher.append(zt)
                     for name, value in (("row", r), ("document", d), ("rate", e.rates[k]),
                                         ("start", e.starts[k]), ("offset", offset),
                                         ("length", v.size), ("type", e.types[k]),
                                         ("dataset", e.dataset), ("slot", e.slots[k]),
-                                        ("level", level), ("log_scale", log_scale)):  # fmt: skip
+                                        ("level", level), ("log_scale", log_scale),
+                                        ("t_level", t_level),
+                                        ("t_log_scale", t_log_scale)):  # fmt: skip
                         ch[name].append(value)
                     n = e.cells[k].size
                     tok["channel"].append(np.full(n, channel, dtype=np.int64))
@@ -443,7 +474,12 @@ class ChannelPacker:
         )  # fmt: skip
         return ChannelBatch(
             inputs=inputs,
-            targets=ChannelTargets(values=raw_t, observed=valid, normalized=normalized_t),
+            targets=ChannelTargets(
+                values=raw_t, observed=valid,
+                normalized=torch.from_numpy(_cat(teacher, np.float32)),
+                level=torch.tensor(ch["t_level"], dtype=torch.float32),
+                log_scale=torch.tensor(ch["t_log_scale"], dtype=torch.float32),
+            ),
             analysis=ChannelAnalysis(dataset=i64("dataset")), examples=count,
             samples=int(valid.sum()),
         )  # fmt: skip
@@ -470,6 +506,8 @@ def concat(batches: list[ChannelBatch]) -> ChannelBatch:
         add("target_values", b.targets.values)
         add("target_observed", b.targets.observed)
         add("target_normalized", b.targets.normalized)
+        add("target_level", b.targets.level)
+        add("target_log_scale", b.targets.log_scale)
         add("dataset", b.analysis.dataset)
         add("c.row", c.row + rows)
         add("c.offset", c.offset + offset)
@@ -497,7 +535,8 @@ def concat(batches: list[ChannelBatch]) -> ChannelBatch:
     return ChannelBatch(
         inputs=inputs,
         targets=ChannelTargets(
-            joined["target_values"], joined["target_observed"], joined["target_normalized"]
+            joined["target_values"], joined["target_observed"], joined["target_normalized"],
+            joined["target_level"], joined["target_log_scale"],
         ),
         analysis=ChannelAnalysis(joined["dataset"]),
         examples=sum(b.examples for b in batches), samples=sum(b.samples for b in batches),
@@ -507,12 +546,48 @@ def concat(batches: list[ChannelBatch]) -> ChannelBatch:
 def _check(mask: MaskSpec) -> None:
     if not 0.0 <= mask.ratio < 1.0:
         raise ValueError("mask.ratio is in [0, 1)")
-    shares = (mask.time_spans, mask.channel_groups, mask.single_tokens)
+    shares = (mask.cycles, mask.time_spans, mask.channel_groups, mask.single_tokens)
     if min(shares) < 0 or abs(sum(shares) - 1.0) > 1e-9:
         raise ValueError("the mask shares are not negative and sum to 1")
-    for low, high in (mask.time_span_s, mask.group_span_s):
+    for low, high in (mask.time_span_s, mask.group_span_s, mask.cycle_period_s):
         if not 0 < low <= high:
-            raise ValueError("span bounds: 0 < low <= high")
+            raise ValueError("span and period bounds: 0 < low <= high")
+    if not 0 < mask.cycle_tooth[0] <= mask.cycle_tooth[1] < 1:
+        raise ValueError("cycle_tooth: 0 < low <= high < 1")
+    if not 0 < mask.cycle_strength < 1:
+        raise ValueError("cycle_strength is in (0, 1)")
+
+
+def cycle_period(
+    signals: Iterable[Signal], bounds: tuple[float, float], strength: float
+) -> float | None:
+    """The period (s) of an example's repeating part, or None: the lag in `bounds` where the
+    autocorrelation of the first difference (so a slow drift does not count), averaged over the
+    channels on a 1 ms grid of lags, is highest; the first lag within 10 % of that peak is taken
+    (so twice the period is not). None when that peak is below `strength`, or no channel holds
+    two periods. Invalid (NaN) samples count as 0."""
+    grid = np.arange(bounds[0], bounds[1] + 5e-4, 1e-3)
+    total, count = np.zeros(grid.size), 0
+    for s in signals:
+        x = np.diff(np.nan_to_num(np.asarray(s.values, dtype=np.float64)))
+        longest = math.ceil(bounds[1] * s.sampling_rate) + 1
+        if x.size < 2 * longest or not np.any(x):
+            continue
+        x = x - x.mean()
+        n = 1 << (2 * x.size - 1).bit_length()
+        spectrum = np.fft.rfft(x, n)
+        acf = np.fft.irfft(spectrum * np.conj(spectrum), n)[: longest + 1]
+        if acf[0] <= 0:
+            continue
+        total += np.interp(grid * s.sampling_rate, np.arange(acf.size), acf / acf[0])
+        count += 1
+    if count == 0:
+        return None
+    mean = total / count
+    peak = float(np.max(mean))
+    if peak < strength:
+        return None
+    return float(grid[int(np.argmax(mean >= 0.9 * peak))])
 
 
 # Windows drawn per kind at most (each draw hides at least one new token, or the kind ends:
@@ -526,11 +601,16 @@ def hide(
     mask: MaskSpec,
     rng: np.random.Generator,
     groups: list[object | None] | None,
+    period_s: float | None = None,
 ) -> list[np.ndarray]:
     """Hidden flags of the tokens of one example (`cells`: per channel, the grid cell of each
     token). About round(ratio x tokens) tokens are hidden (at least one stays visible), in the
-    kinds' shares: time spans over all channels, channel groups over a time window, single
-    tokens. A span or window of length L starts uniformly in [-L, end), so every time is
+    kinds' shares: cycle combs, time spans over all channels, channel groups over a time
+    window, single tokens. A comb (with the example's period `period_s`; None: the combs'
+    share goes to the time spans) hides every token whose centre's phase, (centre - phase0)
+    mod period, is below its tooth width (a uniform part of the period in cycle_tooth), with
+    phase0 uniform in [0, period): the same phase of every cycle; combs are drawn until their
+    share is reached. A span or window of length L starts uniformly in [-L, end), so every time is
     covered alike; a token is in it when its centre is. A span or window is hidden in whole
     grid cells: at a cell, all its channels (a time span: every channel of the example; a
     group window: every channel of the group) or none, so no hidden time is visible on another
@@ -543,55 +623,108 @@ def hide(
     if total < 2 or mask.ratio == 0.0:
         return hidden
     goal = min(total - 1, round(mask.ratio * total))
-    channel = np.concatenate([np.full(c.size, k) for k, c in enumerate(cells)])
-    centre = (np.concatenate(cells).astype(np.float64) + 0.5) * token_s
-    end = float(np.max(centre)) + token_s / 2
-    flat = np.zeros(total, dtype=bool)
-    budgets = [round(mask.time_spans * goal), round(mask.channel_groups * goal)]
-    labels = groups if groups is not None else [None] * len(cells)
-    labelled = {g for g in labels if g is not None}
+    h = _Hider(cells, token_s, rng)
+    spans = round((mask.cycles + mask.time_spans) * goal)  # combs first; spans take the rest
+    groups_budget = round(mask.channel_groups * goal)
+    singles = goal - spans - groups_budget
+    if period_s is not None and mask.cycles > 0:
+        h.combs(round(mask.cycles * goal), period_s, mask.cycle_tooth)
+    h.windows(spans - h.count(), mask.time_span_s, None)
+    labels: list[object | None] = list(groups) if groups is not None else [None] * len(cells)
+    h.windows(groups_budget, mask.group_span_s, lambda: _random_group(labels, rng))
+    if mask.single_tokens > 0:
+        h.singles(min(singles, total - 1 - h.count()))
+    at = 0
+    for k, c in enumerate(cells):
+        hidden[k] = h.flat[at : at + c.size].copy()
+        at += c.size
+    return hidden
 
-    def windows(budget: int, bounds: tuple[float, float], members: object) -> None:
+
+def _random_group(labels: list[object | None], rng: np.random.Generator) -> np.ndarray:
+    """The channels of a labelled group, or a random subset of 1..C-1 of the unlabelled ones
+    (the only one if there is one)."""
+    labelled = sorted({g for g in labels if g is not None}, key=repr)
+    chosen = rng.integers(len(labelled) + 1) if labelled else len(labelled)
+    if chosen < len(labelled):
+        return np.array([k for k, g in enumerate(labels) if g == labelled[chosen]])
+    free = [k for k, g in enumerate(labels) if g is None]
+    if len(free) <= 1:
+        return np.array(free)
+    size = int(rng.integers(1, len(free)))
+    return rng.choice(np.array(free), size, replace=False)
+
+
+class _Hider:
+    """One example's hidden flags while `hide` draws its kinds: every token of every channel
+    in one flat order, with its channel and centre time."""
+
+    def __init__(self, cells: list[np.ndarray], token_s: float, rng: np.random.Generator) -> None:
+        self.rng = rng
+        self.total = sum(c.size for c in cells)
+        self.channel = np.concatenate([np.full(c.size, k) for k, c in enumerate(cells)])
+        self.centre = (np.concatenate(cells).astype(np.float64) + 0.5) * token_s
+        self.end = float(np.max(self.centre)) + token_s / 2
+        self.flat = np.zeros(self.total, dtype=bool)
+
+    def count(self) -> int:
+        return int(self.flat.sum())
+
+    def _take(self, inside: np.ndarray, done: int, budget: int) -> tuple[int, bool]:
+        """Hides the tokens `inside` in whole cells in time order until `budget` (one token
+        stays visible): the new count, and whether the kind is to end."""
+        found = np.flatnonzero(inside & ~self.flat)
+        found = found[np.argsort(self.centre[found], kind="stable")]
+        cuts = np.flatnonzero(np.diff(self.centre[found])) + 1
+        for part in np.split(found, cuts) if found.size else []:
+            if done >= budget or self.count() + part.size > self.total - 1:
+                return done, True
+            self.flat[part] = True
+            done += part.size
+        return done, done >= budget
+
+    def windows(
+        self, budget: int, bounds: tuple[float, float], members: Callable[[], np.ndarray] | None
+    ) -> None:
+        """Spans (members None: every channel) or channel-group windows of log-uniform length
+        in `bounds`, each from a uniform start in [-length, end), until `budget`."""
         done = 0
         for _ in range(MAX_WINDOWS):
             if done >= budget:
                 return
-            length = math.exp(rng.uniform(math.log(bounds[0]), math.log(bounds[1])))
-            start = rng.uniform(-length, end)
-            inside = (centre >= start) & (centre < start + length) & ~flat
+            length = math.exp(self.rng.uniform(math.log(bounds[0]), math.log(bounds[1])))
+            start = self.rng.uniform(-length, self.end)
+            inside = (self.centre >= start) & (self.centre < start + length)
             if members is not None:
-                inside &= np.isin(channel, members())  # type: ignore[operator]
-            found = np.flatnonzero(inside)
-            if found.size == 0:
+                inside &= np.isin(self.channel, members())
+            done, stop = self._take(inside, done, budget)
+            if stop:
+                return
+
+    def combs(self, budget: int, period: float, tooth: tuple[float, float]) -> None:
+        """Whole combs only (a comb cut at the budget would leave its phase visible in the
+        later cycles): a comb that passes the budget gets a narrower tooth at its phase. A
+        cell is hidden on all its channels, so a comb hides whole cells."""
+        done, cycles = 0, max(1, int(self.end / period))
+        for _ in range(MAX_WINDOWS):
+            left = budget - done
+            if left < cycles:  # not one cell a cycle is left: the rest goes to time spans
+                return
+            width = self.rng.uniform(*tooth) * period
+            phase = self.rng.uniform(0.0, period)
+            inside = (np.mod(self.centre - phase, period) < width) & ~self.flat
+            if int(inside.sum()) > left:
+                width *= left / int(inside.sum())
+                inside = (np.mod(self.centre - phase, period) < width) & ~self.flat
+            n = int(inside.sum())
+            if n == 0:
                 continue
-            found = found[np.argsort(centre[found], kind="stable")]
-            # whole cells in time order, until the share is reached; one token stays visible
-            cuts = np.flatnonzero(np.diff(centre[found])) + 1
-            for part in np.split(found, cuts):
-                if done >= budget or int(flat.sum()) + part.size > total - 1:
-                    return
-                flat[part] = True
-                done += part.size
+            if self.count() + n > self.total - 1:
+                return
+            self.flat[inside] = True
+            done += n
 
-    windows(budgets[0], mask.time_span_s, None)
-
-    def group() -> np.ndarray:
-        chosen = rng.integers(len(labelled) + 1) if labelled else len(labelled)
-        if chosen < len(labelled):  # a labelled group
-            label = sorted(labelled, key=repr)[chosen]
-            return np.array([k for k, g in enumerate(labels) if g == label])
-        free = [k for k, g in enumerate(labels) if g is None]
-        if len(free) <= 1:
-            return np.array(free)
-        size = int(rng.integers(1, len(free)))
-        return rng.choice(np.array(free), size, replace=False)
-
-    windows(budgets[1], mask.group_span_s, group)
-    singles = min(goal - budgets[0] - budgets[1], total - 1 - int(flat.sum()))
-    if singles > 0 and mask.single_tokens > 0:
-        flat[rng.choice(np.flatnonzero(~flat), singles, replace=False)] = True
-    at = 0
-    for k, c in enumerate(cells):
-        hidden[k] = flat[at : at + c.size].copy()
-        at += c.size
-    return hidden
+    def singles(self, count: int) -> None:
+        if count > 0:
+            chosen = self.rng.choice(np.flatnonzero(~self.flat), count, replace=False)
+            self.flat[chosen] = True

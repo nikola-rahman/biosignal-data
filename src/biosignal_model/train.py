@@ -203,7 +203,8 @@ class TrainConfig(_Section):
     @classmethod
     def from_checkpoint(cls, config: dict[str, Any]) -> TrainConfig:
         """The config stored in a checkpoint. One written before a field existed gets the
-        value that does what its run did (ADDED_LATER); a run's own config never does."""
+        value that does what its run did (ADDED_LATER, MASK_ADDED_LATER); a run's own config
+        never does."""
         config = {section: dict(values) for section, values in config.items()}
         v4 = config["model"].get("format") == "v4"  # its fields were all there from the start
         for (section, name), value in ADDED_LATER.items():
@@ -211,6 +212,8 @@ class TrainConfig(_Section):
                 config[section].setdefault(name, value)
         if config["data"]["mixture"] is not None:
             config["data"]["mixture"] = {"unit": "sample_tokens"} | config["data"]["mixture"]
+        if isinstance(config["tokens"].get("mask"), dict):
+            config["tokens"]["mask"] = MASK_ADDED_LATER | config["tokens"]["mask"]
         return cls.model_validate(config)
 
     def span_limit(self) -> SpanLimit:
@@ -247,6 +250,10 @@ ADDED_LATER: dict[tuple[str, str], Any] = {
     ("data", "subject_hours_per_epoch"): None,  # and no subject had a cap
     # data.mixture.unit: sample_tokens (from_checkpoint)
 }
+# tokens.mask fields of the v4 runs before the cycle combs (2026-11-04): no combs.
+MASK_ADDED_LATER: dict[str, Any] = {
+    "cycles": 0.0, "cycle_period_s": [0.3, 2.0], "cycle_tooth": [0.1, 0.25], "cycle_strength": 0.3,
+}  # fmt: skip
 
 
 class BatchStream(IterableDataset[Batch]):

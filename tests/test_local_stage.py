@@ -30,8 +30,9 @@ from biosignal_model.local_stage import (  # noqa: E402
 )
 
 MASK = MaskSpec(
-    ratio=0.6, time_spans=0.5, channel_groups=0.3, single_tokens=0.2,
+    ratio=0.6, cycles=0.0, time_spans=0.5, channel_groups=0.3, single_tokens=0.2,
     time_span_s=(0.1, 0.5), group_span_s=(0.1, 0.5),
+    cycle_period_s=(0.3, 2.0), cycle_tooth=(0.1, 0.25), cycle_strength=0.3,
 )  # fmt: skip
 
 

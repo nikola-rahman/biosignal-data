@@ -15,14 +15,16 @@ from biosignal_model.channel_batch import (  # noqa: E402
     ChannelPacker,
     MaskSpec,
     apply_sample_mask,
+    cycle_period,
     hide,
     token_cells,
 )
 
 TOKEN_S = 0.04
 SPANS = MaskSpec(
-    ratio=0.6, time_spans=1.0, channel_groups=0.0, single_tokens=0.0,
+    ratio=0.6, cycles=0.0, time_spans=1.0, channel_groups=0.0, single_tokens=0.0,
     time_span_s=(0.2, 2.0), group_span_s=(0.2, 2.0),
+    cycle_period_s=(0.3, 2.0), cycle_tooth=(0.1, 0.25), cycle_strength=0.3,
 )  # fmt: skip
 RATES = [100.0, 250.0, 500.0, 173.61, 1.0]  # mixed rates, one slower than one sample a cell
 
@@ -251,12 +253,14 @@ def test_linear_interpolation_across_a_hidden_span_fails_on_qrs_like_signals(
 
 
 def test_the_level_and_scale_come_from_the_visible_samples_only() -> None:
-    """m and s of a channel are those of its visible valid samples: x' = asinh((x - m) / s);
-    the level asinh(m) and log(s) are the model's inputs; a constant channel gets s = 1."""
+    """The student's m and s of a channel are those of its visible valid samples: x' = asinh((x
+    - m) / s); the level asinh(m) and log(s) are its inputs; a constant channel gets s = 1. The
+    teacher's are those of all valid samples (it sees them all), so they do not change with
+    the mask."""
     rates = [100.0, 250.0]
     values = [np.full(1000, 3.0, dtype=np.float32), _signals(4.0, 5, [250.0])[0] * 7 + 2]
     batch = _packer(SPANS).pack([_example(values, rates, [0.0, 0.0])])[0]
-    x, c = batch.inputs, batch.inputs.channels
+    x, c, t = batch.inputs, batch.inputs.channels, batch.targets
     k = 1
     o, n = int(c.offset[k]), int(c.length[k])
     visible = ~x.hidden[o : o + n].numpy()
@@ -264,9 +268,29 @@ def test_the_level_and_scale_come_from_the_visible_samples_only() -> None:
     assert float(c.level[k]) == pytest.approx(np.arcsinh(seen.mean()), rel=1e-5)
     assert float(c.log_scale[k]) == pytest.approx(np.log(seen.std()), rel=1e-5)
     expected = np.arcsinh((values[k] - seen.mean()) / seen.std()).astype(np.float32)
-    np.testing.assert_allclose(batch.targets.normalized[o : o + n].numpy(), expected, atol=1e-5)
+    np.testing.assert_allclose(x.values[o : o + n].numpy()[visible], expected[visible], atol=1e-5)
+    every = values[k].astype(np.float64)
+    assert float(t.level[k]) == pytest.approx(np.arcsinh(every.mean()), rel=1e-5)
+    assert float(t.log_scale[k]) == pytest.approx(np.log(every.std()), rel=1e-5)
+    teacher = np.arcsinh((values[k] - every.mean()) / every.std()).astype(np.float32)
+    np.testing.assert_allclose(t.normalized[o : o + n].numpy(), teacher, atol=1e-5)
     assert float(c.log_scale[0]) == 0.0 and float(c.level[0]) == pytest.approx(np.arcsinh(3.0))
-    assert (batch.targets.normalized[: int(c.length[0])] == 0).all()
+    assert (t.normalized[: int(c.length[0])] == 0).all()
+
+
+def test_the_teacher_input_does_not_change_with_the_mask() -> None:
+    """Two masks of the same example (other seeds, spans and combs): the teacher's input, and
+    so the targets, are the same; only the student's input differs."""
+    rates = [500.0, 250.0]
+    e = _example([_beats(10.0, r, 0.8, 3) for r in rates], rates, [0.0, 0.0])
+    batches = [_packer(m, seed=s).pack([e])[0] for m in (SPANS, COMBS) for s in (0, 1)]
+    first = batches[0].teacher_inputs()
+    for b in batches[1:]:
+        assert not torch.equal(b.inputs.hidden, batches[0].inputs.hidden)
+        other = b.teacher_inputs()
+        assert torch.equal(other.values, first.values)
+        assert torch.equal(other.channels.level, first.channels.level)
+        assert torch.equal(other.channels.log_scale, first.channels.log_scale)
 
 
 def test_slots_are_distinct_within_an_example() -> None:
@@ -274,3 +298,84 @@ def test_slots_are_distinct_within_an_example() -> None:
     for e in examples:
         slots = _packer(SPANS, seed=3).pack([e])[0].inputs.channels.slot.tolist()
         assert len(set(slots)) == len(RATES) and all(0 <= k < 8 for k in slots)
+
+
+# --- cycle combs ----------------------------------------------------------------------------
+
+COMBS = SPANS.model_copy(update={"ratio": 0.3, "cycles": 1.0, "time_spans": 0.0})
+
+
+def _beats(seconds: float, rate: float, period: float, seed: int, shift: float = 0.1) -> np.ndarray:
+    """QRS-like spikes (20 ms wide) every `period` s from `shift`, with noise and a slow drift."""
+    rng = np.random.default_rng(seed)
+    t = np.arange(round(seconds * rate)) / rate
+    x = 0.3 * np.sin(2 * np.pi * 0.2 * t) + 0.02 * rng.normal(size=t.size)
+    for at in np.arange(shift, seconds, period):
+        x += np.exp(-0.5 * ((t - at) / 0.01) ** 2)
+    return x.astype(np.float32)
+
+
+@pytest.mark.parametrize("period", [0.45, 0.8, 1.3])
+def test_the_period_is_found_and_not_twice_it(period: float) -> None:
+    rates = [500.0, 250.0, 100.0]
+    signals = [Signal(_beats(10.0, r, period, k), r, 0.0) for k, r in enumerate(rates)]
+    found = cycle_period(signals, COMBS.cycle_period_s, COMBS.cycle_strength)
+    assert found is not None and abs(found - period) < 0.011
+
+
+def test_no_period_without_a_repeating_part_or_two_cycles() -> None:
+    rng = np.random.default_rng(0)
+    noise = [Signal(rng.normal(size=5000).astype(np.float32), 500.0, 0.0)]
+    assert cycle_period(noise, COMBS.cycle_period_s, COMBS.cycle_strength) is None
+    short = [Signal(_beats(3.0, 500.0, 0.8, 0), 500.0, 0.0)]  # shorter than two longest periods
+    assert cycle_period(short, COMBS.cycle_period_s, COMBS.cycle_strength) is None
+
+
+def _copy_visible(hidden: np.ndarray, period: float) -> float:
+    """Of the hidden tokens with a cell one period later, the part whose cell there (the
+    nearest) is visible: what a copy from the next cycle could read."""
+    centre = (np.arange(hidden.size) + 0.5) * TOKEN_S
+    later = np.round((centre + period) / TOKEN_S - 0.5).astype(int)
+    keep = hidden & (later < hidden.size)
+    return float((~hidden[later[keep]]).mean())
+
+
+def test_a_comb_hides_the_same_phase_in_every_cycle() -> None:
+    """With combs, the same phase one period later is hidden too (a copy from the next cycle
+    finds almost nothing; only the rounding to 40 ms cells leaves an edge); time spans of the
+    same ratio leave most of it visible."""
+    period, cells = 0.83, [np.arange(250)]  # 10 s
+    spans = COMBS.model_copy(update={"cycles": 0.0, "time_spans": 1.0, "time_span_s": (0.1, 0.5)})
+    comb_visible, span_visible = [], []
+    for seed in range(100):
+        h = hide(cells, TOKEN_S, COMBS, np.random.default_rng(seed), None, period_s=period)[0]
+        comb_visible.append(_copy_visible(h, period))
+        h = hide(cells, TOKEN_S, spans, np.random.default_rng(seed), None, period_s=period)[0]
+        span_visible.append(_copy_visible(h, period))
+    assert np.mean(comb_visible) < 0.25 and np.mean(span_visible) > 0.55
+
+
+@pytest.mark.parametrize("period", [None, 0.45, 0.83, 1.9])
+def test_the_ratio_is_reached_with_combs_or_without_a_period(period: float | None) -> None:
+    """Combs, and without a period the time spans that take their share, reach the ratio to
+    a few cells; the hidden cells stay whole on every channel."""
+    cells = [np.arange(250) for _ in range(3)]
+    total = sum(c.size for c in cells)
+    for seed in range(30):
+        for ratio in (0.2, 0.6):
+            spec = COMBS.model_copy(update={"ratio": ratio})
+            hidden = hide(cells, TOKEN_S, spec, np.random.default_rng(seed), None, period_s=period)
+            assert all(np.array_equal(hidden[0], h) for h in hidden[1:])  # whole cells
+            goal = _goal(total, ratio)
+            assert abs(int(np.concatenate(hidden).sum()) - goal) <= 3 * 12  # 12 cells a channel
+
+
+def test_a_comb_depends_on_the_values_through_the_period_only() -> None:
+    """Two examples with the same period (one scaled and shifted in level) and the same seed
+    get the same mask: nothing else of the content reaches the mask."""
+    rates = [500.0, 250.0]
+    a = [_beats(10.0, r, 0.8, 1) for r in rates]
+    b = [3.0 * v + 2.0 for v in a]
+    ma = _packer(COMBS).pack([_example(a, rates, [0.0, 0.0])])[0]
+    mb = _packer(COMBS).pack([_example(b, rates, [0.0, 0.0])])[0]
+    assert torch.equal(ma.inputs.tokens.hidden, mb.inputs.tokens.hidden)
